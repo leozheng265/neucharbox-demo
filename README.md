@@ -18,8 +18,10 @@ a scene. Add `?speed=4` to run the scripts four times faster while reviewing.
 The server sends no-cache headers, so a plain refresh picks up code changes.
 (With a generic static server you'd need Ctrl+F5 — browsers cache the modules.)
 
-Camera: drag to orbit, scroll to zoom, right-drag (or arrow keys) to pan, and
-the ⟲ button resets the view. Walls are single-sided, so any angle looks in.
+Camera: drag to orbit, scroll to zoom, right-drag to pan (or click the room and
+use the arrow keys), and the ⟲ button resets the view. Walls are single-sided, so
+any angle looks in. Every request after the first starts from the room as it was
+right after setup.
 
 ## Test
 
@@ -27,9 +29,18 @@ the ⟲ button resets the view. Walls are single-sided, so any angle looks in.
 node test/run.mjs
 ```
 
-Plays every prompt of every scene headlessly through the real step player and
-asserts the expected end state, that every beat is reached, that every device a
-script touches exists, and that campaign copy guardrails hold.
+Runs in Node, no browser needed:
+
+- every prompt's default path reaches plan, run, recover and the end card, and
+  ends in the prompt's `expect` state;
+- every plan Edit choice and every ask option runs to the end, and an Edit must
+  change what NCB says or does;
+- all prompts back-to-back in one room with the reset between them;
+- a real-timer skip to Recover still shows the plan and leaves normal speed;
+- device formatters, copy guardrails (scene copy included), and no raw
+  `store.tween`/`setTimeout` in scene steps;
+- every scene's 3D room builds and animates through every prompt (fake canvas,
+  `test/build.mjs`; `test/loader.mjs` maps `three` to the vendored copy).
 
 ## Deploy
 
@@ -60,19 +71,27 @@ js/engine/chat.js     conversation UI: messages, chips, plan/ask/replan/end card
 js/engine/panel.js    device dashboard tiles from the store
 js/engine/icons.js    line icons for the tiles
 js/engine/match.js    free text → nearest authored prompt
-js/engine/renderer.js Three.js setup, effects, quality tiers, picking, daylight
+js/engine/renderer.js Three.js setup, effects, quality tiers, picking, ping labels, daylight
+js/engine/compat.js   small browser fallbacks (canvas roundRect for iOS 15)
 js/engine/parts.js    procedural textures, materials and builders
 js/scenes/*.js        one file per scene: devices, room geometry, prompts
-test/run.mjs          headless script test
+test/run.mjs          headless tests (see Test)
+test/build.mjs        builds and animates every room in Node
+test/loader.mjs       resolves 'three' to vendor/three for Node
 ```
 
 ## Adding a prompt or a scene
 
 A prompt is `{ chip, keywords, expect, steps }`. Steps are plain objects
 (`say`, `plan`, `tween`, `set`, `fail`, `replan`, `ask`, `end`, …) documented at
-the top of `js/engine/player.js`. A scene exports `{ id, title, camera, devices,
-deviceOrder, build(ctx), prompts }` and is registered in `js/scenes/index.js`.
-Run the test after editing.
+the top of `js/engine/player.js`. In `fn` steps use `ctx.tween`, `ctx.sleep`,
+`ctx.status` and `ctx.say`, so skips and `?speed=` work. A scene exports
+`{ id, title, camera, devices, deviceOrder, build(ctx), prompts }` and is
+registered in `js/scenes/index.js`; `build()` returns `{ update, focus, reset? }`
+(implement `reset()` if the room keeps state outside the store). Camera options
+include `azimuth` (auto-sway arc) and `fitAspect` (keep horizontal framing on
+narrow screens). Run the test after editing, and bump `V` in
+`js/scenes/index.js` when scene files change.
 
 ## Copy guardrails
 

@@ -38,7 +38,7 @@ export function createChat(root, { onPromptText } = {}) {
     typing(on) { if (on) { if (!typingEl) typingEl = push(el('<div class="msg ncb typing"><span></span><span></span><span></span></div>')); } else if (typingEl) { typingEl.remove(); typingEl = null; } },
     ncb(text) { push(el(`<div class="msg ncb">${esc(text)}</div>`)); },
     user(text) { push(el(`<div class="msg me">${esc(text)}</div>`)); },
-    alert(text) { push(el(`<div class="msg ncb alert"><b>⚠ Something changed</b>${esc(text)}</div>`)); },
+    alert(text, title = '⚠ Something changed') { push(el(`<div class="msg ncb alert"><b>${esc(title)}</b>${esc(text)}</div>`)); },
     resolvePending() { for (const p of [...pending]) p.settle(p.skipValue()); },
 
     button(label) {
@@ -61,8 +61,9 @@ export function createChat(root, { onPromptText } = {}) {
       input.disabled = false; if (finePointer) input.focus({ preventScroll: true });
       return node;
     },
-    plan(spec) {
-      const alts = {};
+    // skipped: the visitor fast-forwarded past this card, so it is shown and settled at once, labelled as skipped.
+    plan(spec, { skipped = false } = {}) {
+      const alts = {}; let clicked = false;
       const node = push(el(`<div class="card plan"><p class="intro">${esc(spec.intro || 'Here\'s the plan. Nothing runs until you approve it.')}</p><ol></ol><div class="row"><button class="btn approve">${esc(spec.approve || 'Approve')}</button></div></div>`));
       const ol = node.querySelector('ol');
       spec.steps.forEach((s, i) => {
@@ -72,15 +73,17 @@ export function createChat(root, { onPromptText } = {}) {
       });
       const approveBtn = node.querySelector('.approve');
       const done = interactive(node, () => ({ approved: true, alts: { ...alts } }));
-      approveBtn.onclick = () => { approveBtn.textContent = 'Approved ✓'; node._settle({ approved: true, alts: { ...alts } }); };
-      return done.then((v) => { approveBtn.textContent = 'Approved ✓'; return v; });
+      approveBtn.onclick = () => { clicked = true; node._settle({ approved: true, alts: { ...alts } }); };
+      if (skipped) node._settle({ approved: true, alts: {} });
+      return done.then((v) => { approveBtn.textContent = clicked ? 'Approved ✓' : 'Skipped ahead · ran as shown'; if (!clicked) node.classList.add('skipped'); return v; });
     },
-    ask(spec) {
+    ask(spec, { skipped = false } = {}) {
       const node = push(el(`<div class="card plan halt"><p class="intro">${esc(spec.intro)}</p><div class="row col"></div></div>`));
       const row = node.querySelector('.row');
       const done = interactive(node, () => 0);
-      spec.options.forEach((o, i) => { const b = el(`<button class="btn ${i === 0 ? 'approve' : ''}">${esc(o.label)}</button>`); b.onclick = () => { b.textContent += ' ✓'; node._settle(i); }; row.appendChild(b); });
-      return done.then((i) => { const b = row.children[i]; if (b && !b.textContent.endsWith('✓')) b.textContent += ' ✓'; return i; });
+      spec.options.forEach((o, i) => { const b = el(`<button class="btn ${i === 0 ? 'approve' : ''}">${esc(o.label)}</button>`); b.onclick = () => { b.classList.add('chosen'); b.textContent += ' ✓'; node._settle(i); }; row.appendChild(b); });
+      if (skipped) node._settle(0);
+      return done.then((i) => { const b = row.children[i]; if (b) { b.classList.add('chosen'); if (!b.textContent.includes('✓')) b.textContent += skipped ? ' ✓ (skipped ahead)' : ' ✓'; } return i; });
     },
     replan(spec) {
       push(el(`<div class="card replan"><p class="intro">${esc(spec.intro)}</p><ul>${(spec.changes || []).map((c) => `<li>${esc(c)}</li>`).join('')}</ul>${spec.needsYou ? `<p class="needs"><b>Needs you:</b> ${esc(spec.needsYou)}</p>` : ''}</div>`));

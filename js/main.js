@@ -2,7 +2,7 @@ import { createStore } from './engine/store.js';
 import { createPlayer, setupSteps } from './engine/player.js';
 import { createChat } from './engine/chat.js';
 import { createPanel } from './engine/panel.js';
-import { matchPrompt } from './engine/match.js';
+import { matchPrompt, negates } from './engine/match.js';
 import { SCENES } from './scenes/index.js';
 
 const KS = 'https://www.kickstarter.com/projects/neucharbox/neucharbox-ai-operating-system-for-the-physical-world?ref=demo';
@@ -49,6 +49,8 @@ async function mountScene(meta, gen) {
   for (const [id, d] of Object.entries(scene.devices)) initial[id] = { status: 'offline', ...d.initial };
   const store = createStore(initial);
   const R = createRenderer(document.getElementById('room'), { camera: scene.camera });
+  let player = null;
+  try {
   const M = partsMod.materials(); const P = partsMod.parts(R.scene, M);
   const room = scene.build({ R, P, M, THREE, store, parts: partsMod });
   R.onFrame((t) => { store.tick(performance.now()); room.update(store.state, t); });
@@ -65,16 +67,27 @@ async function mountScene(meta, gen) {
     const [id, key] = path.split('.'); if (key !== 'status') return;
     if (id === 'hub' && value === 'on') { R.ping('hub', 'NeuCharBox · powered'); return; }
     if (!scene.devices[id]) return;
-    if (value === 'online' && phase === 'setup') { room.focus?.(id); R.ping(id, `${scene.devices[id].name} · connected`); panel.pop(id); }
-    if (value === 'fault') { room.focus?.(id); R.ping(id, `${scene.devices[id].name} · ${scene.devices[id].faultText || 'fault'}`, { color: '#E0563A', hex: 0xE0563A, hold: 3200 }); panel.pop(id); }
+    if (value === 'online' && phase === 'setup') { room.focus?.(id); R.ping(id, `${scene.devices[id].name} · connected`, { hold: 1900 }); panel.pop(id); }
+    if (value === 'fault') { const msg = `${scene.devices[id].name} · ${scene.devices[id].faultText || 'fault'}`; statusEl.textContent = msg; room.focus?.(id); R.ping(id, msg, { color: '#E0563A', hex: 0xE0563A, hold: 3200 }); panel.pop(id); }
   });
   const beatsEl = document.getElementById('beats'); const beatBtns = [...beatsEl.querySelectorAll('button')];
   function setBeat(id) { const idx = BEATS.findIndex((b) => b[0] === id); beatBtns.forEach((b, i) => { b.classList.toggle('done', i < idx); b.classList.toggle('now', i === idx); b.disabled = !(i > idx && i < BEATS.length - 1 && phase === 'prompt'); }); }
   let phase = 'setup'; // 'setup' | 'chips' | 'prompt' | 'end'
-  const chat = createChat(document.getElementById('chat'), { onPromptText: (text) => { if (phase !== 'chips') return; const { prompt, score } = matchPrompt(text, scene.prompts); runPrompt(prompt, text, score === 0); } });
+  const chat = createChat(document.getElementById('chat'), { onPromptText: (text) => {
+    if (phase !== 'chips') return;
+    const { prompt, score } = matchPrompt(text, scene.prompts);
+    if (score > 0 && negates(text, prompt.chip)) {
+      document.querySelectorAll('.chips').forEach((n) => n.remove());
+      chat.user(text);
+      chat.ncb("That reads like something you don't want done. I won't guess at the opposite, and this demo can only run the requests below. Pick one, or say it another way.");
+      chat.chips(remaining(), (p) => runPrompt(p, p.chip, false));
+      return;
+    }
+    runPrompt(prompt, text, score === 0);
+  } });
   const used = new Set();
   const remaining = () => { const left = scene.prompts.filter((p) => !used.has(p)); return left.length ? left : scene.prompts; };
-  const player = createPlayer({ store, chat, onBeat: setBeat, onStatus: (s) => { statusEl.textContent = s; }, endOptions: () => ({ onMore: () => offerChips() }) });
+  player = createPlayer({ store, chat, onBeat: setBeat, onStatus: (s) => { statusEl.textContent = s; }, endOptions: () => ({ onMore: () => offerChips() }) });
   beatBtns.forEach((b) => (b.onclick = () => player.skipTo(b.dataset.beat)));
 
   let baseline = null; // the room right after setup; every prompt starts from it
@@ -87,27 +100,33 @@ async function mountScene(meta, gen) {
     phase = 'prompt'; used.add(prompt); chat.enableInput(false);
     document.querySelectorAll('.chips').forEach((n) => n.remove());
     chat.user(typed);
-    if (again && baseline) { store.restore(baseline); room.reset?.(); statusEl.textContent = 'Room reset for a fresh run'; chat.ncb('Fresh start: the room is back the way it was right after setup.'); }
-    if (fallback) chat.ncb(`I'll take that as: "${prompt.chip}". (This demo is scripted — a real hub would take your words as they are.)`);
-    else if (typed !== prompt.chip) chat.ncb(`Understood — treating that as: "${prompt.chip}".`);
     try {
+      if (again && baseline) { store.restore(baseline); room.reset?.(); statusEl.textContent = 'Room reset for a fresh run'; chat.ncb('Fresh start: the room is back the way it was right after setup.'); }
+      if (fallback) chat.ncb(`I'll take that as: "${prompt.chip}". (This demo is scripted — a real hub would take your words as they are.)`);
+      else if (typed !== prompt.chip) chat.ncb(`Understood — treating that as: "${prompt.chip}".`);
       await player.play(prompt.steps);
     } catch (e) {
       console.error(e);
-      chat.alert('This demo hit a snag running that request. Pick another one, or try another scene.');
-      chat.end({ headline: 'Something went wrong in the simulation.', body: 'That is a bug in this demo, not in NeuCharBox. The other requests still work.' }, { onMore: () => offerChips() });
+      if (gen !== mountGen) return;
+      chat.alert('That request stopped halfway because of a bug in this demo, not a device.', '⚠ Demo error');
+      chat.end({ headline: 'The simulation hit a bug.', body: 'Nothing real was touched. Use "Another request here" to try again, or pick another scene.' }, { onMore: () => offerChips() });
     }
-    if (current?.scene !== scene) return;
+    if (gen !== mountGen) return;
     phase = 'end'; setBeat('end');
   }
 
-  current = { scene, teardown() { player.cancel(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
+  current = { scene, teardown() { player?.cancel(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   window.__ncb = { store, player, scene, R };
   statusEl.textContent = 'Hub is off';
   await player.play(setupSteps(scene));
-  if (current?.scene !== scene) return;
+  if (gen !== mountGen) return;
   baseline = store.snapshot();
   offerChips();
+  } catch (e) {
+    if (gen === mountGen) current = null;
+    player?.cancel(); R.dispose();
+    throw e;
+  }
 }
 
 function route() {
