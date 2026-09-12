@@ -1,0 +1,37 @@
+// Single source of truth for a scene. Only the step player writes; room, panel
+// and chat read. `tween` animates a numeric path over time (instant in headless).
+
+const easeInOut = (k) => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
+
+export function createStore(initial, { headless = false } = {}) {
+  const state = JSON.parse(JSON.stringify(initial));
+  const subs = new Set();
+  const tweens = new Map();
+
+  const get = (path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), state);
+  const set = (path, value) => {
+    const ks = path.split('.');
+    let o = state;
+    for (let i = 0; i < ks.length - 1; i++) o = o[ks[i]] ?? (o[ks[i]] = {});
+    o[ks[ks.length - 1]] = value;
+    for (const fn of subs) fn(state, path, value);
+  };
+  const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
+
+  function tween(path, to, ms, ease = easeInOut) {
+    if (headless || ms <= 0) { set(path, to); return Promise.resolve(); }
+    const from = Number(get(path)) || 0;
+    if (tweens.has(path)) tweens.get(path).res();
+    return new Promise((res) => tweens.set(path, { from, to, ms, start: performance.now(), ease, res }));
+  }
+  function tick(now) {
+    for (const [path, t] of tweens) {
+      const k = Math.min(1, (now - t.start) / t.ms);
+      set(path, t.from + (t.to - t.from) * t.ease(k));
+      if (k >= 1) { tweens.delete(path); t.res(); }
+    }
+  }
+  function finishTweens() { for (const [p, t] of tweens) { set(p, t.to); t.res(); } tweens.clear(); }
+
+  return { state, get, set, subscribe, tween, tick, finishTweens };
+}
