@@ -41,6 +41,10 @@ Runs in Node, no browser needed:
   `store.tween`/`setTimeout` in scene steps;
 - every scene's 3D room builds and animates through every prompt (fake canvas,
   `test/build.mjs`; `test/loader.mjs` maps `three` to the vendored copy).
+- typed requests route correctly (`test/routing.mjs`): about fifty realistic
+  phrasings must run the intended request, refuse a negated one ("don't go
+  live"), or hand the chips back when the text is vague. The page uses the same
+  `interpret()` in `js/engine/match.js`, so add a case there when you add a prompt.
 
 ## Deploy
 
@@ -70,7 +74,7 @@ js/engine/player.js   runs authored steps; setup beat generator
 js/engine/chat.js     conversation UI: messages, chips, plan/ask/replan/end cards
 js/engine/panel.js    device dashboard tiles from the store
 js/engine/icons.js    line icons for the tiles
-js/engine/match.js    free text → nearest authored prompt
+js/engine/match.js    typed text → run / refuse / clarify (interpret)
 js/engine/renderer.js Three.js setup, effects, quality tiers, picking, ping labels, daylight
 js/engine/compat.js   small browser fallbacks (canvas roundRect for iOS 15)
 js/engine/parts.js    procedural textures, materials and builders
@@ -78,6 +82,7 @@ js/scenes/*.js        one file per scene: devices, room geometry, prompts
 test/run.mjs          headless tests (see Test)
 test/build.mjs        builds and animates every room in Node
 test/loader.mjs       resolves 'three' to vendor/three for Node
+test/routing.mjs      typed-request routing cases
 ```
 
 ## Adding a prompt or a scene

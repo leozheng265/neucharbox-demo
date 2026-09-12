@@ -123,7 +123,7 @@ export default {
     },
     {
       chip: 'If she gets up at night, light the way to the bathroom, softly.',
-      keywords: ['night', 'light', 'way', 'bathroom', 'softly', 'soft', 'gets up', 'got', 'dark', 'path', 'toilet', 'wander', 'wanders', 'wandering'],
+      keywords: ['night', 'light', 'way', 'bathroom', 'softly', 'soft', 'gets up', 'got', 'dark', 'path', 'toilet', 'wander', 'wanders', 'wandering', 'fall', 'falls', 'falling', 'trip', 'trips', 'safe', 'safely', 'mum', 'mom'],
       expect: { 'hall.status': 'fault', 'night.brightness': 0.3 },
       steps: [
         { beat: 'plan' },
@@ -160,7 +160,7 @@ export default {
     },
     {
       chip: 'Tell me if the kettle\'s been on for more than 10 minutes.',
-      keywords: ['kettle', 'on', 'minutes', 'long', 'left', 'leave', 'leaves', 'boil', 'plug', 'stove', 'cooker', 'oven', 'hob', 'appliance', 'appliances', 'forgot', 'forget', 'forgets'],
+      keywords: ['kettle', 'on', 'minutes', 'long', 'left', 'leave', 'leaves', 'boil', 'plug', 'stove', 'cooker', 'oven', 'hob', 'appliance', 'appliances', 'forgot', 'forget', 'forgets', 'switched on', 'safe', 'safely'],
       expect: { 'kettle.status': 'fault', 'kettle.on': true },
       steps: [
         { beat: 'plan' },

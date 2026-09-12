@@ -121,7 +121,7 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
   function addPickable(obj, id, { anchor = false } = {}) { obj.userData.deviceId = id; obj.traverse((c) => { c.userData.deviceId = id; }); const rec = { obj, id }; if (anchor) pickables.unshift(rec); else pickables.push(rec); }
 
   // ---- discovery / attention markers: an expanding ring plus a floating label at a device ----
-  const markers = []; const box3 = new THREE.Box3(); const _bb = new THREE.Box3(); const tmp = new THREE.Vector3(); const ndc = new THREE.Vector3();
+  const markers = []; const box3 = new THREE.Box3(); const _bb = new THREE.Box3(); const tmp = new THREE.Vector3(); const ndc = new THREE.Vector3(); const viewPos = new THREE.Vector3();
   const ringGeo = new THREE.RingGeometry(0.42, 0.5, 48), dotGeo = new THREE.SphereGeometry(0.035, 12, 12);
   function anchorOf(id) {
     const p = pickables.find((q) => q.id === id); if (!p) return null;
@@ -160,8 +160,9 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
       m.ring.lookAt(camera.position); m.ring.scale.setScalar(0.2 + k * 1.4); m.ring.material.opacity = (1 - k) * 0.9 * Math.min(1, (m.hold / 1000 + 0.6 - age) / 0.6);
       if (m.label) {
         // Constant on-screen size (LABEL_PX tall), sitting just above the dot, and pushed back inside the frame.
-        const dist = camera.position.distanceTo(m.dot.position); const px = (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / ch;
-        const hgt = LABEL_PX * px; m.label.scale.set(hgt * m.label.userData.aspect, hgt, 1);
+        // Sprite size on screen follows view-space depth (not straight-line distance), so scale from depth.
+        const pxAt = (pos) => { viewPos.copy(pos).applyMatrix4(camera.matrixWorldInverse); return (2 * Math.max(0.05, -viewPos.z) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / ch; };
+        let hgt = LABEL_PX * pxAt(m.dot.position);
         m.label.position.set(m.dot.position.x, m.dot.position.y + 0.035 + 0.45 * hgt, m.dot.position.z);
         ndc.copy(m.label.position).project(camera);
         if (ndc.z < 1) {
@@ -176,6 +177,7 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
           placed.push({ x: sx, y: sy, w });
           ndc.x = (sx / cw) * 2 - 1; ndc.y = 1 - (sy / ch) * 2; m.label.position.copy(ndc.unproject(camera));
         }
+        hgt = LABEL_PX * pxAt(m.label.position); m.label.scale.set(hgt * m.label.userData.aspect, hgt, 1);
         if (age * 1000 > m.hold) m.label.material.opacity = Math.max(0, 1 - (age * 1000 - m.hold) / 500);
       }
     }
