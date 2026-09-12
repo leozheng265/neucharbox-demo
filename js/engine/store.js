@@ -2,9 +2,10 @@
 // and chat read. `tween` animates a numeric path over time (instant in headless).
 
 const easeInOut = (k) => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
+const clone = (v) => JSON.parse(JSON.stringify(v));
 
 export function createStore(initial, { headless = false } = {}) {
-  const state = JSON.parse(JSON.stringify(initial));
+  const state = clone(initial);
   const subs = new Set();
   const tweens = new Map();
 
@@ -33,5 +34,13 @@ export function createStore(initial, { headless = false } = {}) {
   }
   function finishTweens() { for (const [p, t] of tweens) { set(p, t.to); t.res(); } tweens.clear(); }
 
-  return { state, get, set, subscribe, tween, tick, finishTweens };
+  // Deep copy of the whole state, and a way to put it back (used to give every prompt the post-setup room).
+  const snapshot = () => clone(state);
+  function restore(snap) {
+    finishTweens();
+    for (const k of Object.keys(state)) if (!(k in snap)) delete state[k];
+    for (const [k, v] of Object.entries(snap)) set(k, clone(v));
+  }
+
+  return { state, get, set, subscribe, tween, tick, finishTweens, snapshot, restore };
 }

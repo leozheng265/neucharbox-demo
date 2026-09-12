@@ -32,7 +32,7 @@ export default {
     const mattress = P.box(0.98, 0.18, 1.85, M.bedding, -2.3, 0.415, -1.5, 0.03);
     P.box(0.9, 0.12, 1.3, M.cushion, -2.3, 0.53, -1.25, 0.04); P.box(0.7, 0.09, 0.4, M.white, -2.3, 0.53, -2.15, 0.03);
     P.box(1.05, 0.5, 0.06, M.woodLight, -2.3, 0.6, -2.45);
-    const mat = P.box(0.9, 0.012, 0.5, M.black, -2.3, 0.51, -0.85); // pressure mat under the sheet edge
+    const mat = P.box(0.9, 0.012, 0.5, M.black.clone(), -2.3, 0.51, -0.85); // pressure mat under the sheet edge
     P.table(-1.5, -2.2, 0.45, 0.4, 0.55, M.woodLight, M.woodLight);
     const nl = P.floorLamp(-1.5, -2.2); nl.group.position.y = -0.9; nl.shade.position.y = 0.78 + 0.55; nl.shade.scale.set(0.5, 0.5, 0.5); nl.bulb.position.set(-1.5, 1.25, -2.2); nl.bulbMesh.position.copy(nl.bulb.position); nl.bulb.distance = 4;
     R.scene.children.filter((o) => o.geometry?.type === 'CylinderGeometry' && Math.abs(o.position.x + 1.5) < 0.01 && Math.abs(o.position.z + 2.2) < 0.01 && o.geometry.parameters.height === 1.55).forEach((o) => { o.scale.y = 0.45; o.position.y = 0.55 + 0.35; });
