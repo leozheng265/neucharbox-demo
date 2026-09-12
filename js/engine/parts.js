@@ -193,13 +193,26 @@ export function parts(scene, M) {
   P.beacon = (x, y, z) => { cyl(0.03, 0.03, 0.02, M.black, x, y, z); const m = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x2FBF71, emissive: 0x2FBF71, emissiveIntensity: 1.5, transparent: true, opacity: 0.85 })); m.position.set(x, y + 0.04, z); scene.add(m); return m; };
   P.parcel = (x, y, z, s = 0.3) => { const m = box(s, s * 0.7, s * 0.8, M.cardboard, x, y + s * 0.35, z, 0.008); const tape = new THREE.Mesh(new THREE.BoxGeometry(s * 0.2, 0.002, s * 0.82), M.white); tape.position.y = s * 0.351; m.add(tape); return m; };
 
-  // Highlight pulse for tapped devices: { deviceId: [meshes] }. Clones materials so shared ones aren't affected.
+  // Highlight pulse for tapped devices: { deviceId: [meshes or groups] }. Adds a faint additive cyan shell as a
+  // child of each mesh instead of touching the device's own material, so scenes can keep animating emissive,
+  // colour or opacity on the real materials (and shared materials never light up other objects).
   P.highlighter = (map) => {
-    const pulse = {}; const base = new Map();
-    for (const meshes of Object.values(map)) for (const m of meshes) { if (m.material && !base.has(m)) { m.material = m.material.clone(); base.set(m, m.material.emissive ? m.material.emissive.clone() : null); } }
+    const pulse = {}; const shells = {};
+    for (const [id, targets] of Object.entries(map)) {
+      const mat = new THREE.MeshBasicMaterial({ color: 0x29EEE5, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+      const meshes = []; for (const t of targets) t && t.traverse((m) => { if (m.isMesh && !m.userData.isShell) meshes.push(m); });
+      const list = meshes.map((m) => { const o = new THREE.Mesh(m.geometry, mat); o.userData.isShell = true; o.scale.setScalar(1.06); o.visible = false; o.raycast = () => {}; m.add(o); return o; });
+      shells[id] = { mat, list };
+    }
     return {
       focus(id) { pulse[id] = performance.now(); },
-      update() { for (const [id, meshes] of Object.entries(map)) { const age = pulse[id] ? (performance.now() - pulse[id]) / 1000 : 99; const k = age < 1.6 ? Math.abs(Math.sin(age * Math.PI * 2.5)) * (1 - age / 1.6) : 0; for (const m of meshes) { const b = base.get(m); if (!b) continue; if (k > 0) m.material.emissive.set(0x29EEE5).lerp(b, 1 - k); else m.material.emissive.copy(b); } } },
+      update() {
+        const now = performance.now();
+        for (const [id, sh] of Object.entries(shells)) {
+          const age = pulse[id] ? (now - pulse[id]) / 1000 : 99; const k = age < 1.6 ? Math.abs(Math.sin(age * Math.PI * 2.5)) * (1 - age / 1.6) : 0;
+          sh.mat.opacity = k * 0.6; for (const o of sh.list) o.visible = k > 0.01;
+        }
+      },
     };
   };
 

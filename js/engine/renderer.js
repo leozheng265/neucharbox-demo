@@ -58,8 +58,12 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
   composer.addPass(new OutputPass());
 
   let currentQuality = null;
+  // Point-light shadows cost six shadow renders each per frame; phones and slow machines go without them.
+  function applyLightTier() {
+    scene.traverse((o) => { if (o.isPointLight || o.isSpotLight) { if (o.userData.wantsShadow === undefined) o.userData.wantsShadow = o.castShadow; o.castShadow = o.userData.wantsShadow && (currentQuality === 'high' || o.isSpotLight); if (o.castShadow && o.isPointLight && currentQuality !== 'high') o.shadow.mapSize.set(512, 512); } });
+  }
   function setQuality(q) {
-    if (q === currentQuality) return; currentQuality = q;
+    if (q === currentQuality) return; currentQuality = q; applyLightTier();
     gtao.enabled = q === 'high';
     sun.shadow.mapSize.set(q === 'high' ? 4096 : 1536, q === 'high' ? 4096 : 1536);
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
@@ -71,7 +75,7 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
     const w = canvas.clientWidth || 300, h = canvas.clientHeight || Math.round(w * 0.75);
     renderer.setSize(w, h, false); composer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
   }
-  new ResizeObserver(resize).observe(canvas.parentElement);
+  const ro = new ResizeObserver(resize); ro.observe(canvas.parentElement);
   setQuality(quality);
 
   // ---- picking ----
@@ -154,8 +158,18 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
     THREE, renderer, scene, camera, controls, lights: { hemi, sun, fill }, composer, gtao, bloom,
     addPickable, onPick: (fn) => pickHandlers.push(fn), onFrame: (fn) => frameFns.push(fn), ping, anchorOf, resetView,
     daylight, setQuality, resize, get quality() { return currentQuality; },
-    start() { running = true; resize(); loop(); },
+    start() { running = true; applyLightTier(); resize(); loop(); },
     stop() { running = false; },
-    dispose() { running = false; renderer.dispose(); composer.dispose?.(); },
+    dispose() {
+      running = false; ro.disconnect();
+      controls.stopListenToKeyEvents?.(); controls.dispose();
+      scene.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+        for (const m of mats) { for (const k of ['map', 'bumpMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap']) m[k]?.dispose?.(); m.dispose(); }
+      });
+      scene.environment?.dispose?.(); pmrem.dispose();
+      composer.dispose?.(); renderer.dispose(); renderer.forceContextLoss();
+    },
   };
 }

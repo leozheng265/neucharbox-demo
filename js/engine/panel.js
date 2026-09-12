@@ -2,7 +2,7 @@
 // Tone: offline (grey, dimmed) · idle (grey icon) · on (amber) · busy (blue) · bad (red).
 import { icon } from './icons.js';
 
-const looksActive = (s) => !!(s.on || s.running || s.armed || s.active || s.pressed || s.moving || (s.open > 0.5) || (s.brightness > 0.02) || s.shutter === 'open' || s.light === 'green' || s.scene === 'live' || s.scene === 'recording' || (s.muted === false));
+const looksActive = (s) => !!(s.on || s.running || s.armed || s.active || s.pressed || s.moving || s.state === 'moving' || (s.open > 0.5) || (s.brightness > 0.02) || s.shutter === 'open' || s.light === 'green' || s.scene === 'live' || s.scene === 'recording' || (s.muted === false));
 
 export function createPanel(root, scene, store, { onSelect } = {}) {
   const ids = scene.deviceOrder || Object.keys(scene.devices).filter((d) => d !== 'hub' && d !== 'env');

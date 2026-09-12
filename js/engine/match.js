@@ -2,7 +2,7 @@
 const STOP = new Set('a an the i my me it is to and or of in on at for with be please can you make let while when if do dont don\'t not this that its im i\'m'.split(' '));
 
 export function tokens(text) {
-  return String(text).toLowerCase().replace(/[^a-z0-9°.\s]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
+  return String(text).toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9°.\s]/g, ' ').replace(/\.(?!\d)/g, ' ').replace(/(^|\s)\./g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
 }
 
 export function matchPrompt(text, prompts) {
@@ -10,7 +10,7 @@ export function matchPrompt(text, prompts) {
   if (q.size === 0) return { prompt: prompts[0], score: 0 };
   let best = null, bestScore = 0;
   for (const p of prompts) {
-    const bag = new Set([...tokens(p.chip), ...(p.keywords || []).map((k) => k.toLowerCase())]);
+    const bag = new Set([...tokens(p.chip), ...(p.keywords || []).flatMap(tokens)]);
     let score = 0;
     for (const w of q) { if (bag.has(w)) score += 1; else for (const b of bag) if (b.length > 4 && (b.startsWith(w) || w.startsWith(b))) { score += 0.5; break; } }
     if (score > bestScore) { bestScore = score; best = p; }
