@@ -1,5 +1,6 @@
 // Procedural textures, materials and builders shared across scenes.
 // Every builder adds to `scene` and returns the handles a scene needs to animate.
+import './compat.js';
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
@@ -97,7 +98,7 @@ export function parts(scene, M) {
     const wm = wallMat.clone(); wm.shadowSide = THREE.DoubleSide;
     const floor = add(new THREE.Mesh(new THREE.PlaneGeometry(w, d), floorMat)); floor.rotation.x = -Math.PI / 2;
     const cm = M.ceiling.clone(); cm.shadowSide = THREE.DoubleSide;
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w, d), cm); ceil.rotation.x = Math.PI / 2; ceil.position.y = h; scene.add(ceil);
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w, d), cm); ceil.rotation.x = Math.PI / 2; ceil.position.y = h; ceil.castShadow = true; scene.add(ceil);
     const wall = (pw, ph, x, y, z, rotY) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), wm); m.position.set(x, y, z); m.rotation.y = rotY; m.receiveShadow = true; m.castShadow = true; scene.add(m); return m; };
     const zb = -d / 2, xl = -w / 2;
     if (window) {
@@ -152,6 +153,12 @@ export function parts(scene, M) {
     const button = new THREE.Mesh(new THREE.CylinderGeometry(0.0032 * scale, 0.0032 * scale, 0.0015 * scale, 20), new THREE.MeshStandardMaterial({ color: 0xC9CDD2, metalness: 0.9, roughness: 0.3 })); button.rotation.x = Math.PI / 2; button.position.set(-W * 0.34, H * 0.55, D / 2 + 0.0008); g.add(button);
     const ledMat = new THREE.MeshStandardMaterial({ color: 0x9FF5E8, emissive: 0x29EEE5, emissiveIntensity: 0 });
     const led = new THREE.Mesh(new THREE.SphereGeometry(0.0012 * scale, 10, 10), ledMat); led.position.set(-W * 0.29, H * 0.58, D / 2 + 0.0008); g.add(led);
+    // The LED is 2.4 mm across (sub-pixel from any room camera), so it gets a small screen-sized glow driven by ledMat.
+    const hc = document.createElement('canvas'); hc.width = hc.height = 64; const hgc = hc.getContext('2d');
+    const rg = hgc.createRadialGradient(32, 32, 0, 32, 32, 32); rg.addColorStop(0, '#fff'); rg.addColorStop(0.3, 'rgba(255,255,255,.55)'); rg.addColorStop(1, 'rgba(255,255,255,0)'); hgc.fillStyle = rg; hgc.fillRect(0, 0, 64, 64);
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(hc), color: 0x29EEE5, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, sizeAttenuation: false, opacity: 0 }));
+    halo.scale.setScalar(0.022); halo.position.set(-W * 0.29, H * 0.58, D / 2 + 0.003); halo.userData.noAO = true; halo.raycast = () => {}; g.add(halo);
+    halo.onBeforeRender = () => { halo.material.opacity = Math.min(1, ledMat.emissiveIntensity / 3); };
     // vent slots on both sides
     const vc = document.createElement('canvas'); vc.width = 256; vc.height = 64; const vg = vc.getContext('2d');
     vg.fillStyle = '#2A2D31'; vg.fillRect(0, 0, 256, 64); vg.fillStyle = '#0C0D0F'; for (let i = 8; i < 248; i += 12) { vg.beginPath(); vg.roundRect(i, 10, 5, 44, 2); vg.fill(); }
@@ -162,23 +169,31 @@ export function parts(scene, M) {
 
   P.phone = (x, y, z, rotY = 0) => { const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = rotY; scene.add(g); const b = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.008, 0.145, 3, 0.006), M.black); b.castShadow = true; g.add(b); const s = new THREE.Mesh(new THREE.PlaneGeometry(0.062, 0.135), new THREE.MeshStandardMaterial({ color: 0x0B0F14, emissive: 0x9FE3F0, emissiveIntensity: 0.25 })); s.rotation.x = -Math.PI / 2; s.position.y = 0.0045; g.add(s); return g; };
 
-  P.plant = (x, z, { scale = 1 } = {}) => {
-    const pot = cyl(0.24 * scale, 0.18 * scale, 0.42 * scale, M.pot, x, 0.21 * scale, z, 32);
-    const soil = new THREE.Mesh(new THREE.CircleGeometry(0.22 * scale, 32), M.soil); soil.rotation.x = -Math.PI / 2; soil.position.set(x, 0.42 * scale, z); scene.add(soil);
+  // Potted plant under one root group at (x, y, z); parts are local to it. Soil sits 3 mm above the pot's top cap.
+  P.plant = (x, z, { scale = 1, y = 0 } = {}) => {
+    const g = new THREE.Group(); g.position.set(x, y, z); scene.add(g);
+    const put = (m) => { m.castShadow = m.receiveShadow = true; g.add(m); return m; };
+    const pot = put(new THREE.Mesh(new THREE.CylinderGeometry(0.24 * scale, 0.18 * scale, 0.42 * scale, 32), M.pot)); pot.position.y = 0.21 * scale;
+    const soil = new THREE.Mesh(new THREE.CircleGeometry(0.22 * scale, 32), M.soil); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.42 * scale + 0.003; soil.receiveShadow = true; g.add(soil);
     const leafGeo = new THREE.SphereGeometry(1, 12, 8); leafGeo.scale(0.07 * scale, 0.015 * scale, 0.2 * scale);
     const leaves = [];
     for (let i = 0; i < 16; i++) { const a = i * 2.39996, rad = (0.06 + (i % 4) * 0.03) * scale, h = (0.55 + (i % 5) * 0.09) * scale;
-      const stem = add(new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.01, h - 0.42 * scale, 6), M.stem)); stem.position.set(x + Math.cos(a) * rad * 0.5, (h + 0.42 * scale) / 2, z + Math.sin(a) * rad * 0.5); stem.rotation.z = Math.cos(a) * 0.25; stem.rotation.x = -Math.sin(a) * 0.25;
-      const leaf = add(new THREE.Mesh(leafGeo, M.leaf.clone())); leaf.material.color.offsetHSL(0, 0, (Math.random() - 0.5) * 0.12); leaf.position.set(x + Math.cos(a) * (rad + 0.12 * scale), h, z + Math.sin(a) * (rad + 0.12 * scale)); leaf.rotation.y = -a + Math.PI / 2; leaf.rotation.x = -0.35 - Math.random() * 0.3; leaves.push(leaf); }
-    return { pot, soil, leaves };
+      const stem = put(new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.01, h - 0.42 * scale, 6), M.stem)); stem.position.set(Math.cos(a) * rad * 0.5, (h + 0.42 * scale) / 2, Math.sin(a) * rad * 0.5); stem.rotation.z = Math.cos(a) * 0.25; stem.rotation.x = -Math.sin(a) * 0.25;
+      const leaf = put(new THREE.Mesh(leafGeo, M.leaf.clone())); leaf.material.color.offsetHSL(0, 0, (Math.random() - 0.5) * 0.12); leaf.position.set(Math.cos(a) * (rad + 0.12 * scale), h, Math.sin(a) * (rad + 0.12 * scale)); leaf.rotation.y = -a + Math.PI / 2; leaf.rotation.x = -0.35 - Math.random() * 0.3; leaves.push(leaf); }
+    return { group: g, pot, soil, leaves };
   };
-
-  P.floorLamp = (x, z) => {
-    cyl(0.02, 0.02, 1.55, M.metal, x, 0.78, z, 16); cyl(0.2, 0.2, 0.03, M.metal, x, 0.015, z, 40);
-    const shadeMat = M.shade.clone(); const shade = add(new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, 0.36, 40, 1, true), shadeMat)); shade.position.set(x, 1.68, z);
-    const bulb = new THREE.PointLight(0xFFCF98, 0, 7, 1.7); bulb.position.set(x, 1.62, z); bulb.castShadow = true; bulb.shadow.mapSize.set(1024, 1024); bulb.shadow.bias = -0.002; scene.add(bulb);
-    const bulbMesh = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 16), new THREE.MeshStandardMaterial({ color: 0xFFF3DC, emissive: 0xFFD9A6, emissiveIntensity: 0 })); bulbMesh.position.copy(bulb.position); scene.add(bulbMesh);
-    return { shade, shadeMat, bulb, bulbMesh, group: group(shade) };
+  // Floor (or table) lamp under one root group at (x, y, z). Defaults reproduce the original floor lamp:
+  // pole top 1.555, shade centre 1.68, bulb 1.62. base: false drops the floor disc (e.g. a lamp on a table).
+  P.floorLamp = (x, z, { y = 0, height = 1.55, shadeScale = 1, base = true } = {}) => {
+    const g = new THREE.Group(); g.position.set(x, y, z); scene.add(g);
+    const put = (m) => { m.castShadow = m.receiveShadow = true; g.add(m); return m; };
+    const pr = 0.02 * Math.max(0.6, shadeScale);
+    const pole = put(new THREE.Mesh(new THREE.CylinderGeometry(pr, pr, height, 16), M.metal)); pole.position.y = height / 2 + 0.005;
+    if (base) { const disc = put(new THREE.Mesh(new THREE.CylinderGeometry(0.2 * shadeScale, 0.2 * shadeScale, 0.03, 40), M.metal)); disc.position.y = 0.015; }
+    const shadeMat = M.shade.clone(); const shade = put(new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, 0.36, 40, 1, true), shadeMat)); shade.scale.setScalar(shadeScale); shade.position.y = height + 0.13 * shadeScale;
+    const bulb = new THREE.PointLight(0xFFCF98, 0, 7, 1.7); bulb.position.y = height + 0.07 * shadeScale; bulb.castShadow = true; bulb.shadow.mapSize.set(1024, 1024); bulb.shadow.bias = -0.002; g.add(bulb);
+    const bulbMesh = new THREE.Mesh(new THREE.SphereGeometry(0.035 * Math.max(0.5, shadeScale), 16, 16), new THREE.MeshStandardMaterial({ color: 0xFFF3DC, emissive: 0xFFD9A6, emissiveIntensity: 0 })); bulbMesh.position.copy(bulb.position); g.add(bulbMesh);
+    return { group: g, pole, shade, shadeMat, bulb, bulbMesh };
   };
 
   P.sofa = (x, z) => { const parts = [box(1.9, 0.18, 0.9, M.sofa, x, 0.18, z, 0.03), box(0.85, 0.16, 0.8, M.sofa, x - 0.43, 0.35, z + 0.05, 0.05), box(0.85, 0.16, 0.8, M.sofa, x + 0.43, 0.35, z + 0.05, 0.05), box(1.9, 0.55, 0.22, M.sofa, x, 0.63, z - 0.35, 0.05), box(0.22, 0.6, 0.9, M.sofa, x - 1.05, 0.39, z, 0.05), box(0.22, 0.6, 0.9, M.sofa, x + 1.05, 0.39, z, 0.05)]; const c = box(0.42, 0.42, 0.13, M.cushion, x - 0.35, 0.62, z - 0.18, 0.05); c.rotation.y = 0.15; c.rotation.x = -0.15; [[-0.85, -0.35], [0.85, -0.35], [-0.85, 0.35], [0.85, 0.35]].forEach((p) => cyl(0.03, 0.02, 0.09, M.wood, x + p[0], 0.045, z + p[1], 10)); return parts; };
@@ -199,9 +214,16 @@ export function parts(scene, M) {
   P.highlighter = (map) => {
     const pulse = {}; const shells = {};
     for (const [id, targets] of Object.entries(map)) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0x29EEE5, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+      const mat = new THREE.MeshBasicMaterial({ color: 0x29EEE5, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
       const meshes = []; for (const t of targets) t && t.traverse((m) => { if (m.isMesh && !m.userData.isShell) meshes.push(m); });
-      const list = meshes.map((m) => { const o = new THREE.Mesh(m.geometry, mat); o.userData.isShell = true; o.scale.setScalar(1.06); o.visible = false; o.raycast = () => {}; m.add(o); return o; });
+      const list = meshes.map((m) => {
+        if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        const bb = m.geometry.boundingBox, c = bb.getCenter(new THREE.Vector3()), sz = bb.getSize(new THREE.Vector3());
+        const o = new THREE.Mesh(m.geometry, mat); o.userData.isShell = o.userData.noAO = true;
+        o.scale.set(sz.x > 1e-4 ? 1 + 0.008 / sz.x : 1, sz.y > 1e-4 ? 1 + 0.008 / sz.y : 1, sz.z > 1e-4 ? 1 + 0.008 / sz.z : 1);
+        o.position.set(c.x * (1 - o.scale.x), c.y * (1 - o.scale.y), c.z * (1 - o.scale.z));
+        o.visible = false; o.raycast = () => {}; m.add(o); return o;
+      });
       shells[id] = { mat, list };
     }
     return {

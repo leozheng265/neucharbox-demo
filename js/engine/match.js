@@ -2,7 +2,7 @@
 const STOP = new Set('a an the i my me it is to and or of in on at for with be please can you make let while when if do dont don\'t not this that its im i\'m'.split(' '));
 
 export function tokens(text) {
-  return String(text).toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9°.\s]/g, ' ').replace(/\.(?!\d)/g, ' ').replace(/(^|\s)\./g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
+  return String(text).toLowerCase().replace(/(^|[^\d.])\.(\d)/g, '$10.$2').replace(/°[cf]\b/g, '°').replace(/[’']/g, '').replace(/[^a-z0-9°.\s]/g, ' ').replace(/\.(?!\d)/g, ' ').replace(/(^|\s)\./g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
 }
 
 export function matchPrompt(text, prompts) {
@@ -17,3 +17,8 @@ export function matchPrompt(text, prompts) {
   }
   return { prompt: best || prompts[0], score: bestScore };
 }
+
+// True when the visitor's text negates something the chip does not (e.g. "don't go live" vs "Go live.").
+const NEG = /\b(?:not|never|dont|don't|do not|stop not|no longer|without)\b/;
+const norm = (t) => String(t).toLowerCase().replace(/’/g, "'");
+export function negates(text, chip) { return /\b(?:not|never|dont|don't)\b/.test(norm(text)) && !NEG.test(norm(chip)); }

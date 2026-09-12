@@ -3,35 +3,37 @@
 //   { beat: 'setup'|'ask'|'plan'|'run'|'recover'|'end' }
 //   { say: text }                       NCB message
 //   { user: text }                      visitor message
-//   { status: text }                    small progress line under the room
+//   { status: text | (store) => text }  small progress line under the room
 //   { plan: { intro, steps: [{ text, alt: { text, apply: [steps] } }], approve } }  waits for approval
 //   { ask: { intro, options: [{ label, apply: [steps] }] } }   halts and asks (lab)
 //   { wait: ms }
 //   { set: path, to: value, label? }
 //   { tween: path, to: number, ms, label? }
 //   { parallel: [steps] }
-//   { fail: deviceId, say?: text }
+//   { fail: deviceId, say?: text, title?: text }  marks the device faulted; `say` shows as an alert
 //   { replan: { intro, changes: [text], needsYou: text } }
 //   { end: { headline, body } }
 //   { fn: (ctx) => any | Promise }
 //
-// fn steps receive ctx = { store, chat, fast, tween, sleep }. `fast` is a live getter (true while skipping or
-// headless). Use ctx.tween(path, to, ms) and ctx.sleep(ms) inside fn steps: they honour ?speed=, go instant
-// when skipping, and are released immediately by a beat skip — raw store.tween/setTimeout do not.
+// fn steps receive ctx = { store, chat, fast, tween, sleep, status, say }. `fast` is a live getter (true while
+// skipping or headless). Use ctx.tween(path, to, ms) and ctx.sleep(ms) inside fn steps: they honour ?speed=, go
+// instant when skipping, and are released immediately by a beat skip — raw store.tween/setTimeout do not.
+// ctx.status(text) sets the status line; ctx.say(text) is a { say } step (typing delay, cancel-safe).
 
-export function createPlayer({ store, chat, headless = false, onBeat = () => {}, onStatus = () => {}, autoPlan = () => ({}), autoAsk = () => 0, endOptions = () => ({}) }) {
+export function createPlayer({ store, chat, headless = false, onBeat = () => {}, onStatus = () => {}, autoPlan = () => ({}), autoAsk = () => 0, endOptions = () => ({}), speed = null }) {
   let fast = headless;
   let stopAt = null;         // beat name to stop fast-forwarding at
   let currentBeat = 'setup';
   let cancelled = false;
 
-  const SPEED = (typeof location !== 'undefined' && Number(new URLSearchParams(location.search).get('speed'))) || 1;
+  const SPEED = speed || (typeof location !== 'undefined' && Number(new URLSearchParams(location.search).get('speed'))) || 1;
   const timers = new Map();  // timeout id -> resolve, so a skip or cancel can release in-flight sleeps
   const sleep = (ms) => (fast || ms <= 0 ? Promise.resolve() : new Promise((r) => { const id = setTimeout(() => { timers.delete(id); r(); }, ms / SPEED); timers.set(id, r); }));
   const releaseSleeps = () => { for (const [id, r] of timers) { clearTimeout(id); r(); } timers.clear(); };
   const tween = (path, to, ms = 800) => (fast || ms <= 0 ? (store.set(path, to), Promise.resolve()) : store.tween(path, to, ms / SPEED));
   const typing = (text) => Math.min(1800, 350 + text.length * 14);
-  const ctx = { store, chat, tween, sleep, get fast() { return fast; } };
+  const say = async (text) => { if (!fast) { chat.typing(true); await sleep(typing(text)); chat.typing(false); } if (cancelled) return; chat.ncb(text); await sleep(400); };
+  const ctx = { store, chat, tween, sleep, say, status: (text) => onStatus(text), get fast() { return fast; } };
 
   async function run(step) {
     if (cancelled) return;
@@ -41,17 +43,17 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
       onBeat(step.beat);
       return;
     }
-    if (step.fail) { store.set(`${step.fail}.status`, 'fault'); if (step.say) chat.alert(step.say); await sleep(600); return; }
-    if (step.say != null) { if (!fast) { chat.typing(true); await sleep(typing(step.say)); chat.typing(false); } if (cancelled) return; chat.ncb(step.say); await sleep(400); return; }
+    if (step.fail) { store.set(`${step.fail}.status`, 'fault'); if (step.say) chat.alert(step.say, step.title); await sleep(600); return; }
+    if (step.say != null) return say(step.say);
     if (step.user != null) { chat.user(step.user); await sleep(500); return; }
-    if (step.status != null) { onStatus(step.status); return; }
+    if (step.status != null) { onStatus(typeof step.status === 'function' ? step.status(store) : step.status); return; }
     if (step.wait != null) return sleep(step.wait);
     if (step.set != null) { store.set(step.set, step.to); if (step.label) onStatus(step.label); return; }
     if (step.tween != null) { if (step.label) onStatus(step.label); return tween(step.tween, step.to, step.ms ?? 800); }
-    if (step.parallel) return Promise.all(step.parallel.map(run));
+    if (step.parallel) { const rs = await Promise.allSettled(step.parallel.map(run)); const bad = rs.find((r) => r.status === 'rejected'); if (bad) throw bad.reason; return; }
     if (step.replan) { chat.replan(step.replan); await sleep(700); return; }
     if (step.plan) {
-      const choices = fast ? { approved: true, alts: autoPlan(step.plan) || {} } : await chat.plan(step.plan);
+      const choices = headless ? { approved: true, alts: autoPlan(step.plan) || {} } : await chat.plan(step.plan, { skipped: fast });
       for (const [i, on] of Object.entries(choices.alts || {})) {
         const alt = step.plan.steps[Number(i)]?.alt;
         if (on && alt?.apply) for (const s of alt.apply) await run(s);
@@ -59,7 +61,7 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
       return;
     }
     if (step.ask) {
-      const idx = fast ? autoAsk(step.ask) || 0 : await chat.ask(step.ask);
+      const idx = headless ? autoAsk(step.ask) || 0 : await chat.ask(step.ask, { skipped: fast });
       const opt = step.ask.options[idx] || step.ask.options[0];
       for (const s of opt.apply || []) await run(s);
       return;
@@ -69,12 +71,13 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
     throw new Error('Unknown step: ' + JSON.stringify(step));
   }
 
-  async function play(steps) { for (const s of steps) { if (cancelled) return; await run(s); } }
+  // Each play() starts at normal speed: a skip (or an error during one) never carries into the next request.
+  async function play(steps) { fast = headless; stopAt = null; for (const s of steps) { if (cancelled) return; await run(s); } }
 
   // Fast-forward until the named beat is reached (or the end). Interactive cards on screen resolve with the
   // visitor's current choices; in-flight sleeps and tweens finish immediately.
   function skipTo(beat) { stopAt = beat; fast = true; store.finishTweens(); releaseSleeps(); chat.resolvePending(); }
-  function cancel() { cancelled = true; releaseSleeps(); chat.resolvePending(); }
+  function cancel() { cancelled = true; fast = true; releaseSleeps(); chat.resolvePending(); }
 
   return { play, run, skipTo, cancel, get beat() { return currentBeat; }, get fast() { return fast; } };
 }

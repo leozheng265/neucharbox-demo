@@ -28,11 +28,11 @@ export function createStore(initial, { headless = false } = {}) {
   function tick(now) {
     for (const [path, t] of tweens) {
       const k = Math.min(1, (now - t.start) / t.ms);
-      set(path, t.from + (t.to - t.from) * t.ease(k));
-      if (k >= 1) { tweens.delete(path); t.res(); }
+      if (k >= 1) { tweens.delete(path); try { set(path, t.to); } finally { t.res(); } }
+      else set(path, t.from + (t.to - t.from) * t.ease(k));
     }
   }
-  function finishTweens() { for (const [p, t] of tweens) { set(p, t.to); t.res(); } tweens.clear(); }
+  function finishTweens() { const all = [...tweens]; tweens.clear(); for (const [p, t] of all) { try { set(p, t.to); } finally { t.res(); } } }
 
   // Deep copy of the whole state, and a way to put it back (used to give every prompt the post-setup room).
   const snapshot = () => clone(state);
