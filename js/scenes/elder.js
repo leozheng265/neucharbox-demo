@@ -48,7 +48,7 @@ export default {
     const plug = P.box(0.08, 0.08, 0.02, M.white, 2.4, 1.15, -2.49); const plugLed = P.ledDot(2.42, 1.18, -2.478, 0x2FBF71, 0.006);
     const kettleBody = P.cyl(0.09, 0.11, 0.22, M.metal, 2.4, 1.035, -2.15, 24); P.cyl(0.02, 0.02, 0.1, M.black, 2.4, 1.16, -2.15, 12); P.box(0.02, 0.12, 0.06, M.black, 2.51, 1.06, -2.15, 0.005);
     const steam = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0 })); steam.position.set(2.42, 1.22, -2.15); R.scene.add(steam);
-    const hub = P.hub(0.9, 0.925, -2.15, { rotY: 0.2 }); P.phone(1.25, 0.93, -2.05, 0.4);
+    const hub = P.hub(0.9, 0.925, -2.15, { rotY: 0.2 }); R.addPickable(hub.group, 'hub'); P.phone(1.25, 0.93, -2.05, 0.4);
     P.box(0.25, 0.3, 0.25, M.cardboard, 3.1, 1.075, -2.2); P.cyl(0.06, 0.06, 0.2, M.white, 1.6, 1.025, -2.3, 16); // a box, a mug-ish canister
     P.table(1.8, 0.4, 0.9, 0.9, 0.75, M.woodLight, M.woodLight); P.box(0.42, 0.04, 0.42, M.woodLight, 1.1, 0.46, 0.4); [[-0.18, -0.18], [0.18, -0.18], [-0.18, 0.18], [0.18, 0.18]].forEach((p) => P.box(0.03, 0.46, 0.03, M.woodLight, 1.1 + p[0], 0.23, 0.4 + p[1])); P.box(0.42, 0.4, 0.03, M.woodLight, 1.1, 0.68, 0.6);
 
@@ -59,7 +59,7 @@ export default {
       focus: hi.focus,
       update(s, t) {
         hi.update(); R.daylight(s.env.hour);
-        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? 1.4 + Math.sin(t * 2.2) * 0.6 * s.hub.led : 0;
+        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
         doorPivot.rotation.y = -s.door.open * 1.4;
         pirLed.material.emissiveIntensity = s.motion.status === 'offline' ? 0 : s.motion.active ? 6 : 1; pirLed.material.color.set(s.motion.active ? 0xFFB020 : 0x2FBF71); pirLed.material.emissive.copy(pirLed.material.color);
         plugLed.material.color.set(s.kettle.status === 'fault' ? 0xE0563A : s.kettle.on ? 0xFFB020 : 0x2FBF71); plugLed.material.emissive.copy(plugLed.material.color); plugLed.material.emissiveIntensity = s.kettle.status === 'fault' ? (Math.floor(t * 3) % 2 ? 6 : 1) : 2; plugLed.visible = s.kettle.status !== 'offline';

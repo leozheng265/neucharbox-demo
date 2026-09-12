@@ -82,7 +82,7 @@ export default {
     P.box(0.55, 0.36, 0.03, M.black, -1.4, 1.12, -2.2, 0.01); P.box(0.12, 0.02, 0.16, M.black, -1.4, 0.885, -2.15);
     const profile = P.screenPlane(0.5, 0.31, null); profile.position.set(-1.4, 1.12, -2.184);
     // hub, laptop, safety sign, shelf with boxes
-    const hub = P.hub(1.05, tableY, 0.42, { rotY: -0.3 }); P.phone(1.15, tableY + 0.005, 0.2, 0.6);
+    const hub = P.hub(1.05, tableY, 0.42, { rotY: -0.3 }); R.addPickable(hub.group, 'hub'); P.phone(1.15, tableY + 0.005, 0.2, 0.6);
     P.box(0.3, 0.012, 0.22, M.steel, -1.05, 0.88, -2.0); const lap = P.box(0.3, 0.2, 0.012, M.steel, -1.05, 0.98, -2.11); lap.rotation.x = -0.25;
     P.box(0.5, 0.35, 0.02, M.yellow, -2.99, 1.8, -0.5); P.box(0.36, 0.22, 0.005, M.black, -2.98, 1.8, -0.5);
     P.box(1.4, 0.03, 0.3, M.steel, 1.9, 1.7, -2.35); for (let i = 0; i < 4; i++) P.box(0.25, 0.18, 0.2, [M.cardboard, M.white, M.black, M.cardboard][i], 1.4 + i * 0.32, 1.81, -2.35, 0.01);
@@ -107,7 +107,7 @@ export default {
       focus: hi.focus,
       update(s, t) {
         hi.update();
-        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? 1.4 + Math.sin(t * 2.2) * 0.6 * s.hub.led : 0;
+        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
         shutterPivot.rotation.z = -(s.laser.shutter === 'open' ? 1 : 0) * 1.3;
         m1.tilt.rotation.y = m1.rotY + THREE.MathUtils.degToRad(s.m1.yaw * EX); m1.tilt.rotation.z = THREE.MathUtils.degToRad(s.m1.pitch * EX);
         m2.tilt.rotation.y = m2.rotY + THREE.MathUtils.degToRad(s.m2.yaw * EX); m2.tilt.rotation.z = THREE.MathUtils.degToRad(s.m2.pitch * EX);

@@ -32,7 +32,7 @@ export default {
     const pumpLed = P.ledDot(-1.35, 0.21, -1.39, 0x2FBF71);
     const lamp = P.floorLamp(1.95, -1.6);
     P.table(-1.75, -0.3, 0.6, 0.42, 0.55, M.wood, M.black);
-    const hub = P.hub(-1.75, 0.57, -0.3);
+    const hub = P.hub(-1.75, 0.57, -0.3); R.addPickable(hub.group, 'hub');
     const phone = P.phone(-1.55, 0.575, -0.22, -0.4);
     P.doorLeft(-2.5, 1.2);
     const cam = P.smallCamera(-2.44, 2.28, 1.2, Math.PI / 2);
@@ -62,7 +62,7 @@ export default {
         pumpLed.material.color.set(bad ? 0xE0563A : s.pump.running ? 0x3AB7FF : 0x2FBF71); pumpLed.material.emissive.copy(pumpLed.material.color); pumpLed.material.emissiveIntensity = bad ? (blink ? 6 : 1) : s.pump.running ? 4 : 2;
         pumpLed.visible = s.pump.status !== 'offline';
         cam.led.material.color.set(s.camera.status === 'fault' ? 0xE0563A : s.camera.armed ? (s.camera.motion ? 0xFFB020 : 0xE0563A) : 0x2FBF71); cam.led.material.emissive.copy(cam.led.material.color); cam.led.visible = s.camera.status !== 'offline';
-        const hubOn = s.hub.status === 'on'; hub.ledMat.emissiveIntensity = hubOn ? 1.4 + Math.sin(t * 2.2) * 0.6 * s.hub.led : 0;
+        const hubOn = s.hub.status === 'on'; hub.ledMat.emissiveIntensity = hubOn ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
         thermoText(s.thermostat.status === 'offline' ? '--' : s.thermostat.status === 'fault' ? '!!' : String(Math.round(s.thermostat.target)));
       },
     };

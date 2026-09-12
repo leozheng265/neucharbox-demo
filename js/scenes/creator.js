@@ -38,7 +38,7 @@ export default {
     P.cyl(0.015, 0.015, 0.6, M.black, -0.85, 1.06, -1.5, 12); const boom = P.box(0.6, 0.02, 0.02, M.black, -0.55, 1.35, -1.5); boom.rotation.z = 0.15; const micBody = P.cyl(0.035, 0.035, 0.16, M.steel, -0.3, 1.32, -1.5, 20); micBody.rotation.x = 0.5; const micLed = P.ledDot(-0.3, 1.25, -1.44, 0xE0563A, 0.006);
     // capture card box + hub + phone
     const capBox = P.box(0.14, 0.03, 0.09, M.anodized, 0.7, 0.775, -1.85, 0.006); const capLed = P.ledDot(0.65, 0.792, -1.8, 0x2FBF71, 0.005);
-    const hub = P.hub(-0.6, 0.76, -1.95, { rotY: 0.25 }); P.phone(-0.35, 0.765, -1.9, 0.5);
+    const hub = P.hub(-0.6, 0.76, -1.95, { rotY: 0.25 }); R.addPickable(hub.group, 'hub'); P.phone(-0.35, 0.765, -1.9, 0.5);
     // key light: stand + softbox facing the desk
     P.cyl(0.015, 0.015, 1.7, M.black, 1.6, 0.85, -0.9, 12); P.cyl(0.18, 0.18, 0.02, M.black, 1.6, 0.01, -0.9, 24);
     const softbox = P.box(0.5, 0.5, 0.06, M.black, 1.6, 1.7, -0.9, 0.01); softbox.rotation.y = -0.7; softbox.rotation.x = 0.2;
@@ -66,7 +66,7 @@ export default {
       focus: hi.focus,
       update(s, t) {
         hi.update();
-        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? 1.4 + Math.sin(t * 2.2) * 0.6 * s.hub.led : 0;
+        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
         const kb = s.keylight.brightness; keyLight.intensity = kb * 40; panel.material.emissiveIntensity = kb * 2.5; const warm = (6500 - s.keylight.kelvin) / 3500; panel.material.emissive.setRGB(1, 1 - 0.25 * warm, 1 - 0.5 * warm); keyLight.color.copy(panel.material.emissive);
         camLed.material.color.set(s.cam.status === 'fault' ? 0xE0563A : s.cam.on && s.cam.signal ? 0xE0563A : 0x2FBF71); camLed.material.emissive.copy(camLed.material.color); camLed.material.emissiveIntensity = s.cam.status === 'fault' ? (Math.floor(t * 3) % 2 ? 6 : 1) : s.cam.on ? 4 : 1; camLed.visible = s.cam.status !== 'offline';
         webcamLed.material.emissiveIntensity = s.plan?.backup && s.overlay.scene === 'live' ? 5 : 0.8;

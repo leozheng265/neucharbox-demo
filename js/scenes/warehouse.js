@@ -56,7 +56,7 @@ export default {
     function cart(x, z) { const g = new THREE.Group(); g.position.set(x, 0, z); R.scene.add(g); const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.22, 0.6), M.steel); body.position.y = 0.2; body.castShadow = true; g.add(body); const top = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.03, 0.55), M.black); top.position.y = 0.32; g.add(top); for (const [dx, dz] of [[-0.3, -0.25], [0.3, -0.25], [-0.3, 0.25], [0.3, 0.25]]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.06, 16), M.rubber); w.rotation.x = Math.PI / 2; w.position.set(dx, 0.08, dz); g.add(w); } const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.06, 12), new THREE.MeshStandardMaterial({ color: 0x2FBF71, emissive: 0x2FBF71, emissiveIntensity: 1.5 })); beacon.position.set(-0.38, 0.36, 0.22); g.add(beacon); const load = P.parcel(0, 0.33, 0, 0.3); R.scene.remove(load); load.position.set(0, 0.33 + 0.105, 0); g.add(load); load.visible = false; return { group: g, body, beacon, load }; }
     const A = cart(-3.0, 3.2), B = cart(-1.4, 3.2);
     // desk with hub and a screen
-    P.table(-5.5, 3.0, 1.2, 0.6, 0.75, M.woodLight, M.steel); const hub = P.hub(-5.7, 0.77, 3.0, { rotY: 0.4 }); P.phone(-5.3, 0.775, 3.1, 0.3); P.box(0.5, 0.32, 0.03, M.black, -5.4, 1.05, 2.75, 0.01);
+    P.table(-5.5, 3.0, 1.2, 0.6, 0.75, M.woodLight, M.steel); const hub = P.hub(-5.7, 0.77, 3.0, { rotY: 0.4 }); R.addPickable(hub.group, 'hub'); P.phone(-5.3, 0.775, 3.1, 0.3); P.box(0.5, 0.32, 0.03, M.black, -5.4, 1.05, 2.75, 0.01);
     P.box(0.5, 0.5, 0.5, M.cardboard, -6.2, 0.25, 1.5, 0.01); P.box(0.5, 0.45, 0.5, M.cardboard, -6.2, 0.725, 1.5, 0.01);
 
     R.addPickable(C.c1.motor, 'c1'); R.addPickable(C.c2.motor, 'c2'); R.addPickable(C.c3.motor, 'c3'); R.addPickable(scanHead, 'scanner'); R.addPickable(gatePivot, 'gate'); R.addPickable(A.group, 'agvA'); R.addPickable(B.group, 'agvB'); R.addPickable(dockPost, 'dock'); R.addPickable(dockLight, 'dock');
@@ -67,7 +67,7 @@ export default {
       focus: hi.focus,
       update(s, t) {
         hi.update();
-        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? 1.4 + Math.sin(t * 2.2) * 0.6 * s.hub.led : 0;
+        hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
         for (const k of ['c1', 'c2', 'c3']) { const c = C[k], st = s[k]; const len = c.x1 - c.x0, sp = 0.5; parcels[k].forEach((p, i) => { const u = ((st.off * 0.5 + i * sp) % len + len) % len; p.position.x = c.x0 + u; p.visible = st.status !== 'offline' || true; }); const bad = st.status === 'fault'; c.led.material.color.set(bad ? 0xE0563A : st.running ? 0x3AB7FF : 0x2FBF71); c.led.material.emissive.copy(c.led.material.color); c.led.material.emissiveIntensity = bad ? (Math.floor(t * 3) % 2 ? 6 : 1) : 2; c.led.visible = st.status !== 'offline'; }
         const armed = s.scanner.armed && s.scanner.status !== 'fault'; scanLine.visible = armed; scanLine.material.opacity = armed ? 0.5 + 0.3 * Math.abs(Math.sin(t * 6)) : 0;
         gatePivot.rotation.y = -s.gate.pos * 0.9; laneParcels.forEach((p, i) => (p.visible = s.gate.lane === 'B' && s.gate.pos > 0.9)); if (s.gate.lane === 'B' && s.c3.running) laneParcels.forEach((p, i) => (p.position.z = 1.2 + ((s.c3.off * 0.5 + i * 0.9) % 1.8)));

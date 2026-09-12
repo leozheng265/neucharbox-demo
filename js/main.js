@@ -56,7 +56,9 @@ async function mountScene(meta) {
   R.onPick((id) => { panel.select(id); room.focus?.(id); R.ping(id, scene.devices[id].name, { hold: 1200 }); });
   // Discovery and fault effects in the room: ring + label at the device, tile pop in the dashboard.
   store.subscribe((state, path, value) => {
-    const [id, key] = path.split('.'); if (key !== 'status' || !scene.devices[id]) return;
+    const [id, key] = path.split('.'); if (key !== 'status') return;
+    if (id === 'hub' && value === 'on') { R.ping('hub', 'NeuCharBox · powered'); return; }
+    if (!scene.devices[id]) return;
     if (value === 'online' && phase === 'setup') { room.focus?.(id); R.ping(id, `${scene.devices[id].name} · connected`); panel.pop(id); }
     if (value === 'fault') { room.focus?.(id); R.ping(id, `${scene.devices[id].name} · ${scene.devices[id].faultText || 'fault'}`, { color: '#E0563A', hex: 0xE0563A, hold: 3200 }); panel.pop(id); }
   });

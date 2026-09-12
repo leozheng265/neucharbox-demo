@@ -123,12 +123,40 @@ export function parts(scene, M) {
 
   P.blinds = (x, yTop, z, ww, n = 12, pitch = 0.107) => { const slats = []; for (let i = 0; i < n; i++) slats.push(box(ww, 0.012, 0.075, M.slat, x, yTop - i * pitch, z)); box(ww + 0.04, 0.05, 0.08, M.trim, x, yTop + 0.06, z); return slats; };
 
-  P.hub = (x, y, z, { rotY = 0 } = {}) => {
+  // NeuCharBox hub, modelled on the Standard unit: dark graphite aluminium slab ~13 cm square, 3 cm tall,
+  // white N logo + wordmark on top, black front panel with a silver power button, status LED and four USB-A
+  // ports, vertical vent slots on both sides, and a lighter bevel at the base. Origin at the base centre; front = +z.
+  P.hub = (x, y, z, { rotY = 0, scale = 1 } = {}) => {
+    const W = 0.14 * scale, H = 0.034 * scale, D = 0.14 * scale;
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = rotY; scene.add(g);
-    const body = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.055, 0.15, 4, 0.014), M.hub); body.position.y = 0.0275; body.castShadow = body.receiveShadow = true; g.add(body);
-    for (let i = 0; i < 4; i++) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.007, 0.012), M.black); p.position.set(-0.045 + i * 0.03, 0.028, -0.075); g.add(p); }
-    const ledMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffffff, emissiveMap: tex(gradientTex('#29EEE5', '#AAF86D')), emissiveIntensity: 0 });
-    const led = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.006), ledMat); led.position.set(0, 0.045, 0.0755); g.add(led);
+    const brushed = noiseTex('#2C2F33', 10, 256);
+    const bodyMat = new THREE.MeshPhysicalMaterial({ color: 0x2A2D31, metalness: 0.78, roughness: 0.42, bumpMap: tex(brushed, [4, 1], false), bumpScale: 0.004, clearcoat: 0.15, clearcoatRoughness: 0.5 });
+    const body = new THREE.Mesh(new RoundedBoxGeometry(W, H - 0.004 * scale, D, 5, 0.008 * scale), bodyMat); body.position.y = (H - 0.004 * scale) / 2 + 0.004 * scale; body.castShadow = body.receiveShadow = true; g.add(body);
+    const bevel = new THREE.Mesh(new RoundedBoxGeometry(W - 0.004 * scale, 0.004 * scale, D - 0.004 * scale, 2, 0.002 * scale), new THREE.MeshStandardMaterial({ color: 0xA9AEB3, metalness: 0.9, roughness: 0.35 })); bevel.position.y = 0.002 * scale; g.add(bevel);
+    // top logo (white silkscreen) as a transparent decal
+    const lc = document.createElement('canvas'); lc.width = lc.height = 512; const lg = lc.getContext('2d');
+    lg.fillStyle = '#F4F6F7'; lg.beginPath(); lg.roundRect(176, 130, 160, 160, 28); lg.fill();
+    lg.globalCompositeOperation = 'destination-out'; lg.beginPath(); lg.roundRect(222, 130, 68, 92, 14); lg.fill(); lg.beginPath(); lg.roundRect(222, 198, 68, 92, 14); lg.fill();
+    lg.globalCompositeOperation = 'source-over'; lg.fillStyle = '#F4F6F7'; lg.beginPath(); lg.moveTo(214, 148); lg.lineTo(258, 148); lg.lineTo(298, 272); lg.lineTo(254, 272); lg.closePath(); lg.fill();
+    lg.font = '600 46px Inter, "Segoe UI", Arial, sans-serif'; lg.textAlign = 'center'; lg.textBaseline = 'top'; lg.fillText('NeuCharBox', 256, 306);
+    const logoT = new THREE.CanvasTexture(lc); logoT.colorSpace = THREE.SRGBColorSpace; logoT.anisotropy = 8;
+    const logo = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.62, W * 0.62), new THREE.MeshStandardMaterial({ map: logoT, transparent: true, roughness: 0.8, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2 })); logo.rotation.x = -Math.PI / 2; logo.position.y = H + 0.0004; g.add(logo);
+    // front panel: black inset with four USB-A ports and labels
+    const fc = document.createElement('canvas'); fc.width = 1024; fc.height = 128; const fg = fc.getContext('2d');
+    fg.fillStyle = '#0A0B0D'; fg.beginPath(); fg.roundRect(0, 0, 1024, 128, 14); fg.fill();
+    fg.fillStyle = '#15171A'; for (let i = 0; i < 1024; i += 6) fg.fillRect(i, 0, 2, 128);
+    for (let i = 0; i < 4; i++) { const cx = 470 + i * 150; fg.fillStyle = '#C6CACF'; fg.beginPath(); fg.roundRect(cx - 34, 30, 68, 30, 4); fg.fill(); fg.fillStyle = '#0A0B0D'; fg.fillRect(cx - 29, 35, 58, 20); fg.fillStyle = '#E8EAED'; fg.fillRect(cx - 24, 38, 48, 8); fg.fillStyle = '#B8BCC1'; fg.font = '600 20px Inter, "Segoe UI", Arial, sans-serif'; fg.textAlign = 'center'; fg.textBaseline = 'top'; fg.fillText('USB', cx, 70); }
+    fg.fillStyle = '#B8BCC1'; fg.font = '600 20px Inter, "Segoe UI", Arial, sans-serif'; fg.textAlign = 'center'; fg.fillText('⏻', 150, 74);
+    const frontT = new THREE.CanvasTexture(fc); frontT.colorSpace = THREE.SRGBColorSpace; frontT.anisotropy = 8;
+    const front = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.84, H * 0.5), new THREE.MeshStandardMaterial({ map: frontT, roughness: 0.3, metalness: 0.2, polygonOffset: true, polygonOffsetFactor: -2 })); front.position.set(W * 0.02, H * 0.5, D / 2 + 0.0003); g.add(front);
+    const button = new THREE.Mesh(new THREE.CylinderGeometry(0.0032 * scale, 0.0032 * scale, 0.0015 * scale, 20), new THREE.MeshStandardMaterial({ color: 0xC9CDD2, metalness: 0.9, roughness: 0.3 })); button.rotation.x = Math.PI / 2; button.position.set(-W * 0.34, H * 0.55, D / 2 + 0.0008); g.add(button);
+    const ledMat = new THREE.MeshStandardMaterial({ color: 0x9FF5E8, emissive: 0x29EEE5, emissiveIntensity: 0 });
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.0012 * scale, 10, 10), ledMat); led.position.set(-W * 0.29, H * 0.58, D / 2 + 0.0008); g.add(led);
+    // vent slots on both sides
+    const vc = document.createElement('canvas'); vc.width = 256; vc.height = 64; const vg = vc.getContext('2d');
+    vg.fillStyle = '#2A2D31'; vg.fillRect(0, 0, 256, 64); vg.fillStyle = '#0C0D0F'; for (let i = 8; i < 248; i += 12) { vg.beginPath(); vg.roundRect(i, 10, 5, 44, 2); vg.fill(); }
+    const ventT = new THREE.CanvasTexture(vc); ventT.colorSpace = THREE.SRGBColorSpace;
+    for (const sx of [-1, 1]) { const v = new THREE.Mesh(new THREE.PlaneGeometry(D * 0.66, H * 0.55), new THREE.MeshStandardMaterial({ map: ventT, roughness: 0.6, metalness: 0.5, polygonOffset: true, polygonOffsetFactor: -2 })); v.rotation.y = sx * Math.PI / 2; v.position.set(sx * (W / 2 + 0.0003), H * 0.5, -D * 0.08); g.add(v); }
     return { group: g, body, led, ledMat };
   };
 
