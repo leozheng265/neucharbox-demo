@@ -18,6 +18,7 @@ function cartAt(u, v) {
 const DIVERT_SAFE = { headline: 'It stopped trusting the sensor before you had to.', body: 'A rule you approved decided what happens when the scanner\'s word isn\'t good enough. NeuCharBox took the safe option, not the fast one, and told you what to check.' };
 const DIVERT_HELD = { headline: 'It held the parcel instead of guessing.', body: 'You chose to stop on an unreadable label. NeuCharBox stopped C1 at the first one, let C2 and C3 finish, and told you exactly which parcel needs a person.' };
 const DIVERT_END = { ...DIVERT_SAFE };
+const ridingOf = new WeakMap(); // store → () => parcels still on their way down C3 (set by build(); none when headless)
 
 export default {
   id: 'warehouse',
@@ -40,7 +41,7 @@ export default {
     dock:    { icon: 'dock', name: 'Dock 2', initial: { light: 'red', parcels: 0, target: 40 }, format: (s) => `${s.light === 'green' ? 'open' : 'closed'} · ${Math.round(s.parcels)}/${s.target} parcels`, faultText: 'door fault' },
   },
 
-  build({ R, P, M, THREE, parts }) {
+  build({ R, P, M, THREE, store, parts, speed = 1 }) {
     const concreteC = parts.concreteTex();
     const concrete = new THREE.MeshStandardMaterial({ map: parts.tex(concreteC, [4, 3]), roughness: 0.85 });
     const wallMat = new THREE.MeshStandardMaterial({ color: 0xB9BDBB, roughness: 0.95 });
@@ -85,7 +86,8 @@ export default {
     // lane B: a branch off the C2/C3 junction toward the back, ending over its tote
     const LB0 = LZ - 0.315, LB1 = -2.0;
     P.box(0.62, 0.06, LB0 - LB1, belt, 1.3, beltY, (LB0 + LB1) / 2);
-    for (const x of [0.97, 1.63]) P.box(0.05, 0.14, LZ - 0.305 - LB1, M.steel, x, beltY - 0.02, (LZ - 0.305 + LB1) / 2);
+    const LBR = LZ - 0.305, MOUTH = 0.3; // left rail starts MOUTH further back: the open side where parcels slide in off the gate
+    P.box(0.05, 0.14, LBR - MOUTH - LB1, M.steel, 0.97, beltY - 0.02, (LBR - MOUTH + LB1) / 2); P.box(0.05, 0.14, LBR - LB1, M.steel, 1.63, beltY - 0.02, (LBR + LB1) / 2);
     for (const lz of [-0.3, -1.75]) for (const dx of [-0.28, 0.28]) P.box(0.05, beltY - 0.05, 0.05, M.steel, 1.3 + dx, (beltY - 0.05) / 2, lz);
     // lane B tote: an open bin under the belt end. A diverted parcel drops in and sinks below what's already there.
     const binFill = new THREE.MeshStandardMaterial({ color: 0x4A3A28, roughness: 1 });
@@ -114,6 +116,7 @@ export default {
     const bAt = (b, out) => { let i = 1; while (i < BPATH.length - 1 && b > BLEN[i]) i++; const k = Math.min(1, Math.max(0, (b - BLEN[i - 1]) / (BLEN[i] - BLEN[i - 1]))); out[0] = BPATH[i - 1][0] + (BPATH[i][0] - BPATH[i - 1][0]) * k; out[1] = BPATH[i - 1][1] + (BPATH[i][1] - BPATH[i - 1][1]) * k; out[2] = i === BPATH.length - 1 ? 0.62 * Math.min(1, k / 0.75) ** 2 : 0; return out; };
     function initFlow() { flow.forEach((p, i) => Object.assign(p, { lane: i < ON_LINE ? 'main' : 'wait', x: ENTRY_X + i * SPACING, b: 0, k: 0, cart: null })); }
     initFlow();
+    ridingOf.set(store, () => flow.filter((p) => (p.lane === 'main' && p.x >= C.c3.x0) || p.lane === 'down' || (p.lane === 'cart' && p.cart.group.position.x > C.c3.x0)).length);
 
     // carts: lift AGVs whose deck sits at belt height, so a parcel moves belt → deck → belt on one level
     function cart(id, x, z) { const g = new THREE.Group(); g.position.set(x, 0, z); R.scene.add(g); const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.22, 0.6), M.steel); body.position.y = 0.2; body.castShadow = true; g.add(body); const colH = beltY - 0.35; const col = new THREE.Mesh(new THREE.BoxGeometry(0.5, colH, 0.4), M.black); col.position.y = 0.31 + colH / 2; col.castShadow = true; g.add(col); const deck = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.03, 0.56), M.steel); deck.position.y = beltY - 0.015; deck.castShadow = true; g.add(deck); for (const dz of [-0.29, 0.29]) { const r = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.05, 0.02), M.yellow); r.position.set(0, beltY + 0.025, dz); g.add(r); } for (const [dx, dz] of [[-0.3, -0.25], [0.3, -0.25], [-0.3, 0.25], [0.3, 0.25]]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.06, 16), M.rubber); w.rotation.x = Math.PI / 2; w.position.set(dx, 0.08, dz); g.add(w); } const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.06, 12), new THREE.MeshStandardMaterial({ color: 0x2FBF71, emissive: 0x2FBF71, emissiveIntensity: 1.5 })); beacon.position.set(-0.4, beltY + 0.03, 0.24); g.add(beacon); return { id, group: g, body, beacon, home: new THREE.Vector3(x, 0, z), blend: 0, wasLoaded: false }; }
@@ -152,7 +155,7 @@ export default {
       reset() { initFlow(); for (const c of [A, B]) { c.blend = 0; c.wasLoaded = false; c.group.position.copy(c.home); } gateVis = 0; doorVis = 0; sent = 0; lastT = null; },
       update(s, t) {
         hi.update();
-        const dt = lastT == null ? 0 : Math.min(0.05, Math.max(0, t - lastT)); lastT = t;
+        const dt = (lastT == null ? 0 : Math.min(0.05, Math.max(0, t - lastT))) * speed; lastT = t; // belts follow ?speed= like the script
         hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
         for (let i = 0; i < 3; i++) { const st = s[KEYS[i]]; spd[i] = st.status === 'fault' || !st.running ? 0 : st.speed * SPEED_K; }
         // conveyor beacons
@@ -221,7 +224,7 @@ export default {
   prompts: [
     {
       chip: 'Move today\'s 40 outbound parcels from receiving to dock 2, scanning each one.',
-      keywords: ['move', 'parcels', 'outbound', 'dock', 'scanning', 'scan', 'receiving', 'ship', 'boxes', 'orders', '40'],
+      keywords: ['move', 'parcels', 'outbound', 'dock', 'scanning', 'scan', 'receiving', 'ship', 'boxes', 'orders', '40', 'start', 'restart'],
       expect: { 'c2.status': 'fault', 'dock.parcels': 40, 'agvA.state': 'parked', 'agvB.state': 'parked' },
       steps: [
         { beat: 'plan' },
@@ -251,7 +254,7 @@ export default {
         // four shuttle legs; the 40th parcel through the scanner is on the last one, and C1 stops behind it
         { fn: async ({ store, tween, sleep }) => {
           await sleep(900);
-          const legs = [['agvA', 'agvB', 24, 18], ['agvB', 'agvA', 32, 25], ['agvA', 'agvB', 40, 31], ['agvB', 'agvA', 40, 37]];
+          const legs = [['agvA', 'agvB', 24, 18], ['agvB', 'agvA', 32, 25], ['agvA', 'agvB', 40, 31], ['agvB', 'agvA', 40, 34]];
           for (const [i, [out, back, scanned, docked]] of legs.entries()) {
             store.set(`${out}.load`, true);
             if (i === 1) store.set('plan.feedStop', true); // the last of the 40 is on C1: nothing more comes in from receiving
@@ -259,6 +262,12 @@ export default {
             await Promise.all([tween(`${out}.u`, 1, 1400), tween(`${back}.u`, 2, 1400), tween('scanner.count', scanned, 1400), tween('dock.parcels', docked, 1400)]);
             store.set(`${out}.load`, false); store.set(`${back}.u`, 0);
           }
+        } },
+        // the three still on their way down C3 (legs 2–4) are counted one by one as they go through the door
+        { fn: async (ctx) => {
+          const riding = ridingOf.get(ctx.store) ?? (() => 0); let n = ctx.store.get('dock.parcels'), left = riding();
+          for (let i = 0; i < 60 && !ctx.fast && left > 0; i++) { await ctx.sleep(150); const now = riding(); if (now < left) ctx.store.set('dock.parcels', (n = Math.min(37, n + left - now))); left = now; }
+          await ctx.tween('dock.parcels', 37, 300);
         } },
         { say: 'All 40 scanned, 37 at the dock. C1 is done and stopped. Now the 3 on C2.' },
         // each trip: drive out to one of C2's parcels, take it, drop it on C3; the other cart comes back, then parks
@@ -342,7 +351,7 @@ export default {
     },
     {
       chip: 'Stop everything, safely, now.',
-      keywords: ['stop', 'everything', 'safely', 'now', 'halt', 'emergency', 'e-stop', 'freeze', 'pause'],
+      keywords: ['stop', 'everything', 'safely', 'now', 'halt', 'emergency', 'e-stop', 'freeze', 'pause', 'kill', 'shut', 'turn off', 'switch off', 'power', 'abort'],
       expect: { 'c1.running': false, 'c3.running': false, 'dock.light': 'red', 'agvB.state': 'stopped', 'plan.confirmed': true },
       steps: [
         { beat: 'plan' },

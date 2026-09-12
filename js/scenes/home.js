@@ -15,7 +15,7 @@ export default {
   // Frames every device (door camera and thermostat on the left wall, lamp in the right corner) at aspect 1.5; the
   // renderer widens the vertical FOV on narrower canvases (fitAspect). The auto-sway (home azimuth 0.75) only turns
   // right of home: below ~0.7 the door camera's ping label ("Motion at the door") runs off the left edge.
-  camera: { position: [3.52, 2.22, 3.0], target: [-0.3, 1.2, -1.1], fov: 42, fitAspect: 1.5, azimuth: [0.72, 1.0], minDistance: 1.6, maxDistance: 6.5 },
+  camera: { position: [3.52, 2.22, 3.0], target: [-0.3, 1.2, -1.1], fov: 42, fitAspect: 1.5, azimuth: [0.72, 0.9], minDistance: 1.6, maxDistance: 6.5 },
   setupIntro: 'This is NeuCharBox, on the side table. Plug it in to start.',
   askIntro: 'You\'re leaving for a week on Friday. What do you want the house to do while you\'re gone? Pick one, or type your own.',
   deviceOrder: ['lamp', 'blinds', 'soil', 'pump', 'camera', 'thermostat'],
@@ -170,7 +170,7 @@ export default {
     },
     {
       chip: 'Just keep the plants alive while I\'m gone.',
-      keywords: ['plants', 'alive', 'water', 'watering', 'plant', 'soil', 'dry'],
+      keywords: ['plants', 'alive', 'water', 'watering', 'plant', 'soil', 'dry', 'away'],
       expect: { 'soil.status': 'fault', 'pump.running': false },
       steps: [
         { beat: 'plan' },
@@ -203,7 +203,7 @@ export default {
         { wait: 700 },
         { status: 'Sunday 08:00' },
         { tween: 'env.hour', to: 56, ms: 1200 },
-        { fn: (c) => say(c, c.store.get('plan.timed') ? '08:00 — your scheduled 40 seconds.' : '08:00 — the fallback watering, 30 seconds.') },
+        { fn: (c) => say(c, c.store.get('plan.timed') ? '08:00 — your scheduled 40 seconds.' : '08:00 — the conservative schedule: 30 seconds, the small daily dose, not a response to a reading.') },
         { set: 'pump.status', to: 'busy' }, { set: 'pump.running', to: true, label: 'Pump → running' },
         { fn: ({ store, sleep }) => sleep(store.get('plan.timed') ? 2000 : 1500) },
         { set: 'pump.running', to: false }, { set: 'pump.status', to: 'online', label: 'Pump → idle' },
@@ -249,7 +249,7 @@ export default {
     },
     {
       chip: 'Hold the house at 19°C and tell me if anyone comes to the door.',
-      keywords: ['hold', 'house', '19', 'degrees', 'temperature', 'heating', 'thermostat', 'door', 'anyone', 'comes', 'visitor', 'delivery', 'parcel'],
+      keywords: ['hold', 'house', '19', 'degrees', 'temperature', 'heating', 'thermostat', 'door', 'anyone', 'comes', 'visitor', 'delivery', 'parcel', 'freeze', 'pipes', 'someone', 'doorbell', 'warm'],
       expect: { 'thermostat.status': 'online', 'thermostat.target': 19, 'camera.motion': false },
       steps: [
         { beat: 'plan' },

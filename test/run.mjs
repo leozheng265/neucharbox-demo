@@ -10,6 +10,7 @@
 //  5. Every device format() renders the initial, online, fault and busy states.
 //  6. Scene sources don't use raw store.tween(...) / setTimeout(...) inside fn steps (use ctx.tween / ctx.sleep).
 //  7. Every scene's 3D room builds in Node (fake canvas) and update() runs through every prompt without throwing.
+//  8. Typed requests route correctly: run the intended chip, refuse negations, ask when vague (test/routing.mjs).
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
 import { matchPrompt } from '../js/engine/match.js';
@@ -112,6 +113,9 @@ for (const f of files) {
     report(`${scene.id} · skip to Recover with real timers`, problems);
   }
 }
+// 8. typed-request routing
+{ const { routingChecks } = await import('./routing.mjs'); const scenes = {}; for (const f of files) { const { default: sc } = await import(`../js/scenes/${f}`); scenes[sc.id] = sc; } routingChecks({ report, scenes }); }
+
 // 7. room builds
 const { buildChecks } = await import('./build.mjs');
 await buildChecks({ report, initialOf, stubChat });

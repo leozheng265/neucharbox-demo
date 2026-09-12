@@ -2,7 +2,7 @@ import { createStore } from './engine/store.js';
 import { createPlayer, setupSteps } from './engine/player.js';
 import { createChat } from './engine/chat.js';
 import { createPanel } from './engine/panel.js';
-import { matchPrompt, negates } from './engine/match.js';
+import { interpret } from './engine/match.js';
 import { SCENES } from './scenes/index.js';
 
 const KS = 'https://www.kickstarter.com/projects/neucharbox/neucharbox-ai-operating-system-for-the-physical-world?ref=demo';
@@ -52,7 +52,8 @@ async function mountScene(meta, gen) {
   let player = null;
   try {
   const M = partsMod.materials(); const P = partsMod.parts(R.scene, M);
-  const room = scene.build({ R, P, M, THREE, store, parts: partsMod });
+  const sv = Number(new URLSearchParams(location.search).get('speed')); const speed = Number.isFinite(sv) && sv > 0 ? Math.min(sv, 6) : 1; // ?speed= review mode (≤ 6), also for room-side motion
+  const room = scene.build({ R, P, M, THREE, store, parts: partsMod, speed });
   R.onFrame((t) => { store.tick(performance.now()); room.update(store.state, t); });
   R.start();
 
@@ -75,15 +76,14 @@ async function mountScene(meta, gen) {
   let phase = 'setup'; // 'setup' | 'chips' | 'prompt' | 'end'
   const chat = createChat(document.getElementById('chat'), { onPromptText: (text) => {
     if (phase !== 'chips') return;
-    const { prompt, score } = matchPrompt(text, scene.prompts);
-    if (score > 0 && negates(text, prompt.chip)) {
-      document.querySelectorAll('.chips').forEach((n) => n.remove());
-      chat.user(text);
-      chat.ncb("That reads like something you don't want done. I won't guess at the opposite, and this demo can only run the requests below. Pick one, or say it another way.");
-      chat.chips(remaining(), (p) => runPrompt(p, p.chip, false));
-      return;
-    }
-    runPrompt(prompt, text, score === 0);
+    const r = interpret(text, scene.prompts);
+    if (r.action === 'run') { runPrompt(r.prompt, text, false); return; }
+    document.querySelectorAll('.chips').forEach((n) => n.remove());
+    chat.user(text);
+    chat.ncb(r.action === 'refuse'
+      ? "That reads like something you don't want done. I won't guess at the opposite, and this demo can only run the requests below. Pick one, or say it another way."
+      : "I'm not sure which request that is, and I won't guess. This demo runs a few scripted requests in this room: pick one below, or say it another way.");
+    chat.chips(remaining(), (p) => runPrompt(p, p.chip, false));
   } });
   const used = new Set();
   const remaining = () => { const left = scene.prompts.filter((p) => !used.has(p)); return left.length ? left : scene.prompts; };

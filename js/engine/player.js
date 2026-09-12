@@ -26,7 +26,8 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
   let currentBeat = 'setup';
   let cancelled = false;
 
-  const SPEED = speed || (typeof location !== 'undefined' && Number(new URLSearchParams(location.search).get('speed'))) || 1;
+  const q = typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get('speed')) : NaN;
+  const SPEED = speed || (Number.isFinite(q) && q > 0 ? Math.min(q, 6) : 1);
   const timers = new Map();  // timeout id -> resolve, so a skip or cancel can release in-flight sleeps
   const sleep = (ms) => (fast || ms <= 0 ? Promise.resolve() : new Promise((r) => { const id = setTimeout(() => { timers.delete(id); r(); }, ms / SPEED); timers.set(id, r); }));
   const releaseSleeps = () => { for (const [id, r] of timers) { clearTimeout(id); r(); } timers.clear(); };

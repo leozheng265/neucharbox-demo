@@ -170,14 +170,14 @@ export function parts(scene, M) {
   P.phone = (x, y, z, rotY = 0) => { const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = rotY; scene.add(g); const b = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.008, 0.145, 3, 0.006), M.black); b.castShadow = true; g.add(b); const s = new THREE.Mesh(new THREE.PlaneGeometry(0.062, 0.135), new THREE.MeshStandardMaterial({ color: 0x0B0F14, emissive: 0x9FE3F0, emissiveIntensity: 0.25 })); s.rotation.x = -Math.PI / 2; s.position.y = 0.0045; g.add(s); return g; };
 
   // Potted plant under one root group at (x, y, z); parts are local to it. Soil sits 3 mm above the pot's top cap.
-  P.plant = (x, z, { scale = 1, y = 0 } = {}) => {
+  P.plant = (x, z, { scale = 1, y = 0, front = false } = {}) => { // front: leaves only on the +z side (plant against a back wall)
     const g = new THREE.Group(); g.position.set(x, y, z); scene.add(g);
     const put = (m) => { m.castShadow = m.receiveShadow = true; g.add(m); return m; };
     const pot = put(new THREE.Mesh(new THREE.CylinderGeometry(0.24 * scale, 0.18 * scale, 0.42 * scale, 32), M.pot)); pot.position.y = 0.21 * scale;
     const soil = new THREE.Mesh(new THREE.CircleGeometry(0.22 * scale, 32), M.soil); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.42 * scale + 0.003; soil.receiveShadow = true; g.add(soil);
     const leafGeo = new THREE.SphereGeometry(1, 12, 8); leafGeo.scale(0.07 * scale, 0.015 * scale, 0.2 * scale);
     const leaves = [];
-    for (let i = 0; i < 16; i++) { const a = i * 2.39996, rad = (0.06 + (i % 4) * 0.03) * scale, h = (0.55 + (i % 5) * 0.09) * scale;
+    for (let i = 0; i < 16; i++) { const a0 = i * 2.39996, a = front ? 0.15 + ((a0 % (2 * Math.PI)) / (2 * Math.PI)) * (Math.PI - 0.3) : a0, rad = (0.06 + (i % 4) * 0.03) * scale, h = (0.55 + (i % 5) * 0.09) * scale;
       const stem = put(new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.01, h - 0.42 * scale, 6), M.stem)); stem.position.set(Math.cos(a) * rad * 0.5, (h + 0.42 * scale) / 2, Math.sin(a) * rad * 0.5); stem.rotation.z = Math.cos(a) * 0.25; stem.rotation.x = -Math.sin(a) * 0.25;
       const leaf = put(new THREE.Mesh(leafGeo, M.leaf.clone())); leaf.material.color.offsetHSL(0, 0, (Math.random() - 0.5) * 0.12); leaf.position.set(Math.cos(a) * (rad + 0.12 * scale), h, Math.sin(a) * (rad + 0.12 * scale)); leaf.rotation.y = -a + Math.PI / 2; leaf.rotation.x = -0.35 - Math.random() * 0.3; leaves.push(leaf); }
     return { group: g, pot, soil, leaves };

@@ -29,7 +29,7 @@ export default {
     laser:  { icon: 'laser', name: 'Laser · shutter', initial: { on: true, shutter: 'closed', mW: 5, stuck: false }, format: (s) => `${s.shutter} · ${s.mW.toFixed(1)} mW set`, faultText: 'closed · inspect flag' },
     m1:     { icon: 'mirror', name: 'Mirror M1', initial: { yaw: 0.0, pitch: 0.0 }, format: (s) => `yaw ${s.yaw >= 0 ? '+' : ''}${s.yaw.toFixed(3)}° · pitch ${s.pitch >= 0 ? '+' : ''}${s.pitch.toFixed(3)}°`, faultText: 'no response' },
     m2:     { icon: 'mirror', name: 'Mirror M2', initial: { yaw: 0.12, pitch: -0.02 }, format: (s) => `yaw ${s.yaw >= 0 ? '+' : ''}${s.yaw.toFixed(3)}° · pitch ${s.pitch >= 0 ? '+' : ''}${s.pitch.toFixed(3)}°`, faultText: 'no response' },
-    stage:  { icon: 'stage', name: 'Stage X', initial: { x: 10.0, limit: 12.0, moving: false }, format: (s) => `${s.x.toFixed(3)} mm · ${s.moving ? 'moving' : s.x >= s.limit - 0.0005 ? 'at limit' : `limit ${s.limit.toFixed(3)}`}`, faultText: 'no response' },
+    stage:  { icon: 'stage', name: 'Stage X', initial: { x: 10.0, limit: 12.0, moving: false }, format: (s) => `${s.x.toFixed(3)} mm · ${s.moving ? 'moving' : s.x >= s.limit - 0.0005 ? 'at limit' : `limit ${s.limit.toFixed(1)} mm`}`, faultText: 'no response' },
     meter:  { icon: 'meter', name: 'Power meter', initial: { bump: 1 }, format: (s, st) => fmtUW(shown(st)), faultText: 'no reading' },
     beamcam:{ icon: 'beamcam', name: 'Beam camera', initial: {}, format: (s, st) => (shown(st) > 1 ? `spot at (${(st.m2.yaw * 180).toFixed(0)}, ${(st.m2.pitch * 180).toFixed(0)}) px` : 'no beam'), faultText: 'no image' },
   },
@@ -72,10 +72,19 @@ export default {
     const m2 = mirror(0.7, -0.45, -3 * Math.PI / 4);    // beam -z arrives, leaves -x
 
     // translation stage with an iris on it, in the M2 → meter leg
-    const stageBase = P.box(0.16, 0.03, 0.1, M.anodized, 0.0, tableY + 0.015, -0.45); const stageTop = P.box(0.12, 0.02, 0.09, M.steel, 0.0, tableY + 0.04, -0.45);
-    P.cyl(0.006, 0.006, 0.1, M.steel, 0.1, tableY + 0.035, -0.45, 10).rotation.z = Math.PI / 2; // micrometer
-    const irisPost = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.032, 12), M.steel); irisPost.position.set(0, tableY + 0.066, -0.45); R.scene.add(irisPost); // stage top → bottom of the ring, clear of the aperture
-    const irisRing = new THREE.Mesh(new THREE.TorusGeometry(0.018, 0.005, 10, 30), M.anodized); irisRing.rotation.y = Math.PI / 2; irisRing.position.set(0, Y, -0.45); R.scene.add(irisRing);
+    // Stage X travels ACROSS the M2 → meter leg (along z), carrying the iris; the micrometer at the +z end pushes the
+    // carriage toward -z as x grows, drawn at 4 mm per mm. At 12.4 mm the aperture is centred on the drawn beam where
+    // it crosses the stage (x = 0) at M2's starting yaw (+0.120°): -0.4632 = -0.45 - (0.7/1.422)·tan(2·(0.12·22)°)·1.45·0.2.
+    // So power peaks with the iris centred, and at 10 mm the beam grazes the edge (≈ 43% clipped).
+    const IRIS_Z = (x) => -0.4632 - (x - 12.4) * 0.004;
+    const stageBase = P.box(0.1, 0.03, 0.16, M.anodized, 0.0, tableY + 0.015, -0.462); const stageTop = P.box(0.09, 0.02, 0.12, M.steel, 0.0, tableY + 0.04, IRIS_Z(10));
+    const micro = new THREE.Group(); micro.position.set(0.0, tableY + 0.015, -0.462 + 0.08 + 0.04); // barrel seated 1 cm into the base end, below the carriage micro.rotation.x = Math.PI / 2; R.scene.add(micro);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.1, 12), M.steel); micro.add(barrel);
+    const thimble = new THREE.Group(); thimble.position.y = 0.035; micro.add(thimble);
+    const thimbleBody = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.03, 16), M.steel); thimbleBody.castShadow = true; thimble.add(thimbleBody);
+    const tick = new THREE.Mesh(new THREE.BoxGeometry(0.0025, 0.03, 0.002), M.black); tick.position.z = 0.0092; thimble.add(tick); // turns as the stage moves
+    const irisPost = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.032, 12), M.steel); irisPost.position.set(0, tableY + 0.066, IRIS_Z(10)); R.scene.add(irisPost); // stage top → bottom of the ring, clear of the aperture
+    const irisRing = new THREE.Mesh(new THREE.TorusGeometry(0.018, 0.005, 10, 30), M.anodized); irisRing.rotation.y = Math.PI / 2; irisRing.position.set(0, Y, IRIS_Z(10)); R.scene.add(irisRing);
 
     // power meter head + readout box, beam camera + monitor
     const head = P.box(0.05, 0.06, 0.06, M.black, -0.75, Y, -0.45, 0.005); P.cyl(0.01, 0.01, 0.1, M.steel, -0.75, tableY + 0.05, -0.45, 12);
@@ -125,7 +134,7 @@ export default {
         shutterPivot.rotation.z = flagUp ? 1.3 : 0;
         m1.tilt.rotation.y = m1.rotY + THREE.MathUtils.degToRad(s.m1.yaw * EX); m1.tilt.rotation.z = THREE.MathUtils.degToRad(s.m1.pitch * EX);
         m2.tilt.rotation.y = m2.rotY + THREE.MathUtils.degToRad(s.m2.yaw * EX); m2.tilt.rotation.z = THREE.MathUtils.degToRad(s.m2.pitch * EX);
-        const sx = (s.stage.x - 10) * 0.012; stageTop.position.x = sx; irisPost.position.x = sx; irisRing.position.x = sx;
+        const sz = IRIS_Z(s.stage.x); stageTop.position.z = sz; irisPost.position.z = sz; irisRing.position.z = sz; thimble.rotation.y = (s.stage.x - 10) * Math.PI * 4; // 0.5 mm pitch
         const p = shown(s); const live = s.laser.on && flagUp;
         // beam: laser → M1 → M2 → meter head, with the M2 error steering the last leg. It ends on the head's +x face
         // (x −0.725): centred when aligned, on the edge at the start (+0.120°), just off it at +0.170°.
@@ -232,7 +241,7 @@ export default {
     },
     {
       chip: 'Walk M2 to maximise power on the meter. Stop if any step drops it by more than 20%.',
-      keywords: ['walk', 'maximise', 'maximize', 'optimise', 'optimize', 'power', 'meter', 'm2', 'align', 'alignment', 'peak', 'stop'],
+      keywords: ['walk', 'maximise', 'maximize', 'optimise', 'optimize', 'power', 'meter', 'm2', 'align', 'alignment', 'peak', 'stop', 'beam', 'max'],
       expect: { 'laser.shutter': 'open', 'm2.yaw': 0.02, 'meter.bump': 1 },
       steps: [
         { beat: 'plan' },

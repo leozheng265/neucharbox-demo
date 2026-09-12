@@ -54,7 +54,7 @@ export default {
     const stripPick = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 0.1), new THREE.MeshBasicMaterial({ visible: false })); stripPick.position.set(0, 0.86, -2.2); R.scene.add(stripPick); // never drawn: a tap target bigger than the strip
     const stripLight = new THREE.PointLight(0x6B4FD8, 2, 3, 1.5); stripLight.position.set(0, 0.85, -2.05); R.scene.add(stripLight);
     P.box(1.2, 0.03, 0.22, M.wood, -1.3, 1.9, -2.13); // shelf, top at y = 1.915
-    const plant = P.plant(-1.7, -2.1, { scale: 0.45, y: 1.915 }); // on the shelf
+    const plant = P.plant(-1.7, -2.1, { scale: 0.45, y: 1.915, front: true }); // on the shelf
     for (let i = 0; i < 3; i++) P.box(0.05, 0.22, 0.16, [M.yellow, M.white, M.cardboard][i], -1.05 + i * 0.07, 2.025, -2.12);
     // chair
     P.box(0.5, 0.08, 0.5, M.black, 0, 0.5, -0.9, 0.03); P.box(0.5, 0.55, 0.08, M.black, 0, 0.82, -0.66, 0.03); P.cyl(0.03, 0.03, 0.42, M.steel, 0, 0.25, -0.9, 12); for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; P.box(0.3, 0.02, 0.04, M.black, Math.cos(a) * 0.15, 0.03, -0.9 + Math.sin(a) * 0.15).rotation.y = -a; }
@@ -86,7 +86,7 @@ export default {
   prompts: [
     {
       chip: 'Go live.',
-      keywords: ['go', 'live', 'stream', 'streaming', 'start', 'broadcast', 'broadcasting', 'online', 'begin', 'air'],
+      keywords: ['go', 'live', 'stream', 'streaming', 'start', 'broadcast', 'broadcasting', 'online', 'begin', 'air', 'sign', 'turn on', 'switch on'],
       expect: { 'cam.status': 'fault', 'overlay.scene': 'live', 'onair.on': true, 'plan.backup': true, 'capture.signal': false, 'strip.hue': 0.75 },
       steps: [
         { beat: 'plan' },
@@ -119,7 +119,7 @@ export default {
     },
     {
       chip: 'I\'m done. Wrap up.',
-      keywords: ['done', 'wrap', 'up', 'end', 'stop', 'finish', 'finished', 'offline', 'sign off', 'bye', 'over', 'shut', 'down', 'kill', 'stream', 'streaming', 'broadcast', 'go', 'live', 'air', 'mute', 'muted', 'thats'],
+      keywords: ['done', 'wrap', 'up', 'end', 'stop', 'finish', 'finished', 'offline', 'sign off', 'bye', 'over', 'shut', 'down', 'kill', 'stream', 'streaming', 'broadcast', 'go', 'live', 'air', 'mute', 'muted', 'thats', 'turn off', 'switch off', 'shut off'],
       expect: { 'capture.status': 'online', 'capture.input': 'disabled', 'capture.signal': false, 'mic.muted': true, 'onair.on': false, 'overlay.scene': 'idle' },
       steps: [
         { beat: 'plan' },
@@ -150,7 +150,7 @@ export default {
     },
     {
       chip: 'Recording only — camera and mic, no stream, no sign.',
-      keywords: ['recording', 'record', 'rec', 'only', 'camera', 'mic', 'local', 'locally', 'video', 'start', 'without', 'offline'],
+      keywords: ['recording', 'record', 'rec', 'only', 'camera', 'mic', 'local', 'locally', 'video', 'start', 'without', 'offline', 'cam'],
       expect: { 'mic.status': 'online', 'overlay.scene': 'recording', 'onair.on': false, 'plan.fixed': true },
       steps: [
         { beat: 'plan' },
