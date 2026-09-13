@@ -40,9 +40,10 @@ export function tokens(text) {
 // "12,4 mm" is 12.4 mm (a decimal comma; "1,000 W" stays a thousand). "Kick off the stream" is a start, not an "off";
 // "light it up" switches lights on: it is no "wrap up". "Stop everything but the carts" (or "…except for the carts",
 // "turn everything off but the carts") leaves the carts out, like "…except the carts"; "…but keep/leave/don't…" is
-// another clause.
+// another clause. "She's in bed" / "gets in bed" is getting into bed (not "still in bed"): "into" says so.
 const norm = (t) => String(t ?? '').slice(0, 4000).trim().toLowerCase().replace(/’/g, "'").replace(URL_RE, ' ')
   .replace(/(\d),(\d{1,2})(?![\d,])/g, '$1.$2')
+  .replace(/\b(she's|he's|shes|hes|is|are|gets|get|got|getting)\s+in\s+bed\b/g, '$1 into bed')
   .replace(/\bshut(?=\s+(?:(?:the|my|that|this|her)\s+)?(?:dock|docks|door|doors|shutter|gate|gates|blinds?|lid|window|windows|curtains?)\b)/g, 'close')
   .replace(/\bkick(?:s|ed|ing)?\s+(?:it\s+|things\s+)?off\b/g, 'start')
   .replace(/\blights?\s+(?:(?:it|them|everything|the\s+(?:room|place|studio))\s+)?up\b/g, 'lights on')
@@ -52,11 +53,17 @@ const sameWord = (a, b) => a === b || (a.length > 3 && b.length > 3 && (a.starts
 const NEGATOR = /^(?:no|not|without|never|dont|nothing|zero|isnt|arent|wasnt|doesnt|didnt|wont|cant|cannot|shouldnt|wouldnt|couldnt|mustnt|neither|nor)$/;
 const NOSCORE = /^(?:no|not|without|never|none|nothing|just|only|now|today|tonight|ok|okay|pls|plz|thanks|thank|yes|yeah|yep|sure|fine|again|too|also|then|asap|quickly|immediately)$/; // what not to do, how much, when: never picks a chip
 const NEG_GAP = /^(?:turn|switch|the|a|an|on|any)$/;
+// "Leave the heating alone" rules the heating out, like "don't touch the heating"; so does "leave the rest" (or
+// "everything else", "the others").
+const LEAVE_ALONE = /\bleave\s+((?:the|my|her|his|a|an|our|their)\s+)?([a-z0-9-]+(?:\s+[a-z0-9-]+)?)\s+alone\b/g;
+const LEAVE_REST = /\bleave\s+(the\s+rest|everything\s+else|the\s+others?|all\s+the\s+others?)\b/g;
+// "Close" as nearness or care ("gets close to the door", "a close eye", "closely") closes nothing.
+const nearNotClose = (t) => t.replace(/\bclosely\b/g, 'carefully').replace(/\b(comes?|came|coming|gets?|got|getting|up|too|so|very|stays?|draws?|drew)\s+close\b/g, '$1 near').replace(/\bclose(?=\s+(?:to|by|eye|call|enough)\b)/g, 'near');
 
 // Words a negation rules out within the next three words: "no cameras in her room" → cameras, in, room. Turn, switch,
 // on, the, a, an and any don't use up the three ("don't turn on the sign" → sign), and "go live" counts as one word.
 function negatedWords(t) {
-  const w = words(t.replace(/\bgo\s+live\b/g, 'golive')).filter((x) => !NEG_GAP.test(x));
+  const w = words(t.replace(/\bgo\s+live\b/g, 'golive').replace(LEAVE_ALONE, 'dont touch $1$2').replace(LEAVE_REST, 'dont touch $1')).filter((x) => !NEG_GAP.test(x));
   return w.filter((x, i) => w.slice(Math.max(0, i - 3), i).some((y) => NEGATOR.test(y))).flatMap((x) => (x === 'golive' ? [x, 'go', 'live'] : [x]));
 }
 // Words the chip itself rules out: "without a camera" → camera; "no stream, no sign" → stream, sign.
@@ -82,18 +89,42 @@ const isNeg = (w, negated) => negated.some((b) => sameWord(w, b));
 // What the text names as something it wants off, muted or closed ("leave the sign off"): for a chip that rules the
 // thing out, that agrees with the chip.
 const offWanted = (t) => wanted(plain(t)).filter((k) => /^(?:off|closed|shut|muted|stopped|disarmed)$/.test(k.state)).map((k) => k.thing);
-// A quantifier the prompt rules out ('everything', 'every', 'all' for a fragile-only rule) that the text narrows with
-// the chip's own word right after it ("everything scanned as fragile", "every fragile parcel", "all the fragile ones")
-// is the chip, not all of it.
-const QUANT = /^(?:everything|every|all|whole|entire|anything|any|each)$/, NARROW_SKIP = /^(?:the|of|my|our|that|thats|which|is|are|single)$/;
-function narrowed(ww, i, chipT) { if (!QUANT.test(ww[i])) return false; for (let j = i + 1; j < ww.length && j <= i + 3; j++) { if (NARROW_SKIP.test(ww[j])) continue; return chipT.some((c) => sameWord(ww[j], c)); } return false; }
+// A quantifier the prompt rules out ('everything', 'every', 'all' for a fragile-only rule) rules it out only when it
+// covers the things the prompt acts on: alone or before a pronoun ("divert all to lane B", "all of them"), or before a
+// thing ("all parcels", "the whole line", "the entire batch") that no word of the prompt's own narrows ("all parcels
+// scanned as fragile" is the chip). Before one of the prompt's own words ("every fragile parcel", "all glass"), before
+// something that isn't a thing on the line ("the whole shift", "every time", "every label", "any chance"), or after a
+// verb the prompt does to every parcel anyway ("scan everything", "check every label"), it doesn't. "Some", "most" and
+// "half" rule out only a thing: "some of them are glass" is no "divert some".
+const QUANT = /^(?:everything|every|all|whole|entire|anything|any|each|full|rest|lot|some|most|half)$/, NARROW_SKIP = /^(?:the|of|my|our|that|thats|which|is|are|single|a|an|these|those|this)$/;
+const Q_PARTIAL = /^(?:some|most|half)$/, Q_READS = /^(?:scan|scans|scanning|read|reads|reading|check|checks|checking|inspect|inspecting)$/;
+const Q_ALONE = /^(?:to|into|onto|down|in|on|through|and|else|but|except|from|off|it|them|non|at|for|with)$/;
+const Q_THING = /^(?:parcels?|packages?|box|boxes|items?|things?|stuff|goods|cartons?|pieces?|orders?|lines?|batch|batches|lots?|shipments?|loads?|pallets?|rest)$/;
+const Q_QUALIFY = /^(?:scanned|labelled|labeled|marked|tagged|flagged|read|as|that|thats|which|is|are|with|being|a|an|the)$/;
+function narrowed(ww, i, bag) {
+  if (!QUANT.test(ww[i])) return false;
+  if (i > 0 && Q_READS.test(ww[i - 1])) return true;
+  let j = i + 1; while (j < ww.length && j <= i + 3 && NARROW_SKIP.test(ww[j])) j++;
+  const head = ww[j], own = (w) => bag.some((c) => sameWord(w, c)), thing = head != null && Q_THING.test(head);
+  if (head != null && own(head)) return true;
+  if (thing || (head != null && Q_QUALIFY.test(head))) for (let k = thing ? j + 1 : j; k < ww.length && k <= j + 3; k++) { if (own(ww[k])) return true; if (!Q_QUALIFY.test(ww[k])) break; }
+  if (thing) return false;
+  if (Q_PARTIAL.test(ww[i])) return true;
+  return !(head == null || Q_ALONE.test(head));
+}
 const OFF_VERB = /\b(?:turn|switch|shut|power)\s+(?:[a-z0-9']+\s+){0,4}?off\b/;
 // The text names, un-negated, something the prompt rules out ("put a camera in her room", "go live" for "Recording only").
 // "Turn" alone is not "turn on", nor is a turn/switch/shut left over from a switch-off ("turn the kettle plug off").
+const compound = (x, b) => { if (x.length < b.length + 4 || !x.startsWith(b)) return false; let rest = x.slice(b.length); if (rest[0] === b[b.length - 1]) rest = rest.slice(1); return !/^(?:s|es|d|ed|ing|ings|er|ers|ies|ied|ly)$/.test(rest); };
 function rulesOutText(t, p, negated = negatedWords(t)) {
-  const { excl, chipT } = info(p); if (!excl.length) return false;
-  const off = offWanted(t), ww = words(t), hit = (x) => excl.some((b) => sameWord(x, b)) && !isNeg(x, negated) && !isNeg(x, off);
-  if (ww.some((x, i) => !/^(?:turn|switch|shut)$/.test(x) && hit(x) && !narrowed(ww, i, chipT))) return true;
+  const { excl, bag } = info(p); if (!excl.length) return false;
+  t = nearNotClose(t);
+  // A quantifier rules out only itself: "some" is not "something" or "sometimes", "rest" not "restart", "most" not
+  // "mostly". A rule word with four or more letters after it that aren't an ending is another word: "feedback" is no
+  // "feed", while "recordings" is still "record".
+  const rules = (x, b) => (QUANT.test(b) ? x === b : sameWord(x, b) && !compound(x, b));
+  const off = offWanted(t), ww = words(t), hit = (x) => excl.some((b) => rules(x, b)) && !isNeg(x, negated) && !isNeg(x, off);
+  if (ww.some((x, i) => !/^(?:turn|switch|shut)$/.test(x) && hit(x) && !narrowed(ww, i, bag))) return true;
   const offVerb = OFF_VERB.test(t);
   return tokens(t).some((x) => !QUANT.test(x) && !(offVerb && /^(?:turn|switch|shut)$/.test(x)) && hit(x)); // merged words too: "turnoff", "golive"
 }
@@ -155,9 +186,13 @@ const isHaltChip = (chip) => tokens(chip).slice(0, 2).some((w) => HALT_CHIP.has(
 // can't… only a switch-off ("the kettle doesn't turn off"), since "make sure the line doesn't stop" must not run a stop.
 const NEG_HALT = /\b(?:don'?t|do\s+not|never|not|won'?t|no\s+need\s+to)\s+(?:(?:turn|switch|shut|power)\s+(?:[a-z0-9']+\s+){0,3}?off|stop|halt|pause|cancel|kill|unplug|mute|disarm|disable)\b|\b(?:doesn'?t|didn'?t|does\s+not|did\s+not|can'?t|cannot|isn'?t|wasn'?t|hasn'?t)\s+(?:turn|switch|shut|power)\s+(?:[a-z0-9']+\s+){0,3}?off\b/g;
 const RULE_HALT = /\b(?:if|when|whenever|once|after)\b[^.;!?]*?(?:,|\band\b|\bthen\b)\s*(?:then\s+)?(?:turn|switch|shut|power)\s+(?:it|them|that|the\s+[a-z]+(?:\s+[a-z]+)?)\s+off\b/g;
+// "…and keep the lights off" to a prompt that rules the lights out: a state its plan agrees with, not a stop.
+const KEPT_OFF = /\b(?:keep|keeping|leave|leaving)\s+((?:[a-z0-9']+\s+){0,3}?)off\b/g;
+const keptOffOut = (t, p) => { const { excl } = info(p); return t.replace(KEPT_OFF, (m, obj) => (words(obj).some((x) => excl.some((b) => sameWord(x, b))) ? ' ' : m)); };
 function asksToHalt(t, { rule = true, neg = true } = {}) {
   let s = t.replace(/\b(?:stop|halt|end|pause)\s+(?:if|when|once|after|before|at)\b/g, ' ')
     .replace(/\b(?:stop|halt|pause)\s+(?:on|upon)\s+(?:an?\s+|any\s+|the\s+first\s+)?(?:[\d.]+\s*%|drop|fall|loss|decrease)/g, ' ') // "stop on a 20% drop"
+    .replace(/\bhands\s+off\b/g, ' ')                                                                  // "hands off M2" leaves M2 alone (refused() reads it)
     .replace(/\boff\s+by\b/g, ' ')                                                                     // "M2 is off by 0.12°"
     .replace(/\b(?:without|no|with\s+no)\s+(?:a\s+|any\s+|the\s+)?stop(?:ping)?\s+(?:rule|condition|criteri(?:on|a))s?\b/g, ' ') // "walk M2 without a stop rule"
     .replace(/\b(?:turn|switch|shut|power)\s+(?:[a-z0-9']+\s+){0,3}?off\s+(?:if|when|whenever|once|after|before|unless|by(?=\s+\d)|at(?=\s+\d))\b/g, ' ') // "turn the kettle off after…", not "…off at night"
@@ -559,7 +594,8 @@ function decide(text, prompts, depth) {
   if (INFO_Q.test(bare) || SHOULD_Q.test(bare) || PERMISSION_Q.test(bare) || (QUESTION.test(bare) && (top.score < 2 || !reports)) || (STATE_Q.test(bare) && !reports)) return out('clarify', { via: 'question' });
   if (REPORT_REQ.test(bare) && !reports) return out('clarify', { via: 'check' });
   if (STATEMENT.test(bare)) return out('clarify', { via: 'statement' });
-  if (halting && !isHaltChip(top.prompt.chip)) return out('clarify', { via: 'halt' });
+  const halts = halting && asksToHalt(keptOffOut(main, top.prompt)); // "…and keep the lights off" to a chip that rules the lights out is no stop
+  if (halts && !isHaltChip(top.prompt.chip)) return out('clarify', { via: 'halt' });
   let ties = pool.filter((r) => r !== top && r.score === top.score && r.pen === top.pen && !weak(r));
   if (ties.length && /\b(?:only|just)\b/.test(t)) {
     const all = [top, ...ties], narrow = all.filter((r) => all.every((o) => o === r || (sameHits(o, r) && narrowness(r.prompt) < narrowness(o.prompt))));
@@ -573,7 +609,7 @@ function decide(text, prompts, depth) {
   const other = secondRequest(main, top, prompts, depth); if (other) return out('clarify', { via: 'tie', also: other });
   const why = mismatch(t, top); if (why) return out('clarify', { via: why });
   if (startsHeld(t, top.prompt)) return out('clarify', { via: 'partial' });
-  if (halting && !haltFit(main, top)) return out('clarify', { via: 'partial' });
+  if (halts && !haltFit(main, top)) return out('clarify', { via: 'partial' });
   // A stop that is a rule ("if it's on for 10 minutes, switch it off") or a negated one ("make sure the line doesn't
   // stop") never runs a stop chip on that word alone, and a rule runs only a chip whose plan switches that thing off and
   // never on ("when she's up, turn the night light off" is not the night light).
@@ -594,4 +630,16 @@ function decide(text, prompts, depth) {
     return out('clarify', { via: 'tie', also: r[0].prompt });
   }
   return out('run');
+}
+
+// A typed "what if …" about a device (or "something") failing: "what if the hall light stops working?", "what happens
+// if the kettle breaks". Failures are picked from a request's end card, so the page says how rather than running the
+// closest request clean. The failing thing must be a device of the scene (a word of its name or ref) or something,
+// anything, a device, a sensor or "it", right before the verb: "what if mum falls" or "what if she dies" is not one.
+const WHATIF_FAIL = /\bwhat\s+(?:if|happens\s+if|happens\s+when|would\s+happen\s+if)\s+((?:[a-z0-9'-]+\s+){0,4}?)(?:fail(?:s|ed)?|(?:stops?|stopped)\s+working|breaks?|broke|dies|died|crash(?:es|ed)?|malfunctions?|malfunctioned|disconnects?|disconnected|(?:cuts?|gives?|gave|conks?)\s+out|(?:is|was|goes|went|gets|got)\s+(?:broken|dead|offline|disconnected)|(?:goes|went)\s+(?:down|dark|quiet|silent)|drops?\s+(?:off|out)|dropped\s+(?:off|out))\b/;
+const WHATIF_ANY = new Set(['something', 'anything', 'device', 'devices', 'it', 'one', 'sensor', 'sensors', 'thing']);
+export function asksWhatIfFails(text, devices = {}) {
+  const m = WHATIF_FAIL.exec(norm(text)); if (!m) return false;
+  const own = new Set(Object.values(devices).flatMap((d) => words(norm(`${d?.name || ''} ${d?.ref || ''}`))).filter((w) => !STOP.has(w)));
+  return words(m[1]).some((w) => WHATIF_ANY.has(w) || own.has(w) || own.has(w.replace(/s$/, '')));
 }

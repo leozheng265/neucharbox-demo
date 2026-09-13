@@ -1,9 +1,9 @@
 import { createStore } from './engine/store.js';
 import { createChat } from './engine/chat.js';
 import { createPanel } from './engine/panel.js';
-import { interpret } from './engine/match.js';
+import { interpret, asksWhatIfFails } from './engine/match.js';
 import { icon } from './engine/icons.js';
-import { createFlow, BEATS, quoted } from './engine/flow.js';
+import { createFlow, BEATS, quoted, WHATIF_HOW } from './engine/flow.js';
 import { SCENES } from './scenes/index.js';
 
 const KS = 'https://www.kickstarter.com/projects/neucharbox/neucharbox-ai-operating-system-for-the-physical-world?ref=demo';
@@ -90,6 +90,14 @@ async function mountScene(meta, gen) {
   const chat = createChat(document.getElementById('chat'), { onPromptText: (text) => {
     if (flow.phase !== 'chips') return;
     const r = interpret(text, scene.prompts);
+    // "What if the hall light stops working?": a failure is picked from a request's end card, so say how, with the
+    // closest request first, rather than run that request clean.
+    if (asksWhatIfFails(text, scene.devices)) {
+      const near = r.action === 'run' || (r.action === 'clarify' && r.via && r.via !== 'halt') ? [r.prompt] : [];
+      chat.closeChips(); chat.user(text); chat.ncb(WHATIF_HOW);
+      chat.chips([...near, ...flow.remaining().filter((p) => !near.includes(p))], (p) => flow.runPrompt(p, p.chip, false));
+      return;
+    }
     if (r.action === 'run') { flow.runPrompt(r.prompt, text, false); return; }
     chat.closeChips();
     chat.user(text);
@@ -124,6 +132,7 @@ async function mountScene(meta, gen) {
     pop: (id) => panel.pop(id),
     track: (on) => panel.track(on),
     rewind: () => panel.rewind(),
+    show: (ids) => panel.show(ids),
     resetRoom: () => { room.reset?.(); R.clearMarkers(); }, // markers (rings, fault labels) are not state: drop them too
     clearMarkers: () => R.clearMarkers(),
   } });

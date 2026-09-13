@@ -8,7 +8,8 @@
 // page does; it stops at a failure point, and the what-if's replay (fast, as on the page) must match it there. Device
 // state (everything but plan.*) must be the same. plan.* holds the visitor's choices and the scene's own bookkeeping
 // (a cue that pings the room, say): a difference there only counts if a scenario starting at that point says something
-// else from the replayed room than from the room the visitor saw.
+// else from the replayed room than from the room the visitor saw. A tween still moving when the played run reaches the
+// failure point fails too: the replay lands it at its end value, so the scenario would start from a room nobody saw.
 // Run via test/run.mjs (which registers test/loader.mjs so 'three' resolves to the vendored copy).
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
@@ -41,9 +42,9 @@ function makeRoom(scene, store, quiet, noise, { speed } = {}) {
   const scn = new THREE.Scene(); scn.background = new THREE.Color(0xCFDDE6);
   const hemi = new THREE.HemisphereLight(), sun = new THREE.DirectionalLight(), fill = new THREE.DirectionalLight(); scn.add(hemi, sun, fill);
   const camera = new THREE.PerspectiveCamera(scene.camera?.fov ?? 42, 1.5, 0.05, 80);
-  const pickIds = new Set();
+  const pickIds = new Set(), picks = new Map(); // picks: id → the objects the room made tappable for it
   const R = { THREE, scene: scn, camera, controls: { autoRotate: true, target: new THREE.Vector3(), update() {} }, lights: { hemi, sun, fill }, quality: 'high',
-    addPickable: (obj, id) => { if (!obj || typeof obj.traverse !== 'function') throw new Error(`addPickable("${id}") got ${obj}`); pickIds.add(id); }, pickIds,
+    addPickable: (obj, id) => { if (!obj || typeof obj.traverse !== 'function') throw new Error(`addPickable("${id}") got ${obj}`); pickIds.add(id); if (!picks.has(id)) picks.set(id, []); picks.get(id).push(obj); }, pickIds, picks,
     onPick() {}, onFrame() {},
     ping(id, text) { noise('rang', id, text); },
     unping() {}, clearMarkers() {}, anchorOf: () => null, resetView() {}, step() {}, daylight(h) { if (!Number.isFinite(h)) throw new Error(`daylight(${h})`); } };
@@ -88,10 +89,11 @@ export async function realTimeProblems(scene, prompt, { initialOf, stubChat }) {
   const says = async (state, sc) => { const s = createStore(state, { headless: true }), log = []; try { await createPlayer({ store: s, chat: stubChat(log), headless: true }).play(sc.authored ? sc.steps : sc.head); } catch (e) { log.push(['threw', e.message]); } return JSON.stringify(log); };
   for (const c of combosOf(prompt)) for (const at of ats) {
     where = `${c.label} @ "${at}"`;
-    const stop = (s) => isFailPoint(s) && s.failPoint === at; let ref = null, rep = null, choices = [];
+    const stop = (s) => isFailPoint(s) && s.failPoint === at; let ref = null, rep = null, choices = [], inflight = [];
     try {
       fresh();
-      await virtualTime(async () => { const pl = createPlayer({ store, chat: answering(c), speed: 1 }); const r = await pl.play(prompt.steps, { until: stop }); choices = r.choices; if (!r.stopped) throw new Error(`the request played in real time never reached "${at}"`); store.finishTweens(); }, { onFrame });
+      await virtualTime(async () => { const pl = createPlayer({ store, chat: answering(c), speed: 1 }); const r = await pl.play(prompt.steps, { until: stop }); choices = r.choices; if (!r.stopped) throw new Error(`the request played in real time never reached "${at}"`); const mid = clone(store.state); store.finishTweens(); inflight = diff(mid, store.state).filter(([p]) => !p.startsWith('plan.') && p !== 'plan'); }, { onFrame });
+      if (inflight.length) problems.push(`${where}: ${inflight.slice(0, 3).map(([p, a, b]) => `${p} is still moving (${JSON.stringify(a)} on its way to ${JSON.stringify(b)})`).join('; ')} when the request played in real time reaches this failure point. The replay lands every tween at once, so a scenario starting here would start from somewhere the visitor never saw: end the tween before the failure point`);
       ref = clone(store.state);
       fresh();
       const key = picks.find((sc) => sc.at === at).key;
@@ -107,6 +109,28 @@ export async function realTimeProblems(scene, prompt, { initialOf, stubChat }) {
     }
   }
   return problems;
+}
+
+// Home: a soil probe knocked out of its pot (soil.probeOut, p0's soil what-if) lies outside the pot and on or above
+// the floor: no corner of the probe's stake or sensor head inside the pot's tapered cylinder, or below y = 0. The probe
+// is the group holding the sensor head the room made tappable for "soil"; the pot is the cylinder tapped for it.
+function probeProblems(R, room, store) {
+  const objs = R.picks.get('soil') || [], pot = objs.find((o) => o.geometry?.type === 'CylinderGeometry'), head = objs.find((o) => o.geometry?.type?.includes('Box'));
+  const probe = head?.parent; if (!pot || !probe || probe === R.scene) return ['the soil probe or its pot was not found (the objects tappable for "soil")'];
+  const was = store.get('soil.probeOut'); store.set('soil.probeOut', true); room.update(store.state, 0); R.scene.updateMatrixWorld(true);
+  const sc = new THREE.Vector3(), c = new THREE.Vector3(); pot.getWorldScale(sc); pot.getWorldPosition(c);
+  const { radiusTop, radiusBottom, height } = pot.geometry.parameters, rt = radiusTop * sc.x, rb = radiusBottom * sc.x, h = height * sc.y, y0 = c.y - h / 2;
+  const bad = [];
+  for (const m of probe.children.filter((x) => x.isMesh && x.geometry?.type?.includes('Box'))) {
+    m.geometry.computeBoundingBox(); const b = m.geometry.boundingBox;
+    for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) {
+      const p = new THREE.Vector3(x, y, z).applyMatrix4(m.matrixWorld), k = (p.y - y0) / h;
+      if (p.y < -1e-3) bad.push(`a corner below the floor (y ${p.y.toFixed(3)})`);
+      else if (k >= 0 && k <= 1 && Math.hypot(p.x - c.x, p.z - c.z) < rb + (rt - rb) * k) bad.push(`a corner inside the pot (${[p.x, p.y, p.z].map((v) => v.toFixed(3)).join(', ')})`);
+    }
+  }
+  store.set('soil.probeOut', was); room.update(store.state, 0);
+  return bad.length ? [`the knocked-out soil probe: ${[...new Set(bad)].slice(0, 3).join('; ')}`] : [];
 }
 
 // scenes: scene modules to build (default: every scene in js/scenes/index.js).
@@ -129,6 +153,7 @@ export async function buildChecks({ report, initialOf, stubChat, scenes = null }
       for (const id of Object.keys(scene.devices)) if (!R.pickIds.has(id)) problems.push(`device "${id}" has no tappable part (addPickable)`);
       for (const id of Object.keys(scene.devices)) room.focus?.(id);
       const setup = createPlayer({ store, chat: stubChat([]), headless: true }); await setup.play(setupSteps(scene)); const baseline = store.snapshot();
+      if (scene.id === 'home') problems.push(...probeProblems(R, room, store));
       const fresh = () => { store.restore(baseline); room.reset?.(); update(); };
       for (const prompt of scene.prompts) {
         fresh(); where = `"${prompt.chip.slice(0, 32)}"`;

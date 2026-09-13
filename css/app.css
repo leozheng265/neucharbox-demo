@@ -143,7 +143,7 @@ button { font: inherit; color: inherit; }
 .card.replan { border-color: var(--green); }
 .card.replan .needs { margin: 6px 0 0; color: var(--ink); background: #FFF7E8; border: 1px solid #F3DDB0; padding: 8px 10px; border-radius: 8px; }
 .card.end { background: linear-gradient(180deg, #fff, #EEFBF9); text-align: left; }
-.card.end h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -0.01em; }
+.card.end h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -0.01em; text-wrap: balance; } /* no one-word last line on a phone */
 .card.end p { margin: 0 0 12px; color: var(--ink-2); }
 /* end card: "What if something fails?" / "Try another failure" (a warning sign, then the label) */
 .card.end .btn.whatif { display: inline-flex; align-items: center; gap: 6px; background: #fff; border-color: var(--amber); }

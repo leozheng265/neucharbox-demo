@@ -31,9 +31,10 @@ export function createChat(root, { onPromptText } = {}) {
   log.addEventListener('scroll', () => { pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 48; }, { passive: true });
   const scrollDown = (force = false) => requestAnimationFrame(() => { if (force || pinned) { log.scrollTop = log.scrollHeight; pinned = true; } });
   // A card taller than the log is shown from its top, so a plan is read from item 1 rather than from its button; a
-  // list of chips that doesn't fit below the message that introduces it is shown from that message.
+  // list of chips that doesn't fit below the message that introduces it is shown from that message. A re-plan card
+  // follows like a message: what it ends with, "Needs you", stays in view on a phone, and its first lines are a scroll up.
   const topIn = (n) => n.getBoundingClientRect().top - log.getBoundingClientRect().top + log.scrollTop; // position inside the log's content
-  const push = (node, { from = node.classList.contains('card') ? node : null } = {}) => {
+  const push = (node, { from = node.classList.contains('card') && !node.classList.contains('replan') ? node : null } = {}) => {
     if (typingEl) { typingEl.remove(); typingEl = null; }
     log.appendChild(node);
     requestAnimationFrame(() => {
@@ -43,7 +44,11 @@ export function createChat(root, { onPromptText } = {}) {
     return node;
   };
   new MutationObserver(() => scrollDown()).observe(log, { childList: true, subtree: true, characterData: true });
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // A number keeps its unit on its line ("12.400 mm", "194 µW", "7 am"): a no-break space between them. Words stay as
+  // they are ("5 steps", "12 entries").
+  const UNIT = /([0-9)]) (?=(?:µW|mW|kW|W|mm|cm|µm|nm|km|m|px|ms|s|min|h|°C|°F|°|%|l|ml|mrad|rad|dB|Hz|fps|am|pm)(?![\p{L}\d]))/gu;
+  const nb = (s) => String(s).replace(UNIT, '$1\u00a0');
+  const esc = (s) => nb(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   // Closing a card disables its buttons; if one of them had keyboard focus, keep focus in the conversation.
   const closeCard = (node) => { const had = node.contains(document.activeElement); node.classList.add('done'); node.querySelectorAll('button').forEach((b) => (b.disabled = true)); if (had) log.focus({ preventScroll: true }); };
 
@@ -98,7 +103,7 @@ export function createChat(root, { onPromptText } = {}) {
       const ol = node.querySelector('ol');
       spec.steps.forEach((s, i) => {
         const li = el(`<li><span class="txt">${esc(s.text)}</span>${s.alt ? `<button class="link">Edit</button>` : ''}</li>`);
-        if (s.alt) li.querySelector('.link').onclick = (e) => { alts[i] = !alts[i]; li.querySelector('.txt').textContent = alts[i] ? s.alt.text : s.text; e.target.textContent = alts[i] ? 'Undo' : 'Edit'; };
+        if (s.alt) li.querySelector('.link').onclick = (e) => { alts[i] = !alts[i]; li.querySelector('.txt').textContent = nb(alts[i] ? s.alt.text : s.text); e.target.textContent = alts[i] ? 'Undo' : 'Edit'; };
         ol.appendChild(li);
       });
       const approveBtn = node.querySelector('.approve'), declineBtn = node.querySelector('.decline');
