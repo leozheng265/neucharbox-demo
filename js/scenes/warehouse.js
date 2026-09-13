@@ -24,6 +24,10 @@ function cartAt(u, v) {
 // and the beacon goes steady green, only once it is in), 'parked', or 'stopped' where the stop found it.
 const driving = (s) => s.state === 'moving' || s.state === 'parking';
 const cartText = (s) => (s.state === 'moving' ? (s.load ? 'moving · loaded' : 'moving · empty') : s.state);
+// A belt reads as moving from 0.05 m/s, as its beacon in the room does (blue): the tail of a ramp down, or the start of
+// a ramp up, would otherwise show "running · 0.0 m/s".
+const beltMoving = (s) => s.running && s.speed > 0.05;
+const beltText = (s) => (beltMoving(s) ? `running · ${s.speed.toFixed(1)} m/s` : 'stopped');
 // The Divert prompt's end card depends on the Edit the visitor chose; the step before `end` fills it in.
 const DIVERT_SAFE = { headline: 'It stopped trusting the scanner, and said so.', body: 'A rule you approved decided what happens when the scanner\'s word isn\'t good enough. NeuCharBox took the safe option, not the fast one, and told you what to check.' };
 const DIVERT_HELD = { headline: 'It held the parcel instead of guessing.', body: 'You chose to stop on an unreadable label. NeuCharBox stopped C1 at the first one, flagged the arch for slow reads, and told you exactly which parcel needs a person.' };
@@ -205,14 +209,14 @@ export default {
   askIntro: 'Give the line an instruction. Pick one, or type your own.',
   deviceOrder: ['c1', 'c2', 'c3', 'scanner', 'gate', 'agvA', 'agvB', 'dock'],
   devices: {
-    c1:      { icon: 'conveyor', name: 'Conveyor C1', ref: 'conveyor C1', initial: { running: false, speed: 0, slip: false, runOn: false }, format: (s) => (s.running ? `running · ${s.speed.toFixed(1)} m/s` : 'stopped'), faultText: 'motor fault' },
-    c2:      { icon: 'conveyor', name: 'Conveyor C2', ref: 'conveyor C2', initial: { running: false, speed: 0, slip: false, runOn: false }, format: (s) => (s.running ? `running · ${s.speed.toFixed(1)} m/s` : 'stopped'), faultText: 'motor fault' },
-    c3:      { icon: 'conveyor', name: 'Conveyor C3', ref: 'conveyor C3', initial: { running: false, speed: 0, slip: false, runOn: false }, format: (s) => (s.running ? `running · ${s.speed.toFixed(1)} m/s` : 'stopped'), faultText: 'motor fault' },
+    c1:      { icon: 'conveyor', name: 'Conveyor C1', ref: 'conveyor C1', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault' },
+    c2:      { icon: 'conveyor', name: 'Conveyor C2', ref: 'conveyor C2', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault' },
+    c3:      { icon: 'conveyor', name: 'Conveyor C3', ref: 'conveyor C3', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault' },
     scanner: { icon: 'scanner', name: 'Scanner arch', ref: 'the scanner arch', initial: { armed: false, count: 0, misreads: 0, dark: false }, format: (s) => (!s.armed ? 'idle' : s.misreads ? `${Math.round(s.count)} scanned · ${Math.round(s.misreads)} unreadable` : `armed · ${Math.round(s.count)} scanned`), faultText: 'reads not trusted' },
     gate:    { icon: 'gate', name: 'Sorter gate', ref: 'the sorter gate', initial: { lane: 'A', pos: 0, all: false, stuck: false }, format: (s) => `→ lane ${s.lane}${s.lane === 'B' && s.all ? ' · every parcel' : ''}`, active: (s) => s.lane === 'B', faultText: 'controller offline' },
     agvA:    { icon: 'cart', name: 'Cart A', ref: 'cart A', initial: { state: 'parked', u: 0, load: false, creep: false }, format: cartText, active: driving, faultText: 'off the network' },
     agvB:    { icon: 'cart', name: 'Cart B', ref: 'cart B', initial: { state: 'parked', u: 0, load: false, creep: false }, format: cartText, active: driving, faultText: 'off the network' },
-    dock:    { icon: 'dock', name: 'Dock 2', ref: 'dock 2', initial: { light: 'red', parcels: 0, target: 40, stuck: false, shut: true }, format: (s) => `${s.light === 'green' ? 'open' : s.shut ? 'closed' : 'closing'} · ${Math.round(s.parcels)}${s.target ? `/${s.target}` : ''} parcels`, faultText: 'door fault' }, // target 0: none (Divert)
+    dock:    { icon: 'dock', name: 'Dock 2', ref: 'dock 2', initial: { light: 'red', parcels: 0, target: 40, stuck: false, shut: true }, format: (s) => { const n = Math.round(s.parcels); return `${s.light === 'green' ? 'open' : s.shut ? 'closed' : 'closing'} · ${n}${s.target ? `/${s.target} parcels` : n === 1 ? ' parcel' : ' parcels'}`; }, faultText: 'door fault' }, // target 0: none (Divert), "1 parcel"
   },
 
   build({ R, P, M, THREE, store, parts, speed = 1, quiet }) {
@@ -446,11 +450,14 @@ export default {
         hi.update();
         const hush = isQuiet(); // a what-if's quiet replay and its holds: the room keeps the replayed layout, nothing moves in view
         if (!hush && !ln.watching && ln.ctx && !ln.ctx.fast) watch(ln.ctx, ln); // the tiles follow the room again after a quiet replay (the engine's own scenario too)
-        const dt = hush ? 0 : (lastT == null ? 0 : Math.min(0.05, Math.max(0, t - lastT))) * speed; lastT = t; // belts follow ?speed= like the script
+        // Belts follow ?speed= like the script. A frame gap counts up to 0.2 s, in steps of at most 0.05 s (× speed) for the
+        // parcels: on a device rendering under 20 fps the line keeps to the script's clock instead of running slow.
+        const gap = hush || lastT == null ? 0 : Math.min(0.2, Math.max(0, t - lastT)); lastT = t;
+        const dt = gap * speed, subs = Math.max(1, Math.ceil(gap / 0.05 - 1e-9));
         hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
         for (let i = 0; i < 3; i++) { const st = s[KEYS[i]]; tight[i] = st.status === 'fault' && !!st.runOn; spd[i] = (st.status === 'fault' && !st.runOn) || !st.running || st.slip ? 0 : st.speed * SPEED_K; } // slip: the drive turns, the belt doesn't carry; runOn: a faulted drive keeps its last command
         // conveyor beacons
-        for (const k of KEYS) { const c = C[k], st = s[k]; const bad = st.status === 'fault'; setLamp(c.led.material, st.status === 'offline' ? null : bad ? RED : st.running && st.speed > 0.05 ? BLUE : GREEN, bad ? blink(t, 3, 6, 0.6) : st.running ? 2.5 : 1.2); }
+        for (const k of KEYS) { const c = C[k], st = s[k]; const bad = st.status === 'fault'; setLamp(c.led.material, st.status === 'offline' ? null : bad ? RED : beltMoving(st) ? BLUE : GREEN, bad ? blink(t, 3, 6, 0.6) : st.running ? 2.5 : 1.2); }
         // dock: the door rolls up while the light is green; parcels only go through a door that is open
         if (!s.dock.stuck) doorVis = hush ? (s.dock.light === 'green' ? 1 : 0) : approach(doorVis, s.dock.light === 'green' ? 1 : 0, dt / 1.2); // a stuck door stays where it is
         const lift = 0.9 * smooth(doorVis); door.scale.y = 1 - lift; door.position.y = 3.2 - 1.6 * (1 - lift); for (const m of slats) m.visible = m.position.y > 3.2 * lift + 0.02;
@@ -466,30 +473,33 @@ export default {
         gatePivot.rotation.y = gateVis * 0.9;
         const settled = Math.abs(gateVis - gTo) < 0.03 && (gTo < 0.03 || gTo > 0.97), toB = settled && gTo > 0.5;
         if (s.gate.lane !== 'B') sent = 0;
-        const oneDone = !s.gate.all && sent >= 1; // a per-parcel swing takes one parcel; the rest wait for the gate to come back
+        const oneDone = () => !s.gate.all && sent >= 1; // a per-parcel swing takes one parcel; the rest wait for the gate to come back
         const gB = s.gate.lane === 'B', gateBad = s.gate.status === 'fault'; setLamp(gateLamp.material, s.gate.status === 'offline' ? null : gateBad ? RED : gB ? AMBER : GREEN, gateBad || (gB && !settled) ? blink(t, 4, 4, 1) : 2.2);
-        // main-line queue, front to back
-        let ahead = null;
-        queue.length = 0; for (const p of flow) if (p.lane === 'main') queue.push(p); queue.sort(byX);
-        for (const p of queue) {
-          const si = secAt(p.x), x0 = p.x, stop = SEC[si].x1 - END_STOP; let nx = p.x + spd[si] * dt;
-          const blocked = si === 0 ? spd[1] === 0 : si === 1 ? spd[2] === 0 || !settled || (toB && oneDone) : !dockOpen;
-          let crossing = false;
-          if (ahead && secAt(ahead.x) === si) nx = Math.min(nx, ahead.x - (tight[si] ? ahead.hw + p.hw + 0.02 : SPACING)); // a faulted drive that runs on pushes them together
-          else if (ahead) { nx = Math.min(nx, ahead.x - 0.4); crossing = ahead.x - nx < SPACING - 1e-6; } // cross into the next section only with a full gap
-          if (si === 2 && x0 > stop) nx = x0 + Math.max(spd[2], INTO) * dt; // past C3's end stop it is already going through the door
-          else if ((blocked || crossing) && x0 <= stop) nx = Math.min(nx, stop); // past its end stop it is already on its way over
-          p.x = Math.max(p.x, nx);
-          if (x0 <= SX && p.x > SX && s.scanner.armed && !s.scanner.dark) p.sn = ++ln.scanned; // a dark arch reads nothing
-          if (si === 1 && toB && !oneDone && p.x >= BPATH[0][0]) { p.lane = 'B'; p.b = 0; sent++; if (p.sn) ln.toB.add(p.sn); continue; }
-          if (si === 2 && p.x > DOOR_X) { p.lane = 'wait'; ln.docked++; continue; } // into the trailer, out of sight behind the door frame
-          ahead = p;
+        for (let n = 0; n < subs; n++) { // the parcels, one sub-step at a time
+          const dt = gap * speed / subs;
+          // main-line queue, front to back
+          let ahead = null;
+          queue.length = 0; for (const p of flow) if (p.lane === 'main') queue.push(p); queue.sort(byX);
+          for (const p of queue) {
+            const si = secAt(p.x), x0 = p.x, stop = SEC[si].x1 - END_STOP; let nx = p.x + spd[si] * dt;
+            const blocked = si === 0 ? spd[1] === 0 : si === 1 ? spd[2] === 0 || !settled || (toB && oneDone()) : !dockOpen;
+            let crossing = false;
+            if (ahead && secAt(ahead.x) === si) nx = Math.min(nx, ahead.x - (tight[si] ? ahead.hw + p.hw + 0.02 : SPACING)); // a faulted drive that runs on pushes them together
+            else if (ahead) { nx = Math.min(nx, ahead.x - 0.4); crossing = ahead.x - nx < SPACING - 1e-6; } // cross into the next section only with a full gap
+            if (si === 2 && x0 > stop) nx = x0 + Math.max(spd[2], INTO) * dt; // past C3's end stop it is already going through the door
+            else if ((blocked || crossing) && x0 <= stop) nx = Math.min(nx, stop); // past its end stop it is already on its way over
+            p.x = Math.max(p.x, nx);
+            if (x0 <= SX && p.x > SX && s.scanner.armed && !s.scanner.dark) p.sn = ++ln.scanned; // a dark arch reads nothing
+            if (si === 1 && toB && !oneDone() && p.x >= BPATH[0][0]) { p.lane = 'B'; p.b = 0; sent++; if (p.sn) ln.toB.add(p.sn); continue; }
+            if (si === 2 && p.x > DOOR_X) { p.lane = 'wait'; ln.docked++; continue; } // into the trailer, out of sight behind the door frame
+            ahead = p;
+          }
+          for (const p of flow) if (p.lane === 'B') { p.b += spd[2] * dt; if (p.b >= BLEN[BLEN.length - 1]) p.lane = 'wait'; }
+          // every parcel counted in and the door shut: nothing is left past C1 (only matters when the visitor skipped ahead)
+          if (s.dock.target && s.dock.parcels >= s.dock.target && s.dock.light !== 'green') for (const p of flow) if (p.lane === 'main' && p.x >= C.c2.x0) p.lane = 'wait';
+          let tail = Infinity; for (const p of flow) if (p.lane === 'main') tail = Math.min(tail, p.x);
+          if (spd[0] > 0 && !s.plan.feedStop && tail - ENTRY_X >= SPACING) put(tail === Infinity ? ENTRY_X : tail - SPACING); // exactly one gap behind, inside the hatch
         }
-        for (const p of flow) if (p.lane === 'B') { p.b += spd[2] * dt; if (p.b >= BLEN[BLEN.length - 1]) p.lane = 'wait'; }
-        // every parcel counted in and the door shut: nothing is left past C1 (only matters when the visitor skipped ahead)
-        if (s.dock.target && s.dock.parcels >= s.dock.target && s.dock.light !== 'green') for (const p of flow) if (p.lane === 'main' && p.x >= C.c2.x0) p.lane = 'wait';
-        let tail = Infinity; for (const p of flow) if (p.lane === 'main') tail = Math.min(tail, p.x);
-        if (spd[0] > 0 && !s.plan.feedStop && tail - ENTRY_X >= SPACING) put(tail === Infinity ? ENTRY_X : tail - SPACING); // exactly one gap behind, inside the hatch
         // carts: ease between the parking spot and the loop; hold position once told to stop
         for (const c of CARTS) {
           const st = s[c.id];
@@ -586,7 +596,7 @@ export default {
           { fn: async (ctx) => { if (!await until(ctx, (l) => l.scanned >= 17)) jump(ctx.store, 17); ctx.store.set('c2.running', false); ctx.store.set('c2.speed', 0); } },
           { fail: 'c2', title: '⚠ C2 motor fault', say: 'C2 motor fault at parcel 17. C2 has stopped with 3 parcels on it. C1 and C3 are still running.' },
           { say: 'Re-planning around C2, not stopping the line:' },
-          { replan: { intro: 'New routing:', changes: ['C1, C3 and dock 2 carry on; every parcel scanned', 'Carts A and B shuttle parcels from the end of C1 to C3, one each, alternating', 'About 40% slower: new finish estimate 21 minutes', 'The carts pick up C2\'s 3 stranded parcels last'], needsYou: 'C2\'s motor needs a look — overload trip or a jammed roller. I won\'t restart it on my own.' } },
+          { replan: { intro: 'New routing:', changes: ['C1, C3 and dock 2 carry on; every parcel scanned', 'Carts A and B shuttle parcels from the end of C1 to C3, one each, alternating', 'Slower: new finish estimate 21 minutes, up from 14', 'The carts pick up C2\'s 3 stranded parcels last'], needsYou: 'C2\'s motor needs a look — overload trip or a jammed roller. I won\'t restart it on my own.' } },
           { set: 'agvA.u', to: 0 }, { set: 'agvB.u', to: uBack(HOME.agvB) }, { set: 'agvA.state', to: 'moving' }, { set: 'agvB.state', to: 'moving', label: 'Carts A and B → the line' },
           { fn: async (ctx) => {
             const { store, chat, tween, sleep, status } = ctx;
@@ -692,7 +702,7 @@ export default {
           { say: '40 of 40 at dock 2, all scanned, each one on time at the door. The door is down; its switch agrees. The gate is still flagged.' },
           { status: 'Line stopped · gate flagged' },
           HOLD,
-          { end: { headline: 'It checked the gate by counting parcels.', body: 'When the gate went quiet, NeuCharBox didn\'t guess where its arm was. It watched the next parcel through reach the dock on time, kept the run going, and flagged the gate for later.' } },
+          { end: { headline: 'It checked the gate by counting parcels.', body: 'When the gate went quiet, NeuCharBox didn\'t guess where its arm was. It watched the next parcel past the gate reach the dock on time, kept the run going, and flagged the gate for later.' } },
         ] },
         agvA: { at: 'midRun', intro: 'Replaying this request. This time, cart A stops answering while it waits in its bay.', steps: [
           lead('Line running · carts parked'),
@@ -735,7 +745,7 @@ export default {
           { fail: 'dock', faultText: 'door still open', title: '⚠ Door not closed', say: 'Dock 2\'s light is red, but its door hasn\'t moved: it should be down by now, and its bottom switch still reads open.' },
           { wait: 1500 },
           { say: 'All 40 are through and C2 and C3 are stopped, so nothing more needs that door. I haven\'t sent the close again: a door that doesn\'t move may have something in its way, and I can\'t see the doorway from here.' },
-          { set: 'scanner.armed', to: false, label: 'Line stopped · scanner disarmed' },
+          { set: 'scanner.armed', to: false, label: 'Scanner disarmed · dock 2 still open' },
           { say: 'I won\'t call dock 2 closed. The red light is only what I asked for; the door switch says open.' },
           { replan: { intro: 'Run done, dock open:', changes: ['40 of 40 at dock 2, all scanned', 'Line stopped: C1, C2 and C3 at 0, scanner disarmed, carts parked', 'Dock 2: close sent once; door still up; light red', 'Reported as open until its switch says closed'], needsYou: 'Check the doorway, then close dock 2 from its own control and check its drive. Until its switch reads closed, I\'ll report the dock as open.' } },
           { status: 'Line stopped · dock 2 flagged · door open' },
@@ -934,7 +944,7 @@ export default {
             if (!await until(ctx, (l) => l.scanned >= 17)) jumpSorted(store, 17);
             store.set('scanner.misreads', 1);
             if (store.get('plan.stopOnMisread')) { store.set('c1.running', false); store.set('c1.speed', 0); } // parcel 17 stays on C1
-            ctx.status(store.get('plan.stopOnMisread') ? 'C1 stopped · parcel 17 unreadable, waiting for a person' : 'Parcel 17 unreadable · lane B at the gate');
+            ctx.status(store.get('plan.stopOnMisread') ? 'C1 stopped · parcel 17 unreadable, needs a person' : 'Parcel 17 unreadable · lane B at the gate');
           } },
           { parallel: [
             { fn: async (ctx) => { if (!ctx.store.get('plan.stopOnMisread')) await divert(ctx, 17); } },
@@ -1005,7 +1015,7 @@ export default {
           { wait: 1500 },
           STOP_SCANNER, STOP_DOCK,
           { say: 'I sent cart A the stop again and carried on with the rest: a stop doesn\'t wait for one cart.' },
-          { set: 'agvA.faultNote', to: 'ignored stop · halted at drop-off' },
+          { set: 'agvA.faultNote', to: 'ignored stop · at drop-off' }, // a note over about 28 characters wraps in the desktop tile
           { say: 'Cart A rolled on to its drop-off beside C3 and halted there, about 1.2 m past where the stop found it. Its position hasn\'t changed since, so it is stopped now, but not because it obeyed.' },
           { replan: { intro: 'Where the stop left cart A:', changes: ['Cart B: stopped, brakes on, confirmed', 'Cart A: answered "stopped" twice, kept rolling to its drop-off beside C3; still loaded', 'C1, C2, C3 stopped, confirmed by their encoders; scanner disarmed; dock 2 closed', 'Restart locked until cart A is checked'], needsYou: 'Cart A ignored a stop. Have someone check its brakes and drive before it moves again. Restart stays locked until then.' } },
           { status: 'Stopped · cart A flagged · restart locked' },
@@ -1022,18 +1032,21 @@ export default {
           { replan: { intro: 'Stop status:', changes: ['C1, C2, C3: stopped and confirmed by their encoders', 'Cart A: stopped, brakes on, confirmed', 'Cart B: stop sent, no acknowledgement — treat it as moving until seen', 'Restart is locked until cart B is confirmed'], needsYou: 'Eyes on cart B, please — on the return lane beside C2. Then tell me it\'s stopped and I\'ll unlock.' } },
           { ask: { intro: 'Cart B still hasn\'t confirmed. Your call:', options: [
             { label: 'Keep everything locked', primary: true, apply: [{ status: 'Locked · cart B not confirmed' }, { say: 'Locked. Cart B stays flagged, and restart stays locked until cart B answers or you confirm it\'s stopped.' }] },
-            { label: 'Cart B is stopped — confirmed by me', apply: [{ set: 'agvB.state', to: 'stopped' }, { status: 'Stopped · cart B confirmed by you, still not answering' }, { set: 'agvB.faultNote', to: 'seen stopped · not answering' }, { say: 'Logged: cart B confirmed stopped by you, on the return lane beside C2. Everything is stopped, cart B on your word. Restart is unlocked, but nothing restarts until you say, and cart B stays flagged until it answers.' }, { set: 'plan.confirmed', to: true }] },
+            { label: 'Cart B is stopped — confirmed by me', apply: [{ set: 'agvB.state', to: 'stopped' }, { status: 'Stopped · cart B confirmed by you, still not answering' }, { set: 'agvB.faultNote', to: 'seen stopped · no answer' }, { say: 'Logged: cart B confirmed stopped by you, on the return lane beside C2. Everything is stopped, cart B on your word. Restart is unlocked, but nothing restarts until you say, and cart B stays flagged until it answers.' }, { set: 'plan.confirmed', to: true }] },
           ] } },
           HOLD,
           { end: { headline: 'A stop with an honest status.', body: 'NeuCharBox stopped the line in a safe order, and when one cart didn\'t confirm, it said so instead of declaring "all stopped" on its own. That distinction is the whole product.' } },
         ] },
         c1: { at: 'belts', intro: 'Replaying this request. This time, conveyor C1\'s drive trips while it slows down.', steps: [
           lead('2 · conveyors'),
-          { fn: ({ chat, tween }) => { chat.ncb('2 — Conveyors ramp down C1, C2, C3 together, 2 seconds, so nothing pushes into a stopped belt.'); tween('c2.speed', 0, 2000); tween('c3.speed', 0, 2000); } },
-          { tween: 'c1.speed', to: 0.2, ms: 900 },
-          { fail: 'c1', faultText: 'drive tripped', title: '⚠ C1 drive tripped', say: 'C1\'s drive tripped half-way down the ramp, at 0.2 m/s.' },
+          // All three on the same 2 s ramp, as NCB says: it passes 0.2 m/s about 1.1 s in, where C1's drive trips (a new
+          // tween on C1 ends its ramp there), so C1 never reads slower than C2 and C3 before it trips.
+          { fn: ({ chat, tween }) => { chat.ncb('2 — Conveyors ramp down C1, C2, C3 together, 2 seconds, so nothing pushes into a stopped belt.'); tween('c1.speed', 0, 2000); tween('c2.speed', 0, 2000); tween('c3.speed', 0, 2000); } },
+          { wait: 1100 },
+          { fn: ({ tween }) => tween('c1.speed', 0.2, 1) }, // where the ramp is now, give or take a frame
+          { fail: 'c1', faultText: 'drive tripped', title: '⚠ C1 drive tripped', say: 'C1\'s drive tripped part-way down the ramp, at 0.2 m/s.' },
           { set: 'c1.speed', to: 0 }, { set: 'c1.running', to: false }, // a tripped drive lets go of the belt: unlabelled
-          { fn: async ({ store, sleep }) => { await sleep(500); store.set('c2.running', false); store.set('c3.running', false); } }, // C2 and C3 finish their ramp
+          { fn: async ({ store, sleep }) => { await sleep(900); store.set('c2.running', false); store.set('c3.running', false); } }, // C2 and C3 finish their 2 s ramp (C1 tripped 1.1 s into it)
           { wait: 1000 },
           STOP_SCANNER, STOP_DOCK, // the stop goes on in its order before NCB explains
           { say: 'C1 is stopped all the same: its encoder reads 0. But a trip isn\'t a controlled stop: the drive let go of the belt instead of slowing it. C2 and C3 ramped down as planned, confirmed by their encoders.' },
@@ -1104,7 +1117,7 @@ export default {
           lead('4 · dock'),
           { fn: async (ctx) => { const { store, chat, sleep } = ctx; store.set('dock.shut', false); store.set('dock.light', 'red'); chat.ncb('4 — Dock 2 closing, light red.'); await sleep(650); if (ctx.fast) lineOf.get(store)?.doorAt(0.46); store.set('dock.stuck', true); } }, // the door stops about half-way (a skip puts it there)
           { wait: 1400 },
-          { fail: 'dock', faultText: 'stopped part-way · safety edge', title: '⚠ Dock 2 door stopped', say: 'Dock 2\'s door stopped about half-way down. Its safety edge tripped: something touched the bottom of the door, or the edge itself has failed.' },
+          { fail: 'dock', faultText: 'part-open · safety edge', title: '⚠ Dock 2 door stopped', say: 'Dock 2\'s door stopped about half-way down. Its safety edge tripped: something touched the bottom of the door, or the edge itself has failed.' },
           { wait: 1500 },
           { say: 'I won\'t send it down again. A safety edge stops a door because something may be under it, and I can\'t see under it from here.' },
           { say: 'Everything else is stopped and confirmed: carts, conveyors and the scanner. Dock 2 is part-open, with its light red. I won\'t call this stop done until its door is down.' },

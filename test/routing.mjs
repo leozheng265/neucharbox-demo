@@ -139,9 +139,50 @@ export const CASES = {
     ['watch the door closely', 'Hold the house'],
     ['tell me if anyone gets close to the door', 'Hold the house'],
     ['water the plants and leave the heating alone', 'Just keep the plants alive'],
-    ['make it look like someone is home and keep the heating off', 'Make it look like someone'],
-    ['keep the plants alive, and keep the lights off', 'Just keep the plants alive'],
+    ['keep the plants alive, and keep the lights off', 'Just keep the plants alive'], // the lamp starts off and stays off
     ['hold the house at 19 and give me feedback', 'Hold the house'], // "feedback" is no "feed"
+    // polish round: the heating stays on at its own setting (touches), so keeping it off asks back; the plant plan
+    // keeps the blinds open outside 13:00–17:00, so closing them at night asks back
+    ['make it look like someone is home and keep the heating off', 'clarify', 'conflict'],
+    ["Make it look like someone's home in the evenings and keep the heating off", 'clarify', 'conflict'],
+    ['Just keep the plants alive and keep the heating off', 'clarify', 'conflict'],
+    ["Water the plants while I'm away and leave the heating off", 'clarify', 'conflict'],
+    ['keep the plants alive and keep the thermostat off', 'clarify', 'conflict'],
+    ['water the plants, no heating', 'Just keep the plants alive'], // leaves the heating out, as the plan does
+    ['Water the plants and close the blinds at night', 'clarify', 'partial'],
+    ['Keep the plants alive and shut the blinds at night', 'clarify', 'partial'],
+    ['water the plants and close the blinds at dusk', 'clarify', 'partial'],
+    ['water the plants and close the blinds when it gets dark', 'clarify', 'partial'],
+    ['water my plants and close the blinds every evening', 'clarify'], // a tie with the evening presence plan
+    ['water the plants every night', 'clarify', 'partial'],
+    ['water the plants and close the blinds in the afternoon', 'Just keep the plants alive'], // 13:00–17:00, as planned
+    ['water the plants tonight', 'Just keep the plants alive'],
+    ["I'm away for a week, close the blinds at night", "I'm away"], // its blinds close as the sun sets
+    // final round: the plant plan's night words are phrases with the blinds (or "every night"), so a stay over the
+    // holidays, for a few nights or until Sunday night, a dark corner or warm evenings still run it; "over" is no
+    // "overnight" and "after" no "afternoons" (a close form needs an ending, not another word)
+    ['water the plants and close the blinds overnight', 'clarify', 'partial'],
+    ['water my plants over the holidays', 'Just keep the plants alive'],
+    ['keep my plants alive over the next few days', 'Just keep the plants alive'],
+    ["I'm away over Easter, water the plants", 'Just keep the plants alive'],
+    ['keep my plants alive over the weekend', 'Just keep the plants alive'],
+    ["keep my plants alive while I'm over in Paris", 'Just keep the plants alive'],
+    ["I'm away for a few nights, water my plants", 'Just keep the plants alive'],
+    ['keep my plants alive for a few nights', 'Just keep the plants alive'],
+    ["I'm gone for two nights, keep the plants alive", 'Just keep the plants alive'],
+    ["I'm away overnight, water the plants", 'Just keep the plants alive'],
+    ['keep the plants alive until Sunday night', 'Just keep the plants alive'],
+    ["keep my plants alive while I'm away, I'll be back late at night", 'Just keep the plants alive'],
+    ['water my plants, they sit in a dark corner', 'Just keep the plants alive'],
+    ["Water my plants while I'm away, they're in a dark room", 'Just keep the plants alive'],
+    ['keep the plants alive, it gets dark early here', 'Just keep the plants alive'],
+    ['keep the plants alive, the evenings are warm', 'Just keep the plants alive'],
+    ["water the plants while I'm on my night shifts", 'Just keep the plants alive'],
+    ["make it look like someone's home after dark", 'Make it look like someone'],
+    // "…but leave the camera off" to a plan that arms it
+    ["make it look like someone's home but leave the camera off", 'clarify', 'conflict'],
+    ["I'm away for a week but leave the camera off", 'clarify', 'conflict'],
+    ['hold the house at 19 but keep the camera off', 'clarify', 'conflict'],
     [LONG, 'clarify'],
   ],
   lab: [
@@ -399,6 +440,31 @@ export const CASES = {
     ['let me know if she gets in bed', 'clarify', 'partial'],
     ["tell me if she's still in bed", 'Let me know when mum'],
     ["let me know when she's up and keep recordings", 'clarify', 'partial'], // "recordings" is still "record"
+    // the kettle stopping after 10 minutes is the kettle request; a device that stops working is no request, and the
+    // flat's other devices are not the kettle request's "10 minutes"
+    ['make sure the kettle stops after 10 minutes', 'Tell me if the kettle'],
+    ["tell me if the kettle hasn't stopped after 10 minutes", 'Tell me if the kettle'],
+    ["make sure the kettle stops after 10 minutes while I'm at work", 'Tell me if the kettle'],
+    ["tell me if the kettle's auto-off breaks", 'Tell me if the kettle'],
+    ["tell me if she fails to get up by 9:30", 'Let me know when mum'],
+    ['tell me if the kettle plug stops working', 'clarify'],
+    ['let me know if the kettle plug goes offline', 'clarify'],
+    ['let me know if the kettle plug breaks', 'clarify'],
+    ['tell me if the kettle plug breaks in the morning', 'clarify'],
+    ['let me know if the kettle stopped working', 'clarify'],
+    ['let me know if the bed sensor breaks', 'clarify'],
+    ['let me know if the bed sensor fails', 'clarify'],
+    ['tell me when the kettle stops boiling', 'clarify'],
+    ['tell me if the hall light is on for more than 10 minutes', 'clarify'],
+    ['switch the hall light off after 10 minutes', 'clarify'],
+    ['tell me if the door is open for more than 10 minutes', 'clarify'],
+    // final round: a device that dies or disconnects is a phrase (DEVICE_DEAD), so a bereavement or a flaky wifi said
+    // alongside a request doesn't ask back
+    ["since dad died she lives alone, let me know when she's up in the morning", "Let me know when mum's up"],
+    ["let me know when she's up, my dad died last year", "Let me know when mum's up"],
+    ['her wifi disconnects sometimes, let me know when mum gets up', "Let me know when mum's up"],
+    ["tell me if the kettle's been on for 10 minutes, since dad died she forgets things", "Tell me if the kettle's been on"],
+    ["let me know if she leaves the kettle on, the auto-off is dead", "Tell me if the kettle's been on"],
     [LONG, 'clarify'],
   ],
   warehouse: [
@@ -714,14 +780,18 @@ const NAMED = {
   elder: [["let me know when mum's up and tell me if the kettle's left on", 'Tell me if the kettle']],
 };
 
-// A typed "what if <device> fails?" while the chips are up: the page says how to pick a failure (true), rather than
-// route it as a request. A person, or something that isn't a device of the scene, is not one (false).
+// A typed "what if <device> fails?" (or "tell me if <device> stops working") while the chips are up: the page says how
+// to pick a failure (true), rather than route it as a request. A person, or something that isn't a device of the
+// scene, is not one (false), nor is a device doing its job ("…goes dark") or a failure to do something ("…fails to…").
 export const WHATIF_QUESTIONS = {
-  home: [['what if the pump dies?', true], ['what if the blinds break', true], ['what if it goes offline', true], ['what if the power goes out', false], ['what if it rains', false], ['what if the wifi goes down', false]],
-  lab: [['what if M2 fails', true], ['what if the laser stops working', true], ['what if the power drops', false]],
+  home: [['tell me if the pump stops working', true], ['let me know if the plants die', false], ['what if the pump dies?', true], ['what if the blinds break', true], ['what if it goes offline', true], ['what if the power goes out', false], ['what if it rains', false], ['what if the wifi goes down', false]],
+  lab: [['what if M2 fails', true], ['what if the laser stops working', true], ['what if the power drops', false], ['let me know if the laser fails', true], ['tell me if the meter stops responding', true]],
   elder: [['what if the hall light stops working?', true], ['what if something fails?', true], ['What happens if the bed sensor dies?', true], ['what if the kettle breaks', true], ["what if the kettle's auto-off fails", true],
-    ['what if she leaves something on', false], ['what if mum dies', false], ['what if she falls', false], ['what if mum dies in bed', false], ["Tell me if the kettle's been on for more than 10 minutes.", false]],
-  warehouse: [['what if cart B goes offline', true], ['what if a conveyor breaks down', true], ['what if C2 fails', true], ['what if a parcel falls off', false]],
+    ['what if she leaves something on', false], ['what if mum dies', false], ['what if she falls', false], ['what if mum dies in bed', false], ["Tell me if the kettle's been on for more than 10 minutes.", false],
+    ['tell me if the kettle plug stops working', true], ["let me know if the bed sensor isn't working", true], ['tell me if the kettle plug goes dead', true],
+    ['tell me if the kettle plug has stopped working', true], ['let me know when the bed sensor loses power', true], ['what if the kettle plug loses power', true],
+    ["tell me if the kettle's auto-off fails", false], ['let me know if she dies', false], ['tell me if the hall light goes dark', false], ['let me know if she fails to get up', false]],
+  warehouse: [['tell me if the scanner fails to read a label', false], ['let me know if cart B goes offline', true], ['what if cart B goes offline', true], ['what if a conveyor breaks down', true], ['what if C2 fails', true], ['what if a parcel falls off', false]],
   creator: [['what if my camera dies mid-stream', true], ['what if the mic cuts out', true], ['what if nobody watches', false], ['Go live.', false]],
 };
 

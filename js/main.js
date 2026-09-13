@@ -81,7 +81,9 @@ async function mountScene(meta, gen) {
     tie: (r) => `That could be ${quoted(r.prompt)} or ${quoted(r.also)}. I won't guess. Pick one below.`,
     values: (r) => `This demo can only run that one as written: ${quoted(r.prompt)}. I won't swap in other numbers on my own. Pick it below if that's what you want.`,
     partial: (r) => `The closest request in this demo is ${quoted(r.prompt)}. It doesn't do just what you asked, and I won't guess. Pick it below if that's what you want, or say it another way.`,
-    conflict: (r) => `The closest request in this demo is ${quoted(r.prompt)}, but its plan includes "${String(r.line).replace(/[.!?]+$/, '').replace(/"([^"]*)"/g, '‘$1’')}", which goes against what you asked. I won't run it on a guess. Pick it below if that's fine, or say it another way.`, // quotes inside the plan line become ‘single’ ones
+    // Quotes inside the plan line become ‘single’ ones. A line from the prompt's `touches` (what it does that its plan card
+    // doesn't list, js/engine/match.js) is not on the card the visitor would see, so it isn't called part of the plan.
+    conflict: (r) => `The closest request in this demo is ${quoted(r.prompt)}, but ${(r.prompt.touches || []).includes(r.line) ? 'running it means' : 'its plan includes'} "${String(r.line).replace(/[.!?]+$/, '').replace(/"([^"]*)"/g, '‘$1’')}", which goes against what you asked. I won't run it on a guess. Pick it below if that's fine, or say it another way.`,
     question: (r) => `That's a question, not a request, so I won't act on it. The closest request in this demo is ${quoted(r.prompt)}. Pick it below if that's what you want.`,
     check: (r) => `That asks me to check something, and none of the requests in this demo just checks it. I won't turn it into an action. The closest is ${quoted(r.prompt)}. Pick it below if that's what you want.`,
     statement: (r) => `That tells me how things are; it doesn't ask for anything, so I won't act on it. The closest request in this demo is ${quoted(r.prompt)}. Pick it below if that's what you want.`,

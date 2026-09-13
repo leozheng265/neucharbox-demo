@@ -50,7 +50,9 @@ export default {
     overlay:  { icon: 'display', name: 'Overlay', ref: 'the overlay app', initial: { scene: 'idle', tag: '', caption: '' },
       format: (s, st) => {
         const b = st?.plan?.backup;
-        const base = s.scene === 'live' && b ? 'LIVE · USB webcam' : s.scene === 'recording' && b ? 'REC · USB webcam' : s.scene === 'recording' && st?.plan?.videoOnly ? 'REC · video only' : { idle: 'idle', starting: '"Starting soon"', live: 'LIVE scene', ending: '"Thanks for watching"', recording: 'REC' }[s.scene] || s.scene;
+        // With a tag, the thanks screen goes by a shorter name: '"Thanks for watching" · mic cut' took two lines in the
+        // desktop tile, and grew its row of the dashboard for the length of the outro.
+        const base = s.scene === 'live' && b ? 'LIVE · USB webcam' : s.scene === 'recording' && b ? 'REC · USB webcam' : s.scene === 'recording' && st?.plan?.videoOnly ? 'REC · video only' : s.scene === 'ending' && s.tag ? 'Thanks screen' : { idle: 'idle', starting: '"Starting soon"', live: 'LIVE scene', ending: '"Thanks for watching"', recording: 'REC' }[s.scene] || s.scene;
         return s.caption ? `${base} · caption on` : s.tag ? `${base} · ${s.tag}` : base;
       },
       active: (s) => s.scene !== 'idle', faultText: 'unreachable' },
@@ -61,7 +63,7 @@ export default {
       active: (s) => s.on && s.brightness > 0.005, faultText: 'off the network' },
   },
 
-  build({ R, P, M, THREE, store, parts, quiet }) {
+  build({ R, P, M, THREE, store, parts, quiet, speed = 1 }) {
     const isQuiet = typeof quiet === 'function' ? quiet : () => false; // true while a what-if replays the request quietly
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x2E3A48, roughness: 0.95 });
     // The floor is a little more matte than the shared one: at 80% the key light's reflection in the glossy finish blew out
@@ -144,6 +146,18 @@ export default {
     const stripCtl = P.box(0.06, 0.03, 0.016, gear, 0.94, 0.86, -2.242, 0.004); // the strip's controller, at its right end, clear of the desk in the default view
     const stripLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.005); stripCtl.add(stripLed); stripLed.position.set(0.015, 0, 0.0095);
     for (const l of [keyLed, signLed, stripLed]) l.userData.noHighlight = true; // a tap pulses the device, not a halo round its LED
+    // Every fault LED here is a dot of a few pixels (one or two on a phone), and its bright blink tone-maps to near white:
+    // once the fault ring has gone, the room hardly showed which device was down. In fault, a soft red glow of constant
+    // screen size blinks with the LED (as the home scene does). Normal blending, depth-tested, kept 12 cm towards the
+    // camera so its own device never cuts it; the two on the back wall sit in holders tagged with it, so they hide with it.
+    const glowMap = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const rg = g.createRadialGradient(32, 32, 0, 32, 32, 32); rg.addColorStop(0, 'rgba(255,255,255,1)'); rg.addColorStop(0.22, 'rgba(255,255,255,.85)'); rg.addColorStop(0.5, 'rgba(255,255,255,.3)'); rg.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = rg; g.fillRect(0, 0, 64, 64); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+    const glow = (led, wall = false) => {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowMap, color: 0xE8402A, transparent: true, depthWrite: false, sizeAttenuation: false, opacity: 0 }));
+      sp.scale.setScalar(0.035); sp.visible = false; sp.userData.noAO = true; sp.raycast = () => {}; R.scene.add(sp); if (wall) P.onWall(P.group(sp), 0, 1, -2.25);
+      led.updateWorldMatrix(true, false); const at = led.getWorldPosition(new THREE.Vector3()), v = new THREE.Vector3();
+      return (k) => { sp.visible = k > 0.01; if (!sp.visible) return; sp.material.opacity = k; v.subVectors(R.camera.position, at); const d = v.length() || 1; sp.position.copy(at).addScaledVector(v, Math.min(0.12, d * 0.5) / d); };
+    };
+    const glows = { keylight: glow(keyLed), cam: glow(camLed), mic: glow(micLed), capture: glow(capLed), onair: glow(signLed, true), strip: glow(stripLed, true) };
     P.onWall(P.box(1.2, 0.03, 0.22, M.wood, -1.3, 1.9, -2.13), 0, 1, -2.25); // shelf, top at y = 1.915
     const plant = P.plant(-1.7, -2.1, { scale: 0.45, y: 1.915, front: true }); // on the shelf
     for (let i = 0; i < 3; i++) P.onWall(P.box(0.05, 0.22, 0.16, [M.yellow, M.white, M.cardboard][i], -1.05 + i * 0.07, 2.025, -2.12), 0, 1, -2.25);
@@ -188,9 +202,13 @@ export default {
     const col = new THREE.Color();
     // Point at the moments the story turns on in the room (main.js already pings discovery and faults). Not while a
     // what-if replays the request quietly: what NCB did before the failure isn't news, so no ring, label or pulse.
-    const mark = (id, text) => { hi.focus(id); R.ping(id, text, { hold: 2600 }); };
+    // A mark made while another device's red fault ring still shows (main.js: 3.2 s, less under ?speed=) is calm: its
+    // label and dot, no ring and no pulse, so the eye goes to what failed first (the caption NCB puts up as the mic drops).
+    let faultId = null, faultAt = -Infinity;
+    const mark = (id, text) => { const calm = !!faultId && faultId !== id && performance.now() - faultAt < Math.max(1200, 3200 / speed) + 600; if (!calm) hi.focus(id); R.ping(id, text, { hold: 2600, ring: !calm }); };
     store.subscribe((state, path, value) => {
       if (isQuiet()) return;
+      if (value === 'fault' && path.endsWith('.status')) { faultId = path.slice(0, -7); faultAt = performance.now(); }
       if (path === 'onair.on' && value && !state.plan?.preset) mark('onair', 'On-air sign · ON'); // not when the wrap-up sets up "live for 48 minutes": NCB didn't do that
       else if (path === 'plan.backup' && value) mark('webcam', 'USB webcam · now the video source');
       else if (path === 'capture.input' && value === 'disabled') mark('capture', 'Capture card · input disabled'); // after the capture fault: replaces its marker
@@ -215,6 +233,9 @@ export default {
         // fault with its input disabled (flagged, but held safe)
         const capBad = s.capture.status === 'fault', capOff = s.capture.input === 'disabled'; capLed.material.color.set(capBad ? 0xE0563A : capOff ? 0x1A1C1E : s.capture.signal ? 0x3AB7FF : 0xFFB020); capLed.material.emissive.copy(capLed.material.color); capLed.material.emissiveIntensity = capBad ? (capOff ? 2.5 : Math.floor(t * 3) % 2 ? 6 : 1) : capOff ? 0 : 2; capLed.visible = s.capture.status !== 'offline';
         statusLed(keyLed, s.keylight, t); statusLed(signLed, s.onair, t); statusLed(stripLed, s.strip, t);
+        const blink = Math.floor(t * 3) % 2; // the LEDs' blink phase: glow full with the bright one, faint with the dim one
+        for (const id of ['keylight', 'cam', 'mic', 'onair', 'strip']) glows[id](s[id].status === 'fault' ? (blink ? 1 : 0.25) : 0);
+        glows.capture(capBad ? (capOff ? 0.6 : blink ? 1 : 0.25) : 0); // steady, like its LED, once its input is disabled
         const hung = s.overlay.status === 'fault';
         const now = { name: s.overlay.scene, backup: !!s.plan?.backup, video: !!s.plan?.videoOnly, tag: s.overlay.tag || '', caption: s.overlay.caption || '', dim: s.keylight.brightness < 0.05 };
         if (!hung) frozen = null; else if (!frozen) frozen = now; // the first frame after the fault is the one that stays
@@ -252,7 +273,7 @@ export default {
         { say: 'Overlay up: "Starting soon". Waiting on the camera signal before I switch to live…' },
         { wait: 1500 },
         { failPoint: 'signal' },
-        { set: 'cam.signal', to: true }, { set: 'capture.signal', to: true, label: 'Camera signal verified on HDMI 1' }, { wait: 600 },
+        { set: 'cam.signal', to: true }, { set: 'capture.signal', to: true, label: 'Main camera signal verified on HDMI 1' }, { wait: 600 },
         { say: 'Picture confirmed on HDMI 1. Switching to the live scene.' },
         { failPoint: 'goLive' },
         ...LIVE_AND_MIC,
@@ -274,7 +295,7 @@ export default {
           { say: 'Getting everything else ready without it, behind "Starting soon". Nothing goes live until you decide about the light.' },
           { set: 'cam.on', to: true, label: 'Main camera → on' }, { wait: 1200 },
           { set: 'overlay.scene', to: 'starting', label: 'Overlay → Starting soon' }, { wait: 1200 },
-          { set: 'cam.signal', to: true }, { set: 'capture.signal', to: true, label: 'Camera signal verified on HDMI 1' }, { wait: 900 },
+          { set: 'cam.signal', to: true }, { set: 'capture.signal', to: true, label: 'Main camera signal verified on HDMI 1' }, { wait: 900 },
           { say: 'Picture confirmed on HDMI 1, and it\'s underlit: only the ceiling light is on you. The LED strip lights the wall behind the monitor, not your face.' },
           { ask: { intro: 'Go live without the key light?', options: [
             { label: 'Hold on "Starting soon"', primary: true, apply: [
@@ -458,7 +479,7 @@ export default {
           { replan: { intro: 'Wrapped up, except the stream itself:', changes: ['Overlay app: no answer since "Thanks for watching"; last report was the live scene', 'Mic muted and camera off, both confirmed: nothing new from this desk reaches the stream', 'On-air sign left on until the stream is confirmed ended', 'Key light and strip as planned'], needsYou: 'Force-quit the overlay app on the PC (that ends the stream), or end it from your streaming platform\'s page. I\'ll switch the sign off once the stream is confirmed ended.' } },
           { status: 'Stream not confirmed ended · overlay app flagged' },
           HOLD,
-          { end: { headline: 'Off air only when it can prove it.', body: 'The overlay app froze before the stream ended. NeuCharBox cut the camera and kept the mic muted so nothing more of you went out, and left the sign on because it couldn\'t confirm you were off air.' } },
+          { end: { headline: 'Off air only when it can prove it.', body: 'The overlay app froze before the stream ended. NeuCharBox cut the camera, kept the mic muted, and left the sign on because it couldn\'t confirm you were off air.' } },
         ] },
         strip: { at: 'thanks', steps: [
           { status: 'Live · 48 min · mic muted' }, { wait: 1500 },
@@ -491,7 +512,7 @@ export default {
           { end: { headline: 'The sign is wrong. The stream isn\'t.', body: 'The on-air sign ignored "off" after the stream ended. NeuCharBox checked the stream itself, finished the wrap-up and told you which one to trust.' } },
         ] },
         cam: { at: 'camOff', steps: [
-          { status: 'Camera → off' }, { wait: 2000 },
+          { status: 'Main camera → off' }, { wait: 2000 },
           { set: 'cam.signal', to: false }, { set: 'capture.signal', to: false },
           { fail: 'cam', title: '⚠ Camera not answering', faultText: 'not answering', say: 'The camera didn\'t confirm "off", and it hasn\'t answered anything since. Its final report before going quiet: "on".' },
           { wait: 2000 },
@@ -505,7 +526,7 @@ export default {
           { end: { headline: 'Dark at the card is what counts.', body: 'The camera stopped answering as it was switched off. NeuCharBox checked the capture card instead, found no picture, and disabled its input in case the camera comes back on by itself.' } },
         ] },
         capture: { at: 'verify', steps: [
-          { status: 'Camera off · checking the capture card…' }, { wait: 2000 },
+          { status: 'Main camera off · checking the capture card…' }, { wait: 2000 },
           { fail: 'capture', title: '⚠ Signal after "off"', say: 'The camera reports "off", but the capture card still reports a signal on HDMI 1.' },
           { wait: 2000 },
           { say: 'A capture card with a signal after the camera is "off" is a privacy problem, not a technical one. Disabling the input at the card so nothing can leave the desk.' },
@@ -529,7 +550,7 @@ export default {
           { replan: { intro: 'Wrapped up, key light unconfirmed:', changes: ['Mic muted, stream off, sign off, camera off; capture card: no signal', 'LED strip as planned', 'Key light: not answering; its last report was 80% at 5600K'], needsYou: 'Switch the key light off at its power switch or plug. Before your next stream, I\'ll check it answers first.' } },
           { status: 'Off air · key light flagged' },
           HOLD,
-          { end: { headline: 'One light left on. Nothing else.', body: 'The key light stopped answering at the very end. Everything that could put you on air was already off and confirmed, so NeuCharBox finished the wrap-up and flagged the light.' } },
+          { end: { headline: 'Only the key light went quiet.', body: 'The key light stopped answering at the very end. Everything that could put you on air was already off and confirmed, so NeuCharBox finished the wrap-up and flagged the light.' } },
         ] },
       },
     },
@@ -552,7 +573,7 @@ export default {
         { beat: 'run' },
         { set: 'keylight.on', to: true }, { set: 'keylight.kelvin', to: 5000 }, { tween: 'keylight.brightness', to: 0.7, ms: 1000, label: 'Key light → 70% · 5000K' },
         { failPoint: 'camera' },
-        { set: 'cam.on', to: true, label: 'Camera → on' }, { wait: 800 }, { set: 'cam.signal', to: true }, { set: 'capture.signal', to: true, label: 'Camera signal verified' }, { wait: 600 },
+        { set: 'cam.on', to: true, label: 'Main camera → on' }, { wait: 800 }, { set: 'cam.signal', to: true }, { set: 'capture.signal', to: true, label: 'Main camera signal verified' }, { wait: 600 },
         { set: 'mic.level', to: -90 }, { set: 'mic.muted', to: false, label: 'Mic → live' },
         { say: 'Camera verified. Mic open. Waiting for audio level before I start the recording…' },
         { wait: 1600 },
@@ -568,8 +589,8 @@ export default {
       genericAt: 'start', // the LED strip (unused here) fails with the picture and the level confirmed, before the recording starts
       whatIf: {
         cam: { at: 'camera', steps: [
-          { status: 'Camera → on' }, { wait: 1500 },
-          { status: 'Camera: no reply · retrying' }, { wait: 1200 },
+          { status: 'Main camera → on' }, { wait: 1500 },
+          { status: 'Main camera: no reply · retrying' }, { wait: 1200 },
           { fail: 'cam', title: '⚠ Camera not answering', faultText: 'not answering · no picture', say: 'The camera didn\'t answer "on", and the capture card sees nothing on HDMI 1. All it has reported since setup is "off".' },
           { wait: 2000 },
           { say: 'No recording without the picture you asked for. The key light stays on, the mic stays closed, and nothing has started, so there\'s nothing to clean up.' },
@@ -613,7 +634,7 @@ export default {
             ] },
           ] } },
           HOLD,
-          { end: { headline: 'It wouldn\'t record silence without asking.', body: 'A recording that\'s technically running and practically useless is the worst outcome. NeuCharBox checked the thing that mattered, held, and asked.' } },
+          { end: { headline: 'No sound, no take until you say.', body: 'A recording that\'s technically running and practically useless is the worst outcome. NeuCharBox checked the thing that mattered, held, and asked.' } },
         ] },
         overlay: { at: 'start', steps: [
           { status: 'Starting the recording…' }, { wait: 2000 },

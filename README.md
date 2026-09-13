@@ -40,13 +40,14 @@ a success end card. Failures are the visitor's choice:
    the request doesn't use carries a grey "not in this request"), then, under
    "Or", the request's special what-ifs (a problem that isn't a device, like a
    disturbance on the beam). One pick per picker.
-2. The visitor's bubble asks it ("What if the water pump fails?"), and NCB says
-   what it will replay ("Replaying this request. This time, the water pump
-   fails during the run.").
+2. The visitor's bubble asks it ("What if the water pump fails?").
 3. The room goes back to right after setup and the request replays instantly
    and silently (no chat, status line, pings or room marks), with the plan Edits
    and ask answers of the visitor's last clean run of it, up to the scenario's
-   failure point.
+   failure point. So the last what-if's fault (its red tile, status line and
+   room) goes as soon as the visitor asks. In that replayed room, held still,
+   NCB says what it replays ("Replaying this request. This time, the water pump
+   fails during the run.").
 4. A **Recover** beat appears before Done and the scenario plays at normal
    speed: the device fails in the room (red cue, tile, status line), NCB says
    what it sees and does, puts things in a safe state or works around it,
@@ -216,8 +217,13 @@ the top of `js/engine/player.js`. In `fn` steps use `ctx.tween`, `ctx.sleep`,
 exports `{ id, title, camera, devices, deviceOrder, build(ctx), prompts }` and is
 registered in `js/scenes/index.js`; `build()` returns `{ update, focus, reset? }`
 (implement `reset()` if the room keeps state outside the store; `focus(id, hex)`
-gets red for a fault, so pass `hex` on if you wrap it). A scene may also export
-`already(r, text, state)`: the answer to a typed request that doesn't run, when
+gets red for a fault, so pass `hex` on if you wrap it; a red pulse ends the cyan
+pulses still running on other devices). `R.ping(id, text, { ring: false })` shows
+a label and dot without the growing ring, for a calm mark beside another
+device's red fault ring. Typed-request routing fields (`keywords`, `avoid`,
+`rulesOut`, `touches`) are documented at the top of `js/engine/match.js`; a
+`rulesOut` entry of several words is a phrase ('blinds night'). A scene may also
+export `already(r, text, state)`: the answer to a typed request that doesn't run, when
 the room can answer it ("is the shutter open?"). Camera options include
 `azimuth` (auto-sway arc), `fitAspect` (keep horizontal framing on narrow
 screens) and `panBounds` (how far panning may take the view; by default 2.5 m
@@ -258,7 +264,9 @@ prompts: [{
   <ref> fails during the run." for a device, "Replaying this request. This time:
   <label>." for a special). `ask` on a device entry replaces the default bubble
   "What if <ref> fails?". `alsoFaults`: other devices the scenario may leave in
-  fault.
+  fault. `show`: device ids whose tiles a phone's dashboard strip brings into
+  view as the scenario starts, for a special that changes no tile (lab: "You
+  wanted more power" shows M2 and the meter).
 - `steps`: the step DSL; no `beat` steps (the engine adds Recover before them);
   the last one is the `end` card (the clean `steps` too). The first thing a
   scenario does is update the status line (a `status` step, a `fail`, a label or
@@ -286,7 +294,8 @@ prompts: [{
   replays silently. Store hooks in `build()` that ring or pulse the room must
   return early while it is true:
   `const isQuiet = typeof quiet === 'function' ? quiet : () => false;`. The host
-  also clears the room's markers after the replay. In a quiet replay `ctx.fast`
+  also clears the room's markers after the replay and NCB's intro (the room is
+  held quiet until then). In a quiet replay `ctx.fast`
   is true, `ctx.chat` is a silent stand-in, and status lines and labels write
   nothing.
 

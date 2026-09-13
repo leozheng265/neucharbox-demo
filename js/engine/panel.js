@@ -27,7 +27,13 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   // nothing scrolls it for them (a tile they tap is still brought fully into view).
   let handAt = -Infinity, handDown = false, lastMove = -Infinity, focus = []; // focus: the tiles last brought into view
   root.addEventListener('scroll', () => { lastMove = now(); }, { passive: true }); // a smooth scroll moves for a while: the dwell counts from its end
-  const hand = () => { handAt = now(); focus = []; };
+  // Where a smooth scroll still in flight is taking the strip: until it lands, "in view" is judged there, not where the
+  // strip is right now (a fault that pops just as the strip starts back to its first tile must still be brought into
+  // view). The visitor's hand cancels it; a scroll that never lands (interrupted) stops counting after 1.5 s.
+  let aim = null;
+  const pos = () => { if (aim && now() - aim.at < 1500 && (Math.abs(root.scrollLeft - aim.x) > 1 || Math.abs(root.scrollTop - aim.y) > 1)) return aim; aim = null; return { x: root.scrollLeft, y: root.scrollTop }; };
+  const glide = (x, y, smooth = true) => { root.scrollTo({ left: x, top: y, behavior: smooth ? 'smooth' : 'auto' }); aim = smooth ? { x, y, at: now() } : null; lastMove = now(); };
+  const hand = () => { handAt = now(); focus = []; aim = null; };
   for (const ev of ['pointerdown', 'touchstart']) root.addEventListener(ev, () => { handDown = true; hand(); }, { passive: true });
   for (const ev of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) root.addEventListener(ev, () => { handDown = false; hand(); }, { passive: true });
   for (const ev of ['touchmove', 'wheel', 'keydown']) root.addEventListener(ev, hand, { passive: true });
@@ -40,7 +46,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     const cx = (r.left + r.right) / 2 - p.left - root.clientLeft + root.scrollLeft, cy = (r.top + r.bottom) / 2 - p.top - root.clientTop + root.scrollTop;
     return { l: cx - c.offsetWidth / 2, r: cx + c.offsetWidth / 2, t: cy - c.offsetHeight / 2, b: cy + c.offsetHeight / 2 };
   }
-  const shown = (id) => { const c = cards[id]; if (!c || c.offsetParent === null) return true; const b = box(c); return b.l >= root.scrollLeft - 1 && b.r <= root.scrollLeft + root.clientWidth + 1 && b.t >= root.scrollTop - 1 && b.b <= root.scrollTop + root.clientHeight + 1; };
+  const shown = (id) => { const c = cards[id]; if (!c || c.offsetParent === null) return true; const b = box(c), { x, y } = pos(); return b.l >= x - 1 && b.r <= x + root.clientWidth + 1 && b.t >= y - 1 && b.b <= y + root.clientHeight + 1; };
   // Scroll the panel so these tiles show, nearest edge, as many as fit together in order. Returns the ids it covered
   // ([] while the visitor's hand is on the panel).
   function reveal(list, { force = false, smooth = true } = {}) {
@@ -53,17 +59,26 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
       if (n.r - n.l > w - 2 * PAD || n.b - n.t > h - 2 * PAD) break;
       u = n; got.push(id);
     }
-    const x = root.scrollLeft, y = root.scrollTop;
-    const nx = u.l - PAD < x ? u.l - PAD : u.r + PAD > x + w ? u.r + PAD - w : x;
+    const { x, y } = pos();
+    // Across (the phone strip), the strip starts at a tile, just clear of the one before it (the gap between tiles, so
+    // not even its border shows): scrolling left, at the first of these tiles; scrolling right, at the first tile that
+    // still keeps them all in view, rather than with them at the right edge and a cut tile, maybe only its empty
+    // right-hand part, on the left. A small nudge (a tile in view whose value grew) stays a nudge. (At the end of the
+    // strip the last tiles decide where it stops.)
+    const gap = (parseFloat(getComputedStyle(root).columnGap) || 8) - 1; // a pixel less: the border before never peeks in
+    let nx = x;
+    if (u.l - PAD < x) nx = u.l - gap <= PAD ? 0 : u.l - gap;
+    else if (u.r + PAD > x + w && u.r + PAD - w - x <= 40) nx = u.r + PAD - w;
+    else if (u.r + PAD > x + w) { nx = u.r + PAD - w; const edge = ids.map((id) => cards[id]).filter((c) => c.offsetParent !== null).map((c) => box(c).l - gap).filter((e) => e >= nx - 1 && e <= u.l - gap + 1).sort((a, c) => a - c)[0]; if (edge != null) nx = edge; }
     const ny = u.t - PAD < y ? u.t - PAD : u.b + PAD > y + h ? u.b + PAD - h : y;
     const tx = Math.max(0, Math.min(root.scrollWidth - w, Math.round(nx))), ty = Math.max(0, Math.min(root.scrollHeight - h, Math.round(ny)));
-    if (Math.abs(tx - x) > 1 || Math.abs(ty - y) > 1) { root.scrollTo({ left: tx, top: ty, behavior: smooth ? 'smooth' : 'auto' }); lastMove = now(); }
+    if (Math.abs(tx - x) > 1 || Math.abs(ty - y) > 1) glide(tx, ty, smooth);
     focus = got;
     return got;
   }
   // Back to the first tile (when the chips are offered, and when a what-if starts over); drops any reveal still waiting
   // and the faulted tile it kept in view.
-  function rewind() { pinned = null; queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; focus = []; if (!handBusy() && (root.scrollLeft > 0 || root.scrollTop > 0)) root.scrollTo({ left: 0, top: 0, behavior: 'smooth' }); }
+  function rewind() { pinned = null; queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; focus = []; const { x, y } = pos(); if (!handBusy() && (x > 0 || y > 0)) glide(0, 0); }
 
   // Following a request (the host turns this on at its start and again at each beat, and off at its end): a tile is
   // brought into view the first time it changes in the request, and after that when its state changes kind (a new
@@ -96,7 +111,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     const vis = queue.filter((e) => shown(e.id)).map((e) => e.id);
     if (vis.length) { queue = queue.filter((e) => !vis.includes(e.id)); focus = vis; lastMove = now(); }
     else {
-      const x = root.scrollLeft, y = root.scrollTop, w = root.clientWidth, h = root.clientHeight;
+      const { x, y } = pos(), w = root.clientWidth, h = root.clientHeight;
       const away = (e) => { const b = box(cards[e.id]); return Math.max(0, x - b.l, b.r - x - w) + Math.max(0, y - b.t, b.b - y - h); };
       const head = queue.filter((e) => e.batch === queue[0].batch).map((e) => [away(e), e]).sort((a, b) => a[0] - b[0]).map(([, e]) => e.id);
       const pin = pinNow() && !head.includes(pinned) ? pinned : null;

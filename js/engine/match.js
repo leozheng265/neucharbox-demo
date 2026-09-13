@@ -16,7 +16,10 @@
 //             doesn't catch 'fall'.
 //   rulesOut  what the prompt won't do, besides what its chip already rules out ("…no stream, no sign"): named in the
 //             text and not negated, the prompt can't run ('partial'), and it can't make a tie on words the text rules
-//             out ("go live without the sign" is no tie with "Recording only — …no sign").
+//             out ("go live without the sign" is no tie with "Recording only — …no sign"). An entry of several words is
+//             a phrase: its words in that order, with no punctuation between them, at most two words apart once stop
+//             words are dropped, none of them negated ('blinds night': "close the blinds at night", "…the blinds when it
+//             gets dark" with 'blinds dark'; not "I'm away for a few nights"). Exact words, as in avoid.
 //   touches   plan-like lines for a prompt whose actions live in fn steps ("Scanner disarmed"): read like its plan
 //             lines by the plan-conflict and stop checks, so "stop everything except the carts" asks back.
 
@@ -76,7 +79,8 @@ function info(p) {
   let v = INFO.get(p);
   if (!v) {
     const chipT = [...new Set(tokens(p.chip))];
-    v = { chipT, bag: [...new Set([...chipT, ...(p.keywords || []).flatMap(tokens)])], excl: [...chipNegated(p.chip), ...(p.rulesOut || []).flatMap(tokens)], avoid: (p.avoid || []).map(tokens).filter((a) => a.length) };
+    const ro = (p.rulesOut || []).map(tokens);
+    v = { chipT, bag: [...new Set([...chipT, ...(p.keywords || []).flatMap(tokens)])], excl: [...chipNegated(p.chip), ...ro.filter((a) => a.length === 1).flat()], exclPh: ro.filter((a) => a.length > 1), avoid: (p.avoid || []).map(tokens).filter((a) => a.length) };
     INFO.set(p, v);
   }
   return v;
@@ -117,12 +121,14 @@ const OFF_VERB = /\b(?:turn|switch|shut|power)\s+(?:[a-z0-9']+\s+){0,4}?off\b/;
 // "Turn" alone is not "turn on", nor is a turn/switch/shut left over from a switch-off ("turn the kettle plug off").
 const compound = (x, b) => { if (x.length < b.length + 4 || !x.startsWith(b)) return false; let rest = x.slice(b.length); if (rest[0] === b[b.length - 1]) rest = rest.slice(1); return !/^(?:s|es|d|ed|ing|ings|er|ers|ies|ied|ly)$/.test(rest); };
 function rulesOutText(t, p, negated = negatedWords(t)) {
-  const { excl, bag } = info(p); if (!excl.length) return false;
+  const { excl, exclPh, bag } = info(p); if (!excl.length && !exclPh.length) return false;
   t = nearNotClose(t);
+  if (exclPh.length) { const q = tokens(t); if (exclPh.some((a) => a.every((x) => q.includes(x) && !isNeg(x, negated))) && t.split(/[,;.!?]/).map(tokens).some((w) => exclPh.some((a) => inOrder(w, a) && a.every((x) => !isNeg(x, negated))))) return true; }
+  if (!excl.length) return false;
   // A quantifier rules out only itself: "some" is not "something" or "sometimes", "rest" not "restart", "most" not
-  // "mostly". A rule word with four or more letters after it that aren't an ending is another word: "feedback" is no
-  // "feed", while "recordings" is still "record".
-  const rules = (x, b) => (QUANT.test(b) ? x === b : sameWord(x, b) && !compound(x, b));
+  // "mostly". A word with four or more letters more than the other that aren't an ending is another word, either way
+  // round: "feedback" is no "feed" and "over" no "overnight", while "recordings" is still "record" and "lamp" "lamps".
+  const rules = (x, b) => (QUANT.test(b) ? x === b : sameWord(x, b) && !compound(x, b) && !compound(b, x));
   const off = offWanted(t), ww = words(t), hit = (x) => excl.some((b) => rules(x, b)) && !isNeg(x, negated) && !isNeg(x, off);
   if (ww.some((x, i) => !/^(?:turn|switch|shut)$/.test(x) && hit(x) && !narrowed(ww, i, bag))) return true;
   const offVerb = OFF_VERB.test(t);
@@ -437,7 +443,7 @@ function refused(t) {
 // the asked state ("Blinds close as the sun sets, open again at 08:00" does close them; "Lights off 5 minutes after
 // she's back in bed" doesn't undo "turn on the hall light when she gets up").
 const HALTED = ['stop', 'stops', 'stopped', 'off', 'disarmed', 'disarm', 'halted', 'paused', 'parked', 'down', 'brakes'];
-const OPPOSITE_STATE = { on: ['off', 'muted', 'mute', 'stop', 'stops', 'stopped', 'disarmed', 'disarm', 'halted', 'parked'], off: ['on', 'unmuted', 'unmute'], open: ['close', 'closed', 'shut'], closed: ['open'], shut: ['open'], muted: ['unmuted', 'unmute', 'open', 'live', 'on'], unmuted: ['muted', 'mute'], running: HALTED, moving: HALTED, going: HALTED, stopped: ['start', 'started', 'running'], armed: ['disarmed', 'disarm', 'off'], disarmed: ['arm', 'armed'] };
+const OPPOSITE_STATE = { on: ['off', 'muted', 'mute', 'stop', 'stops', 'stopped', 'disarmed', 'disarm', 'halted', 'parked'], off: ['on', 'unmuted', 'unmute', 'armed'], open: ['close', 'closed', 'shut'], closed: ['open'], shut: ['open'], muted: ['unmuted', 'unmute', 'open', 'live', 'on'], unmuted: ['muted', 'mute'], running: HALTED, moving: HALTED, going: HALTED, stopped: ['start', 'started', 'running'], armed: ['disarmed', 'disarm', 'off'], disarmed: ['arm', 'armed'] };
 const STATE = '(on|off|open|closed|shut|muted|unmuted|running|moving|going|stopped|armed|disarmed)';
 const OBJ = '(?:(?:the|my|her|his|its|a|an|all|both)\\s+)?([a-z0-9-]+(?:\\s+[a-z0-9-]+)?)';
 const KEPT = new RegExp(`\\b(?:leave|leaving|keep|keeping|with)\\s+${OBJ}\\s+${STATE}\\b`, 'g');
@@ -450,7 +456,9 @@ const ASKED = [
   [new RegExp(`\\b(?:turn|switch|power)\\s+${OBJ}\\s+(on|off)\\b`, 'g'), (m) => m[2], 1],
 ];
 const NOT_THING = /^(?:it|them|that|this|everything|all|up|down|keep|leave|stay|stays|remain|remains|is|be|been|was|get|gets|mic's)$/;
-const thingOf = (s) => { const w = words(s); const k = w.findIndex((x) => NEG_END.has(x) || STOP.has(x)); return (k < 0 ? w : w.slice(0, k)).filter((x) => x.length > 1 && !/^\d/.test(x)).pop(); };
+// A time word after the thing ends it too: "close the blinds overnight" is about the blinds, not "overnight".
+const TIME_END = /^(?:overnight|nightly|daily|weekly|tomorrow|tonight|today|later|early|late)$/;
+const thingOf = (s) => { const w = words(s); const k = w.findIndex((x) => NEG_END.has(x) || STOP.has(x) || TIME_END.test(x)); return (k < 0 ? w : w.slice(0, k)).filter((x) => x.length > 1 && !/^\d/.test(x)).pop(); };
 // "What if she goes out with the kettle on" describes what someone might do, not a state to keep: a with-state after
 // if/when + she/he/mum/they… in the same clause is skipped ("go live with the mic muted" still keeps the mic muted).
 const HYPOTHETICAL = /\b(?:if|when|whenever|unless|until|once)\s+(?:she|he|mum|mom|mother|dad|father|they|someone|somebody|anyone|nobody)\b/;
@@ -636,10 +644,20 @@ function decide(text, prompts, depth) {
 // if the kettle breaks". Failures are picked from a request's end card, so the page says how rather than running the
 // closest request clean. The failing thing must be a device of the scene (a word of its name or ref) or something,
 // anything, a device, a sensor or "it", right before the verb: "what if mum falls" or "what if she dies" is not one.
-const WHATIF_FAIL = /\bwhat\s+(?:if|happens\s+if|happens\s+when|would\s+happen\s+if)\s+((?:[a-z0-9'-]+\s+){0,4}?)(?:fail(?:s|ed)?|(?:stops?|stopped)\s+working|breaks?|broke|dies|died|crash(?:es|ed)?|malfunctions?|malfunctioned|disconnects?|disconnected|(?:cuts?|gives?|gave|conks?)\s+out|(?:is|was|goes|went|gets|got)\s+(?:broken|dead|offline|disconnected)|(?:goes|went)\s+(?:down|dark|quiet|silent)|drops?\s+(?:off|out)|dropped\s+(?:off|out))\b/;
+const WHATIF_FAIL = /\bwhat\s+(?:if|happens\s+if|happens\s+when|would\s+happen\s+if)\s+((?:[a-z0-9'-]+\s+){0,4}?)(?:fail(?:s|ed)?|(?:stops?|stopped)\s+working|breaks?|broke|dies|died|crash(?:es|ed)?|malfunctions?|malfunctioned|disconnects?|disconnected|(?:cuts?|gives?|gave|conks?)\s+out|(?:is|was|goes|went|gets|got)\s+(?:broken|dead|offline|disconnected)|(?:goes|went)\s+(?:down|dark|quiet|silent)|drops?\s+(?:off|out)|dropped\s+(?:off|out)|(?:loses?|lost)\s+(?:its\s+)?(?:power|connection|signal))\b/;
 const WHATIF_ANY = new Set(['something', 'anything', 'device', 'devices', 'it', 'one', 'sensor', 'sensors', 'thing']);
+// Asking to be told when a device fails ("tell me if the soil sensor stops working", "let me know if the kettle plug
+// isn't working", "…when the bed sensor loses power") is the same what-if: every request already flags a device that
+// stops, so the page says how to see it rather than run the closest request on the device's name. Here the failing
+// thing must end, right before the verb (has, ever, just… aside), in a device word (or something, a device, a sensor,
+// it): "tell me if the kettle's auto-off fails" is a kettle request, not the plug failing, and "…fails to read" is no
+// failure. "Goes dark" or "goes quiet" is not one either: "tell me if the hall light goes dark" is the light going off.
+const TELL_FAIL = /\b(?:tell|let|message|text|alert|warn|notify|email|ping)\s+(?:me|us)\s+(?:know\s+)?(?:if|when|whenever|once|as\s+soon\s+as)\s+((?:[a-z0-9'-]+\s+){1,5}?)(?:fail(?:s|ed)?(?!\s+to\b)|(?:stops?|stopped)\s+(?:working|responding)|breaks?(?:\s+down)?|broke|dies|died|crash(?:es|ed)?|malfunctions?|malfunctioned|disconnects?|disconnected|(?:is|was|goes|went|gets|got)\s+(?:broken|dead|offline|disconnected|faulty)|(?:isn'?t|is\s+not|wasn'?t|was\s+not)\s+(?:working|responding)|(?:doesn'?t|does\s+not|didn'?t)\s+work|(?:cuts?|gives?|gave|conks?)\s+out|drops?\s+(?:off|out)|dropped\s+(?:off|out)|(?:loses?|lost)\s+(?:its\s+)?(?:power|connection|signal))\b/;
+const TELL_AUX = /^(?:has|have|had|is|was|ever|just|suddenly|really|completely|actually|then|also)$/;
 export function asksWhatIfFails(text, devices = {}) {
-  const m = WHATIF_FAIL.exec(norm(text)); if (!m) return false;
-  const own = new Set(Object.values(devices).flatMap((d) => words(norm(`${d?.name || ''} ${d?.ref || ''}`))).filter((w) => !STOP.has(w)));
-  return words(m[1]).some((w) => WHATIF_ANY.has(w) || own.has(w) || own.has(w.replace(/s$/, '')));
+  const t = norm(text), own = new Set(Object.values(devices).flatMap((d) => words(norm(`${d?.name || ''} ${d?.ref || ''}`))).filter((w) => !STOP.has(w)));
+  const isDev = (w) => WHATIF_ANY.has(w) || own.has(w) || own.has(w.replace(/s$/, ''));
+  const m = WHATIF_FAIL.exec(t); if (m && words(m[1]).some(isDev)) return true;
+  const k = TELL_FAIL.exec(t); if (!k) return false;
+  return isDev(words(k[1]).filter((w) => !TELL_AUX.test(w)).pop() || '');
 }
