@@ -20,9 +20,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             super().log_message(fmt, *args)
 
 
+class Server(http.server.ThreadingHTTPServer):
+    request_queue_size = 128  # the default backlog of 5 refuses connections when several tabs load at once
+    daemon_threads = True
+
+
 if __name__ == '__main__':
     Handler.extensions_map.update({'.js': 'text/javascript', '.mjs': 'text/javascript'})
-    with http.server.ThreadingHTTPServer(('', PORT), Handler) as httpd:
+    with Server(('', PORT), Handler) as httpd:
         print(f'NeuCharBox demo: http://localhost:{PORT}/  (Ctrl+C to stop)')
         try:
             httpd.serve_forever()

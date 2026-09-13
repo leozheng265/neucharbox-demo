@@ -11,6 +11,8 @@
 //  6. Scene sources don't use raw store.tween(...) / setTimeout(...) inside fn steps (use ctx.tween / ctx.sleep).
 //  7. Every scene's 3D room builds in Node (fake canvas) and update() runs through every prompt without throwing.
 //  8. Typed requests route correctly: run the intended chip, refuse negations, ask when vague (test/routing.mjs).
+//  9. "Not this" on a plan (real timers): play() returns { declined: true }, nothing after the plan runs (store, chat
+//     and beats as they were when the plan showed; no end card), and the next play() runs to the end.
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
 import { matchPrompt } from '../js/engine/match.js';
@@ -111,6 +113,36 @@ for (const f of files) {
       if (player.fast) problems.push(`"${prompt.chip.slice(0, 30)}": player left in fast mode after the prompt`);
     }
     report(`${scene.id} · skip to Recover with real timers`, problems);
+  }
+  // 9. "Not this" on the plan stops the request there; the next request runs normally
+  {
+    const problems = [];
+    for (const prompt of scene.prompts.filter((p) => p.steps.some((s) => s.plan))) {
+      const tag = `"${prompt.chip.slice(0, 30)}"`;
+      const store = createStore(init); const iv = setInterval(() => store.tick(performance.now()), 4);
+      const log = [], beats = []; let atPlan = null, decline = true;
+      const chat = { ...stubChat(log), plan: () => { atPlan = { state: JSON.stringify(store.state), log: log.length, beats: beats.length }; return Promise.resolve(decline ? { approved: false, alts: {} } : { approved: true, alts: {} }); } };
+      const player = createPlayer({ store, chat, onBeat: (b) => beats.push(b), speed: 400 });
+      try {
+        await player.play(setupSteps(scene).filter((s) => !s.fn)); const base = store.snapshot();
+        const res = await player.play(prompt.steps);
+        if (!res?.declined) problems.push(`${tag}: play() did not return { declined: true }`);
+        if (!atPlan) problems.push(`${tag}: plan card never shown`);
+        else {
+          if (JSON.stringify(store.state) !== atPlan.state) problems.push(`${tag}: the room changed after "Not this"`);
+          if (log.length !== atPlan.log) problems.push(`${tag}: NCB kept talking after "Not this": ${log.slice(atPlan.log).map(([k, t]) => `${k} ${String(t).slice(0, 40)}`).join(' / ')}`);
+          if (beats.length !== atPlan.beats) problems.push(`${tag}: beats after "Not this": ${beats.slice(atPlan.beats).join(', ')}`);
+        }
+        if (log.some(([k]) => k === 'end')) problems.push(`${tag}: end card after "Not this"`);
+        store.restore(base); log.length = 0; beats.length = 0; decline = false;
+        const again = await player.play(prompt.steps);
+        if (again?.declined) problems.push(`${tag}: the next request came back declined too`);
+        if (!beats.includes('end') || !log.some(([k]) => k === 'end')) problems.push(`${tag}: the next request never reached the end card`);
+        if (player.fast) problems.push(`${tag}: player left in fast mode`);
+      } catch (e) { problems.push(`${tag} threw: ${e.message}`); }
+      clearInterval(iv);
+    }
+    report(`${scene.id} · "Not this" stops the request; the next one runs`, problems);
   }
 }
 // 8. typed-request routing
