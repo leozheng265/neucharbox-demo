@@ -302,9 +302,10 @@ export function parts(scene, M) {
   // child of each mesh instead of touching the device's own material, so scenes can keep animating emissive,
   // colour or opacity on the real materials (and shared materials never light up other objects). A mesh with
   // userData.noHighlight (a lamp shade's outer skin) gets none. focus(id, hex) pulses in that colour: main.js passes
-  // red for a fault, under its red ring; a later focus(id) is cyan again.
+  // red for a fault, under its red ring; a later focus(id) is cyan again. A pulse in another colour than cyan ends the
+  // cyan pulses still running on other devices (a move cue's), so the eye goes to the fault, not to what moved before it.
   P.highlighter = (map) => {
-    const pulse = {}; const shells = {};
+    const pulse = {}; const shells = {}; const hue = {};
     for (const [id, targets] of Object.entries(map)) {
       const mat = new THREE.MeshBasicMaterial({ color: 0x29EEE5, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
       const meshes = []; for (const t of targets) t && t.traverse((m) => { if (m.isMesh && !m.userData.isShell && !m.userData.noHighlight) meshes.push(m); });
@@ -319,7 +320,10 @@ export function parts(scene, M) {
       shells[id] = { mat, list };
     }
     return {
-      focus(id, hex = 0x29EEE5) { pulse[id] = performance.now(); shells[id]?.mat.color.setHex(hex); },
+      focus(id, hex = 0x29EEE5) {
+        if (hex !== 0x29EEE5) for (const k of Object.keys(pulse)) if (k !== id && hue[k] === 0x29EEE5) delete pulse[k];
+        pulse[id] = performance.now(); hue[id] = hex; shells[id]?.mat.color.setHex(hex);
+      },
       update() {
         const now = performance.now();
         for (const [id, sh] of Object.entries(shells)) {

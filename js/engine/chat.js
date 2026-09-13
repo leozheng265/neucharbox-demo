@@ -6,7 +6,7 @@ import { icon } from './icons.js';
 export function createChat(root, { onPromptText } = {}) {
   root.innerHTML = `
     <div class="chat-log" id="chatLog" role="log" aria-live="polite" aria-label="Conversation with NeuCharBox" tabindex="-1"></div>
-    <form class="chat-input" id="chatForm" autocomplete="off">
+    <form class="chat-input off" id="chatForm" autocomplete="off">
       <input id="chatText" type="text" placeholder="Or type what you want…" aria-label="Your request" disabled>
       <button type="submit" aria-label="Send" disabled>➤</button>
     </form>`;
@@ -22,7 +22,8 @@ export function createChat(root, { onPromptText } = {}) {
   form.addEventListener('submit', (e) => { e.preventDefault(); if (input.disabled) return; const t = input.value.trim(); if (!t) return; input.value = ''; onPromptText && onPromptText(t); });
   // Input and send button are on or off together; switching off drops any half-typed text, so it can't be sent
   // (or reappear) later. If one of them had keyboard focus, focus stays in the conversation (not back to the page top).
-  const setInput = (on) => { if (!on && form.contains(document.activeElement)) log.focus({ preventScroll: true }); input.disabled = !on; send.disabled = !on; if (!on) input.value = ''; };
+  // The form carries .off while they are: on a phone the bar then gives its height to the conversation (css/app.css).
+  const setInput = (on) => { if (!on && form.contains(document.activeElement)) log.focus({ preventScroll: true }); input.disabled = !on; send.disabled = !on; form.classList.toggle('off', !on); if (!on) input.value = ''; };
 
   const el = (html) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstElementChild; };
   // Follow new messages only while the visitor is at (or near) the bottom: reading a tall plan and pressing Edit must

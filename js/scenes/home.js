@@ -43,7 +43,8 @@ export default {
   devices: {
     // Tile follows the brightness, like the room does: a lamp faded to 0 reads "off" before its on flag drops.
     lamp:       { icon: 'lamp', name: 'Floor lamp', ref: 'the floor lamp', initial: { on: false, brightness: 0 }, format: (s) => (s.brightness > 0.02 ? `on · ${Math.round(s.brightness * 100)}%` : 'off'), active: (s) => s.brightness > 0.02, faultText: 'off the network' },
-    blinds:     { icon: 'blinds', name: 'Blinds', ref: 'the blinds controller', initial: { closed: 0, flat: false, jammed: false }, format: (s) => `${Math.round(s.closed * 100)}% closed`, faultText: 'controller offline' },
+    // Blinds read "open" and "closed" at the ends of their travel, not "0% closed" and "100% closed".
+    blinds:     { icon: 'blinds', name: 'Blinds', ref: 'the blinds controller', initial: { closed: 0, flat: false, jammed: false }, format: (s) => (s.closed < 0.005 ? 'open' : s.closed > 0.995 ? 'closed' : `${Math.round(s.closed * 100)}% closed`), faultText: 'controller offline' },
     soil:       { icon: 'moisture', name: 'Soil sensor', ref: 'the soil sensor', initial: { moisture: SOIL_START, probeOut: false }, format: (s) => `${s.moisture.toFixed(0)}% moisture`, faultText: `last reading ${SOIL_START}%` },
     pump:       { icon: 'pump', name: 'Water pump', ref: 'the water pump', initial: { running: false, blocked: false }, format: (s) => (s.running ? 'running' : 'idle'), faultText: 'controller offline' },
     camera:     { icon: 'camera', name: 'Door camera', ref: 'the door camera', initial: { armed: false, motion: false, off: false }, format: (s) => (s.off ? 'off' : s.armed ? (s.motion ? 'motion at door' : 'armed · no motion') : 'standby'), faultText: 'missed its check-ins' },
@@ -350,7 +351,7 @@ export default {
       // saying what changed, what NCB couldn't see, and the one thing a person has to do.
       whatIf: {
         // Never takes the away set point: it may hold its last setting, or have lost power. NCB can't tell which.
-        thermostat: { at: 'start', intro: 'Replaying this request. This time the thermostat stops answering just as the away plan starts.', steps: [
+        thermostat: { at: 'start', intro: 'Replaying this request. This time, the thermostat stops answering just as the away plan starts.', steps: [
           { status: (st) => `Friday 17:40 · Thermostat → ${setPoint(st)}°C` },
           { tween: 'env.hour', to: 17.67, ms: 1500 },
           { fail: 'thermostat', faultText: 'no reply since 17:40', title: '⚠ Thermostat not answering', say: '17:40 — the thermostat didn\'t take the new set point: three tries, no reply. The last thing it told me was 21°C set, 21.4°C in the room.' },
@@ -366,7 +367,7 @@ export default {
           { end: { headline: 'The away setting never landed.', body: 'The thermostat never took the away setting. NeuCharBox said what that could mean, said it couldn\'t check which, and ran the rest of the plan without it.' } },
         ] },
         // The lamp's plug drops off the network at dusk. Nothing in this room measures light, so NCB treats it as off.
-        lamp: { at: 'evening', intro: 'Replaying this request. This time the floor lamp doesn\'t come on in the evening.', steps: [
+        lamp: { at: 'evening', intro: 'Replaying this request. This time, the floor lamp doesn\'t come on in the evening.', steps: [
           { status: (st) => (st.get('plan.lampFixed') ? 'Friday 19:00 · Lamp → 70%' : 'Friday 18:35 · Lamp → 70%, blinds → closing') },
           { fn: ({ store, tween }) => (store.get('plan.lampFixed') ? tween('env.hour', 19.1, 1200) : Promise.all([tween('blinds.closed', 1, 3000), tween('env.hour', 18.75, 3000)])) },
           { fail: 'lamp', faultText: 'no reply to "on"', title: '⚠ Lamp not answering', say: 'The floor lamp didn\'t answer "on", three times over. I can\'t tell whether it came on, so I\'m treating it as off.' },
@@ -380,7 +381,7 @@ export default {
           { end: { headline: 'The lamp stayed dark. You knew at dusk.', body: 'The floor lamp stopped answering at dusk. NeuCharBox couldn\'t fake a light it didn\'t have, so it told you the house would likely look dark and kept everything else running.' } },
         ] },
         // Something catches in the cord or track and the motor stalls while opening. Same policy as p2's evening stall.
-        blinds: { at: 'morning', ask: 'What if the blinds fail?', intro: 'Replaying this request. This time the blinds jam as they open on Saturday morning.', steps: [
+        blinds: { at: 'morning', ask: 'What if the blinds fail?', intro: 'Replaying this request. This time, the blinds jam as they open on Saturday morning.', steps: [
           { status: 'Saturday 08:00 · Blinds → open' },
           { tween: 'blinds.closed', to: 0.7, ms: 1200 },
           { set: 'blinds.jammed', to: true }, // caught in the cord or track: the stall look
@@ -398,7 +399,7 @@ export default {
         ] },
         // The probe works loose and tips out of the pot: it reads the air, a few percent. p1's soil story goes silent;
         // this one lies. soil.moisture is the soil itself, never the sensor's claim, so it is never set to 4.
-        soil: { at: 'watering', intro: 'Replaying this request. This time the soil sensor starts reporting a number that can\'t be right.', steps: [
+        soil: { at: 'watering', intro: 'Replaying this request. This time, the soil sensor starts reporting a number that can\'t be right.', steps: [
           { status: 'Saturday 14:20 · soil 29%' },
           { wait: 1400 },
           { set: 'soil.probeOut', to: true }, // the probe tips out and leans on the pot: loose, not broken
@@ -416,7 +417,7 @@ export default {
         ] },
         // The pump stops answering mid-watering. A controller that goes silent while commanded on may still be running,
         // so NCB checks the soil four minutes later before it says the pump stopped (water shows within about 10 s).
-        pump: { at: 'pumping', intro: 'Replaying this request. This time the water pump stops answering in the middle of a watering.', steps: [
+        pump: { at: 'pumping', intro: 'Replaying this request. This time, the water pump stops answering in the middle of a watering.', steps: [
           { status: 'Saturday 14:20 · watering, 40 s' },
           { wait: 1200 },
           { fail: 'pump', faultText: 'went silent mid-watering', title: '⚠ Pump not answering', say: 'The pump stopped answering six seconds into a 40-second watering.' },
@@ -441,7 +442,7 @@ export default {
           { end: { headline: 'The pump went quiet. The soil kept watch.', body: 'The pump stopped answering mid-watering. NeuCharBox didn\'t keep poking it, slowed the drying with the blinds, watched the soil all week, and messaged you when it ran low.' } },
         ] },
         // The door camera stops checking in on Tuesday. NCB tells you that day, and won't turn "no alerts" into "nobody came".
-        camera: { at: 'midweek', intro: 'Replaying this request. This time the door camera stops checking in, in the middle of the week.', steps: [
+        camera: { at: 'midweek', intro: 'Replaying this request. This time, the door camera stops checking in partway through the week.', steps: [
           { status: 'Tuesday 13:10' },
           { set: 'env.hour', to: 108.9 }, // Tuesday 12:54: daylight, like Saturday 14:21, so no night flash on the jump
           { parallel: [{ tween: 'env.hour', to: 109.17, ms: 1500 }, { tween: 'soil.moisture', to: 38, ms: 1500 }] },
@@ -461,7 +462,7 @@ export default {
         // Special: a 42-minute power cut overnight, NeuCharBox included. Devices come back in their own defaults, not the
         // plan's: the lamp's plug switches on, the camera comes back unarmed. NCB checks the water first, then every
         // device, and says what it can't know about the gap. Nothing ends in fault ('offline' mid-run doesn't ping, A5).
-        powerCut: { label: 'The power goes out overnight', ask: 'What if the power goes out overnight?', at: 'night', intro: 'Replaying this request. This time the power goes out on Friday night, and NeuCharBox goes down with it.', steps: [
+        powerCut: { label: 'The power goes out overnight', ask: 'What if the power goes out overnight?', at: 'night', intro: 'Replaying this request. This time, the power goes out on Friday night, and NeuCharBox goes down with it.', steps: [
           { status: 'Saturday 02:10' },
           { tween: 'env.hour', to: 26.17, ms: 1500 },
           { status: 'Saturday 02:10 · power cut · NeuCharBox is off too' },
@@ -501,8 +502,17 @@ export default {
       // forms): "water my plants while I'm on holiday" outscores the whole-house prompt, "I'm on holiday" alone doesn't.
       keywords: ['plants', 'alive', 'water', 'watering', 'plant', 'soil', 'dry', 'away', 'holidays', 'vacations', 'travel', 'weekly', 'sundays'],
       // Not the lamp, camera or heating: "water the plants and turn on the lamp" gets the chips back. ('lamps' also
-      // catches "lamp", 'lights' "light", but not "water them lightly".)
-      rulesOut: [...NOT_HERE, 'lamps', 'lights', 'lighting', 'cameras', 'cam', 'thermostat', 'heating', 'heater'],
+      // catches "lamp", 'lights' "light", but not "water them lightly".) No blinds at night either: they are open outside
+      // 13:00–17:00, so "water the plants and close the blinds at night" (overnight, at dusk, when it gets dark…) gets
+      // the chips back too, and so does "water the plants every evening" (it waters by the soil, not the clock). Those
+      // are phrases (js/engine/match.js): "I'm away for a few nights", "over the holidays", "a dark corner" and "the
+      // evenings are warm" say nothing against this plan.
+      rulesOut: [...NOT_HERE, 'lamps', 'lights', 'lighting', 'cameras', 'cam', 'thermostat', 'heating', 'heater',
+        ...['night', 'nights', 'overnight', 'evening', 'evenings', 'dusk', 'sunset', 'sundown', 'dark', 'bedtime'].flatMap((w) => [`blinds ${w}`, `${w} blinds`]),
+        'every night', 'every evening', 'each night', 'each evening'],
+      // The heating stays on, at its own setting: "…and keep the heating off" asks back (js/engine/match.js conflict()),
+      // while "…and keep the lights off" runs, as the lamp starts off and this plan never switches it on.
+      touches: ['Heating stays on at its current setting'],
       expect: { 'soil.status': 'online', 'pump.status': 'online', 'pump.running': false, 'blinds.closed': 0.5 },
       genericAt: 'shade', // a device this request doesn't use fails on Saturday, between the first watering and the first shade
       steps: [
@@ -547,7 +557,7 @@ export default {
       whatIf: {
         // A kinked or clogged hose: the pump runs and says so, but no water reaches the pot. NCB believes the sensor over
         // the pump and stops it (p0's pump story goes silent; this one says it's working and isn't).
-        pump: { at: 'watering', intro: 'Replaying this request. This time the pump runs, but no water reaches the plant.', steps: [
+        pump: { at: 'watering', intro: 'Replaying this request. This time, the pump runs, but no water reaches the plant.', steps: [
           { status: (st) => `${st.get('plan.timed') ? 'Saturday 08:00' : 'Saturday 11:20'} · Pump → running · 40 s` },
           { set: 'pump.blocked', to: true }, // the motor turns, no drops at the hose mouth
           { set: 'pump.status', to: 'busy' }, { set: 'pump.running', to: true },
@@ -573,7 +583,7 @@ export default {
         ] },
         // The battery runs flat mid-move, after one low-battery warning as the motor started: the slats stop even (nothing
         // is jammed) and the headrail LED goes dark. No retries: each one drains what's left.
-        blinds: { at: 'shade', ask: 'What if the blinds fail?', intro: 'Replaying this request. This time the blinds\' battery runs out as they close for the afternoon.', steps: [
+        blinds: { at: 'shade', ask: 'What if the blinds fail?', intro: 'Replaying this request. This time, the blinds\' battery runs out as they close for the afternoon.', steps: [
           { status: 'Saturday 13:00 · Blinds → 50%' },
           { parallel: [{ tween: 'env.hour', to: 37, ms: 1500 }, { tween: 'blinds.closed', to: 0.2, ms: 1500 }, { tween: 'soil.moisture', to: 40, ms: 1500 }] },
           { set: 'blinds.flat', to: true }, // stopped where the battery gave out: slats even, not jammed
@@ -589,7 +599,7 @@ export default {
         ] },
         // The soil sensor goes quiet on Sunday morning (a battery or a crash, no visible cause): a fixed schedule, and no
         // more claims that the water landed. The room shows the soil taking the 08:00 water, which the sensor can't report.
-        soil: { at: 'sunday', intro: 'Replaying this request. This time the soil sensor goes quiet on Sunday morning.', steps: [
+        soil: { at: 'sunday', intro: 'Replaying this request. This time, the soil sensor goes quiet on Sunday morning.', steps: [
           { status: 'Sunday 07:10 · soil 33%' },
           { wait: 1200 },
           { fail: 'soil', faultText: 'no reading since 07:10', title: '⚠ Soil sensor quiet', say: 'The soil sensor stopped reporting at 07:10. Last reading: 33%.' },
@@ -597,7 +607,7 @@ export default {
           { say: 'Without the sensor I can\'t see the soil, so I won\'t pretend to. Here\'s what that means:' },
           replanWith((store) => (store.get('plan.timed')
             ? { intro: 'Your 08:00 schedule carries on:', changes: ['The 40-second watering at 08:00 stays — it never depended on the sensor', 'What I lose is the check: I can\'t confirm the water lands, or warn you below 20%', 'Blinds stay half-closed in the afternoons', 'Sensor is polled every 10 minutes; I\'ll tell you the moment it\'s back'], needsYou: 'The sensor may need a new battery or a restart. Check it when you\'re home.' }
-            : { intro: 'Switched to a conservative schedule:', changes: ['One 30-second watering per day at 08:00: a small dose, enough for most pots and not enough to drown one', 'Blinds stay half-closed in the afternoons', 'Sensor is polled every 10 minutes; the moment it\'s back I return to moisture-based watering'], needsYou: 'The sensor may need a new battery or a restart. Check it when you\'re home.' })),
+            : { intro: 'Switched to a conservative schedule:', changes: ['One small 30-second watering each day at 08:00, enough for most pots and not enough to drown one', 'Blinds stay half-closed in the afternoons', 'Sensor is polled every 10 minutes; the moment it\'s back I return to moisture-based watering'], needsYou: 'The sensor may need a new battery or a restart. Check it when you\'re home.' })),
           { status: 'Sunday 08:00' },
           { tween: 'env.hour', to: 56, ms: 1200 },
           { fn: (c) => say(c, c.store.get('plan.timed') ? '08:00 — your scheduled 40 seconds.' : '08:00 — the conservative schedule: 30 seconds, the small daily dose, not a response to a reading.') },
@@ -615,6 +625,7 @@ export default {
       chip: 'Make it look like someone\'s home in the evenings.',
       keywords: ['look', 'someone', 'home', 'evenings', 'evening', 'lived', 'occupied', 'burglar', 'security', 'lights'],
       rulesOut: [...NOT_HERE, 'mornings', 'afternoons', 'daytime', 'thermostat', 'heating', 'heater'], // the plan runs 18:20–23:20
+      touches: ['Heating stays on at its current setting'], // "…and keep the heating off" asks back, as for the plant-only plan
       expect: { 'lamp.on': false, 'lamp.brightness': 0, 'blinds.closed': 1, 'blinds.status': 'online', 'camera.status': 'online' },
       genericAt: 'evening', // a device this request doesn't use fails mid-evening, with the lamp and blinds doing their job
       steps: [
@@ -656,14 +667,14 @@ export default {
       whatIf: {
         // The blinds stall at 40% while closing. NCB stops driving the motor and keeps the lamp at 75%: behind a
         // half-open blind at night, a brighter lamp would only show passers-by more of an empty room.
-        blinds: { at: 'blinds', ask: 'What if the blinds fail?', intro: 'Replaying this request. This time the blinds stall as they close for the evening.', steps: [
+        blinds: { at: 'blinds', ask: 'What if the blinds fail?', intro: 'Replaying this request. This time, the blinds stall as they close for the evening.', steps: [
           { status: 'Friday 18:42 · Blinds → closing' },
           { parallel: [{ tween: 'blinds.closed', to: 0.4, ms: 1600 }, { tween: 'env.hour', to: 18.75, ms: 1600 }] },
           { set: 'blinds.jammed', to: true }, // caught in the track: the stall look
-          { fail: 'blinds', faultText: 'stalled at 40% closed', title: '⚠ Blinds stalled', say: 'The blinds stopped at 40% and the motor reports a stall.' },
+          { fail: 'blinds', faultText: 'stalled at 40% closed', title: '⚠ Blinds stalled', say: 'The blinds stopped at 40% closed, and the motor reports a stall.' },
           { wait: 1500 },
           { say: 'I\'ve stopped driving the motor — forcing stalled blinds is how you break them. Re-planned:' },
-          replanWith((store) => ({ intro: 'Presence without the blinds:', changes: ['Lamp schedule continues at 75%: brighter would only show more of the room through the gap', store.get('plan.noCam') ? 'Camera stays off, as you chose' : 'Camera stays armed', 'Blinds left at 40%; one gentle retry at 08:00, then I leave them alone'], needsYou: 'Something is probably caught in the blinds\' track. Check it when you\'re back.' })),
+          replanWith((store) => ({ intro: 'Presence without the blinds:', changes: ['Lamp schedule continues at 75%: brighter would only show more of the room through the gap', store.get('plan.noCam') ? 'Door camera stays off, as you chose' : 'Door camera stays armed', 'Blinds left at 40% closed; one gentle retry at 08:00, then I leave them alone'], needsYou: 'Something is probably caught in the blinds\' track. Check it when you\'re back.' })),
           { wait: 800 },
           { status: 'Friday 23:05' },
           { tween: 'env.hour', to: 23.08, ms: 2000 },
@@ -676,15 +687,15 @@ export default {
         ] },
         // The camera falls off the network at 21:30. Armed (default), it is the only thing that tells you about someone at
         // the door; switched off (Edit), it still checks in every few minutes (LED dark), which is how NCB notices it went.
-        camera: { at: 'evening', intro: 'Replaying this request. This time the door camera stops checking in during the evening.', steps: [
+        camera: { at: 'evening', intro: 'Replaying this request. This time, the door camera stops checking in during the evening.', steps: [
           { status: 'Friday 21:30' },
           { wait: 1200 },
           { fail: 'camera', faultText: 'no check-in since 21:30' }, // the alert follows from an fn: its words depend on the Edit
-          alertWith((st) => (st.get('plan.noCam') ? '21:30 — the door camera stopped its check-ins. Its camera was off, as you chose, but the device still checked in every few minutes.' : '21:30 — the door camera stopped answering its check-ins.'), '⚠ Door camera not answering'),
+          alertWith((st) => (st.get('plan.noCam') ? '21:30 — the door camera stopped its check-ins. Its camera was off, as you chose, but the unit itself had kept checking in every few minutes until now.' : '21:30 — the door camera stopped answering its check-ins.'), '⚠ Door camera not answering'),
           { wait: 1500 },
           sayWith((st) => (st.get('plan.noCam') ? 'Nothing in tonight\'s plan changes. I\'m telling you because it\'s on your front door, and you may want it working when you\'re back.' : 'So right now nothing is watching the door, and you\'d hear nothing about a visitor. The lamp and blinds don\'t depend on it, so the evening goes on as planned.')),
           replanWith((st) => ({ intro: 'Evening plan, without the door camera:', changes: st.get('plan.noCam')
-            ? ['Door camera: off as you chose, and now not answering at all', 'When it\'s back I\'ll leave it off; that was your choice', 'Lamp off at a different minute each night; blinds open at 08:00']
+            ? ['Door camera: off, as you chose, and now not answering at all', 'When it\'s back I\'ll leave it off; that was your choice', 'Lamp off at a different minute each night; blinds open at 08:00']
             : ['Door camera: not answering since 21:30', 'I won\'t say "all quiet at the door" while it\'s down', 'Lamp off at a different minute each night; blinds open at 08:00', 'I\'ll check for it every 10 minutes'],
           needsYou: st.get('plan.noCam') ? 'Nothing urgent. Check the camera\'s power when you\'re home.' : 'It may only need restarting: switch it off and on at its power when you\'re back.' })),
           { status: 'Friday 23:05' },
@@ -698,7 +709,7 @@ export default {
         ] },
         // The lamp's plug drops off the network while on, so it stays lit. Nothing in the room measures light, so NCB goes
         // by the last report (on, 75%) and assumes it's still lit (p0's lamp story is the opposite: dark when it should be lit).
-        lamp: { at: 'lampOff', intro: 'Replaying this request. This time the floor lamp won\'t switch off at night.', steps: [
+        lamp: { at: 'lampOff', intro: 'Replaying this request. This time, the floor lamp won\'t switch off at night.', steps: [
           { status: 'Friday 23:05 · Lamp → off' },
           { wait: 1200 },
           { fail: 'lamp', faultText: 'no reply · last seen on', title: '⚠ Lamp won\'t switch off', say: '23:05 — the floor lamp didn\'t answer "off", and its plug has gone quiet. Its last report was on at 75%, so I have to assume it\'s still lit.' },
@@ -761,7 +772,7 @@ export default {
       // request; the heating special's ask may name the blinds, A6).
       whatIf: {
         // Silent from 03:15. The story keeps the promise its own re-plan makes: still silent at 07:00, NCB messages again.
-        thermostat: { at: 'overnight', intro: 'Replaying this request. This time the thermostat stops responding in the middle of the night.', steps: [
+        thermostat: { at: 'overnight', intro: 'Replaying this request. This time, the thermostat stops responding in the middle of the night.', steps: [
           { status: 'Sunday 03:15 · 18.9°C' },
           { wait: 1200 },
           { fail: 'thermostat', faultText: 'no reply since 03:15', title: '⚠ Thermostat not answering', say: 'Sunday 03:15 — the thermostat stopped responding. Last reading 18.9°C.' },
@@ -777,7 +788,7 @@ export default {
           { end: { headline: 'It told you what it couldn\'t verify.', body: 'A quiet device isn\'t a working device. NeuCharBox separates "I did it" from "I checked it" — and says which one it is.' } },
         ] },
         // Motion, then silence: the camera drops off mid-upload. NCB passes on only what it knows.
-        camera: { at: 'visit', intro: 'Replaying this request. This time the door camera drops off in the middle of a visit.', steps: [
+        camera: { at: 'visit', intro: 'Replaying this request. This time, the door camera drops off in the middle of a visit.', steps: [
           { status: 'Saturday 14:02' },
           { wait: 900 },
           { set: 'camera.motion', to: true, label: 'Motion at the door' },
@@ -794,16 +805,17 @@ export default {
         // Special: every device answers, but the room keeps cooling (a boiler that stopped or lost pressure, or a failed
         // link from the thermostat to it: none of it connected). NCB goes by the temperature, messages at the 2° line
         // the plan set, and asks before touching the blinds, which this request left out.
-        heatingLags: { label: 'The heating can\'t keep up', ask: 'What if the heating can\'t keep up?', at: 'overnight', intro: 'Replaying this request. This time the thermostat keeps answering, but the room keeps getting colder.', steps: [
+        heatingLags: { label: 'The heating can\'t keep up', ask: 'What if the heating can\'t keep up?', at: 'overnight', intro: 'Replaying this request. This time, the thermostat keeps answering, but the room keeps getting colder.', steps: [
           { status: 'Sunday 03:15 · 18.9°C · thermostat calling for heat' },
           { wait: 1200 },
-          { status: 'Sunday 05:20' },
-          { parallel: [{ tween: 'env.hour', to: 53.33, ms: 2500 }, { tween: 'thermostat.current', to: 17.6, ms: 2500 }] },
-          { say: '05:20 — 17.6°C and still falling. The thermostat is answering and asking for heat at 19°C, but the room has lost 1.3° in two hours.' },
-          { status: 'Sunday 06:10 · 16.9°C' },
-          { parallel: [{ tween: 'env.hour', to: 54.17, ms: 1500 }, { tween: 'thermostat.current', to: 16.9, ms: 1500 }] },
+          // Before dawn, so the offer below (blinds closed to keep the heat in) is made in a dark room, not in the sunrise.
+          { status: 'Sunday 04:00' },
+          { parallel: [{ tween: 'env.hour', to: 52, ms: 2500 }, { tween: 'thermostat.current', to: 17.8, ms: 2500 }] },
+          { say: '04:00 — 17.8°C and still falling. The thermostat is answering and asking for heat at 19°C, but the room has lost 1.1° in 45 minutes.' },
+          { status: 'Sunday 04:30 · 16.9°C' },
+          { parallel: [{ tween: 'env.hour', to: 52.5, ms: 1500 }, { tween: 'thermostat.current', to: 16.9, ms: 1500 }] },
           { set: 'thermostat.cold', to: true }, // the room marks the 2° line: an amber ping and glow at the thermostat
-          alertWith(() => '06:10 — 16.9°C: more than 2° under the 19°C you asked me to hold. I\'ve messaged you, as the plan says.', '⚠ Room 2.1° below target'),
+          alertWith(() => '04:30 — 16.9°C: more than 2° under the 19°C you asked me to hold. I\'ve messaged you, as the plan says.', '⚠ Room 2.1° below target'),
           { wait: 900 },
           { say: 'The thermostat is asking for heat, but the heat isn\'t arriving. The boiler may have stopped or lost pressure, or the thermostat\'s link to it may have failed.' },
           { say: 'None of that is connected to me, so I can\'t see which. Turning the set point up wouldn\'t help.' },

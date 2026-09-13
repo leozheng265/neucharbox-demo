@@ -21,14 +21,17 @@
 //                 { beat } steps: runWhatIf() puts { beat: 'recover' } before them. It updates the status line (a status
 //                 step, a label, ctx.status or a fail) before NCB first speaks, so "Replaying this request…" goes then.
 //     alsoFaults  other device ids the scenario may leave in 'fault' (tests)
+//     show        device ids whose tiles the phone strip brings into view when the scenario starts (optional; for a
+//                 special that changes no tile, so the strip isn't left on the first tiles while NCB talks about others)
 // A device with no entry gets the engine-generated scenario below (the tests check it really is unused).
 //
-// runWhatIf(): the visitor's bubble and NCB's intro; host.freshRoom() and the status "Replaying this request…"; the
-// prompt's steps again, quiet and instant, answered with the visitor's recorded choices, up to the failPoint (at once,
-// so no frame shows the room right after setup), then a short hold; the Recover beat and the scenario at normal
-// speed. host.quiet(true) spans the replay (scenes read it through the `quiet` flag of build(), A2);
-// host.clearMarkers() runs right after it. If the visitor answers a plan card in the scenario with "Not this", nothing
-// more of it runs: NCB says so and the engine's own end card closes the what-if.
+// runWhatIf(): the visitor's bubble; host.freshRoom() and the status "Replaying this request…"; the prompt's steps
+// again, quiet and instant, answered with the visitor's recorded choices, up to the failPoint (at once, so no frame
+// shows the room right after setup, and the last what-if's fault is gone as soon as the visitor asks); NCB's intro and a
+// short hold in the replayed room; the Recover beat and the scenario at normal speed. host.quiet(true) spans the replay
+// and the intro (scenes read it through the `quiet` flag of build(), A2); host.clearMarkers() runs right after them.
+// If the visitor answers a plan card in the scenario with "Not this", nothing more of it runs: NCB says so and the
+// engine's own end card closes the what-if.
 
 export const REPLAYING = 'Replaying this request…';
 export const GENERIC_HEADLINE = 'It knew what mattered.';
@@ -94,41 +97,45 @@ export function scenarioOf(scene, prompt, key) {
   if (dev) {
     const ref = refOf(scene, key), fails = scene.devices[key].plural ? 'fail' : 'fails';
     const base = { key, kind: 'device', ask: wi?.ask || `What if ${ref} ${fails}?`, intro: wi?.intro || `Replaying this request. This time, ${ref} ${fails} during the run.` };
-    if (wi) return { ...base, authored: true, at: atOf(wi.at), steps: wi.steps || [], alsoFaults: wi.alsoFaults || [] };
-    return { ...base, authored: false, at: atOf(prompt.genericAt), ...genericScenario(scene, key, prompt), alsoFaults: [] };
+    if (wi) return { ...base, authored: true, at: atOf(wi.at), steps: wi.steps || [], alsoFaults: wi.alsoFaults || [], show: wi.show || [] };
+    return { ...base, authored: false, at: atOf(prompt.genericAt), ...genericScenario(scene, key, prompt), alsoFaults: [], show: [] };
   }
   if (!wi) return null;
   const label = wi.label || key;
-  return { key, kind: 'special', authored: true, label, ask: wi.ask || `What if ${lcFirst(label)}?`, intro: wi.intro || `Replaying this request. This time: ${lcFirst(label)}.`, at: atOf(wi.at), steps: wi.steps || [], alsoFaults: wi.alsoFaults || [] };
+  return { key, kind: 'special', authored: true, label, ask: wi.ask || `What if ${lcFirst(label)}?`, intro: wi.intro || `Replaying this request. This time: ${lcFirst(label)}.`, at: atOf(wi.at), steps: wi.steps || [], alsoFaults: wi.alsoFaults || [], show: wi.show || [] };
 }
 
 // One what-if run with `player` (one play at a time). `choices`: the visitor's last clean run of this prompt
-// (play().choices). host = { alive(), quiet(on), freshRoom(), status(text), clearMarkers() }; every hook is optional.
+// (play().choices). host = { alive(), quiet(on), freshRoom(), status(text), clearMarkers(), show(ids) }; every hook is
+// optional.
 // Resolves { scenario, replay } (replay: the quiet play's result, stopped: true when it reached the failPoint; declined:
 // true when the visitor said "Not this" to a plan card of the scenario), or { aborted: true } when host.alive() turns
 // false (the visitor left the scene).
 export async function runWhatIf({ player, scene, prompt, key, choices = [], host = {} }) {
   const sc = scenarioOf(scene, prompt, key);
   if (!sc) throw new Error(`No what-if "${key}" for "${String(prompt?.chip).slice(0, 40)}"`);
-  const h = { alive: () => true, quiet() {}, freshRoom() {}, status() {}, clearMarkers() {}, ...host };
+  const h = { alive: () => true, quiet() {}, freshRoom() {}, status() {}, clearMarkers() {}, show() {}, ...host };
   const stops = (s) => isFailPoint(s) && s.failPoint === sc.at;
   const res = { scenario: sc, replay: null };
   const gone = () => { if (h.alive()) return false; h.quiet(false); res.aborted = true; return true; };
 
-  // 1. The visitor asks; NCB says it will replay the request and what fails this time.
-  await player.play([{ beat: 'run' }, { user: sc.ask }, { say: sc.intro }]);
+  // 1. The visitor asks.
+  await player.play([{ beat: 'run' }, { user: sc.ask }]);
   if (gone()) return res;
   // 2. The room right after setup, then the request again, quiet and instant, with the visitor's own answers, up to
   //    the failure point. The replay settles in microtasks, straight after freshRoom(), so no frame shows the room
-  //    right after setup (a daylight flash before a night-time failure); then a hold, so "Replaying this request…" and
-  //    the replayed room both read.
+  //    right after setup (a daylight flash before a night-time failure), and the previous what-if's fault (its red
+  //    tile, status line and room) goes the moment the visitor asks, not seconds later.
   h.quiet(true); h.freshRoom(); h.status(REPLAYING);
   res.replay = await player.play(prompt.steps, { quiet: true, replay: choices, until: stops, carry: true });
   if (gone()) return res;
-  await player.play([{ wait: 1100 }], { carry: true });
+  // 3. NCB says it replays the request and what fails this time, then a hold, so "Replaying this request…" and the
+  //    replayed room both read.
+  await player.play([{ say: sc.intro }, { wait: 1100 }], { carry: true });
   if (gone()) return res;
   h.clearMarkers(); h.quiet(false);
-  // 3. The failure, at normal speed. "Not this" on a plan card of the scenario stops it there (the player runs nothing
+  if (sc.show.length) h.show(sc.show);
+  // 4. The failure, at normal speed. "Not this" on a plan card of the scenario stops it there (the player runs nothing
   //    after a declined plan): NCB says so, and the engine's end card closes the what-if, so the visitor can go on.
   if (sc.authored) {
     const r = await player.play([{ beat: 'recover' }, ...sc.steps], { carry: true });

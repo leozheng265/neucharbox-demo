@@ -7,8 +7,8 @@
 //            its phase does nothing, except an end-card button pressed while that request's last steps still run (after
 //            its { end }): it acts as soon as they have.
 //   running  the request running, or that ran last: { prompt, whatIf } (null while the chips are up, or after a bug)
-//   quiet()  true while a what-if replays the request quietly (A2): main.js hands it to scene.build({ quiet }), and no
-//            ping, tile pop or status line comes from store writes meanwhile.
+//   quiet()  true while a what-if replays the request quietly and NCB introduces it in the replayed room (A2): main.js
+//            hands it to scene.build({ quiet }), and no ping, tile pop or status line comes from store writes meanwhile.
 // ui (every hook optional): alive() (false once the visitor left the scene), beats({ current, recoverHidden,
 // skippable }) (the beat bar: the current beat, whether Recover shows, the beats a skip may target), status(text,
 // bad), ping(id, text, opts), unping(id, kind), focus(id, hex), pop(id) (the dashboard tile), track(on), rewind() and
@@ -145,9 +145,9 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
       specials,
     }, (key) => whatIf(prompt, key));
   }
-  // A what-if: the visitor's bubble, NCB's intro, the room back to right after setup (and the dashboard strip back to
-  // its first tile, as for a new request), the request replayed quietly with the visitor's recorded choices up to the
-  // failure point, then the Recover beat and the scenario. At its end card the strip shows the device(s) left in fault
+  // A what-if: the visitor's bubble, the room back to right after setup (and the dashboard strip back to its first
+  // tile, as for a new request), the request replayed quietly with the visitor's recorded choices up to the failure
+  // point, NCB's intro, then the Recover beat and the scenario. At its end card the strip shows the device(s) left in fault
   // (the picked one first), not whatever the scenario changed last.
   async function whatIf(prompt, key) {
     const choices = lastChoices.get(prompt);
@@ -161,6 +161,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
         freshRoom: () => { if (baseline) freshRoom(); dirty = true; u.rewind(); },
         status: (text) => setStatus(text),
         clearMarkers: () => u.clearMarkers(),
+        show: (list) => u.show(list), // a scenario's `show`: the tiles its story is about, on a phone's strip
       } });
       u.track(false);
       const bad = [...new Set([key, ...ids])].filter((id) => scene.devices[id] && store.state[id]?.status === 'fault');

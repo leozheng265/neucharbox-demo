@@ -257,16 +257,17 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
   }
   function dropMarker(m) { for (const o of [m.ring, m.dot, m.label]) { if (!o) continue; scene.remove(o); o.material.map?.dispose(); o.material.dispose(); } }
   // A ring and label at a device; `kind` names what it says ('fault'), so unping(id, kind) can take back just that one.
+  // `ring: false` leaves out the growing ring (a calm relabel beside another device's fault ring): label and dot only.
   // A device its wall hides right now still gets its marker: it shows if the device comes back into view while it lasts.
-  function ping(id, text, { color = '#29EEE5', hex = 0x29EEE5, hold = 2600, kind = '' } = {}) {
+  function ping(id, text, { color = '#29EEE5', hex = 0x29EEE5, hold = 2600, kind = '', ring: withRing = true } = {}) {
     if (!pickables.some((q) => q.id === id)) return;
     const a = anchorOf(id);
     unping(id); // one marker per device
     const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, side: THREE.DoubleSide })); ring.renderOrder = 998; ring.userData.noAO = true; scene.add(ring);
     const dot = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({ color: hex, depthTest: false })); dot.renderOrder = 998; dot.userData.noAO = true; scene.add(dot);
     const label = text ? labelSprite(text, color) : null; if (label) scene.add(label);
-    if (a) { ring.position.set(a.x, a.y + 0.02, a.z); dot.position.copy(a); } else { ring.visible = dot.visible = false; if (label) label.visible = false; }
-    markers.push({ id, ring, dot, label, kind, t0: performance.now(), hold });
+    if (a) { ring.position.set(a.x, a.y + 0.02, a.z); dot.position.copy(a); ring.visible = withRing; } else { ring.visible = dot.visible = false; if (label) label.visible = false; }
+    markers.push({ id, ring, dot, label, kind, t0: performance.now(), hold, withRing });
   }
   function unping(id, kind) { for (let i = markers.length - 1; i >= 0; i--) if (markers[i].id === id && (!kind || markers[i].kind === kind)) { dropMarker(markers[i]); markers.splice(i, 1); } }
   const MARGIN_PX = 6, RING_MAX = 0.2, DOT_D = 0.07; // DOT_D: the dot's diameter in metres (dotGeo)
@@ -277,7 +278,7 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
     const placed = []; // screen rects of labels already laid out this frame (oldest first), so newer ones step aside
     for (let i = 0; i < markers.length; i++) {
       const m = markers[i]; const age = (now - m.t0) / 1000; const k = (age % 1.1) / 1.1;
-      const a = anchorOf(m.id); m.ring.visible = m.dot.visible = !!a; if (m.label) m.label.visible = !!a;
+      const a = anchorOf(m.id); m.dot.visible = !!a; m.ring.visible = !!a && m.withRing !== false; if (m.label) m.label.visible = !!a;
       if (!a) continue; // its device is hidden (a wall part seen from outside): nothing to point at, and no label slot taken
       m.dot.position.copy(a); m.ring.position.set(a.x, a.y + 0.02, a.z); // follow moving devices
       // Sprite and ring size on screen follow view-space depth (not straight-line distance), so scale from depth.
@@ -300,9 +301,13 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
           const top = Math.min(ch / 2, Math.max(hh, topInset + 4 + PILL_PX / 2)), bottom = ch - hh, step = PILL_PX + 4;
           const sx = THREE.MathUtils.clamp((ndc.x + 1) / 2 * cw, hw, cw - hw), sy0 = THREE.MathUtils.clamp((1 - ndc.y) / 2 * ch, top, bottom);
           const under = (y) => placed.filter((r) => r.m.label.material.opacity >= 0.35 && Math.abs(r.x - sx) < (r.w + w) / 2 + 4 && Math.abs(r.y - y) < PILL_PX + 2);
-          let sy = null;
+          // A label that stepped aside keeps its slot while that slot stays free: once the older label it stepped away
+          // from fades under 0.35 it no longer counts, and the newer one would jump back onto it mid-fade.
+          let sy = null; const kept = m.slot ? sy0 + m.slot * step : null;
+          if (kept !== null && kept >= top && kept <= bottom && !under(kept).length) sy = kept;
           for (let n = 0; n <= 12 && sy === null; n++) for (const c of n ? [sy0 + n * step, sy0 - n * step] : [sy0]) if (c >= top && c <= bottom && !under(c).length) { sy = c; break; }
           if (sy === null) { sy = sy0; for (const r of under(sy)) r.m.label.material.opacity = Math.min(r.m.label.material.opacity, 0.15); }
+          m.slot = Math.round((sy - sy0) / step);
           placed.push({ x: sx, y: sy, w, m });
           ndc.x = (sx / cw) * 2 - 1; ndc.y = 1 - (sy / ch) * 2; m.label.position.copy(ndc.unproject(camera));
         }
@@ -319,9 +324,11 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
   function daylight(hour) {
     const h = ((hour % 24) + 24) % 24;
     const day = Math.max(0, Math.sin(((h - 6) / 12) * Math.PI));         // 0 at 6/18, 1 at noon
-    const dusk = Math.exp(-Math.pow((h - 18.5) / 1.2, 2)) + Math.exp(-Math.pow((h - 6) / 1.2, 2));
+    const dawn = Math.exp(-Math.pow((h - 6) / 1.2, 2)), dusk = Math.exp(-Math.pow((h - 18.5) / 1.2, 2)) + dawn;
     const night = 1 - Math.min(1, day * 3 + dusk);                        // 0 by day and at dusk, 1 from about 21:00 to 04:30
-    sun.intensity = 2.8 * day + 1.2 * dusk;
+    // Before sunrise the sky starts to lighten, but no sunlight comes in: the dawn part of the sun fades in from about
+    // 04:40 to 05:40, so a room at 04:30 shows no sun stripes through its blinds.
+    sun.intensity = 2.8 * day + 1.2 * (dusk - dawn * (1 - THREE.MathUtils.smoothstep(h, 4.6, 5.6)));
     sun.color.setHSL(0.08, 0.6, 0.62 + 0.3 * day - 0.15 * dusk);
     hemi.intensity = 0.15 + 0.45 * day - 0.08 * night; fill.intensity = 0.1 + 0.3 * day - 0.07 * night;
     if (scene.background?.isColor) scene.background.setHSL(0.6, 0.35, 0.12 + 0.62 * day + 0.2 * dusk - 0.07 * night);

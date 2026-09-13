@@ -66,8 +66,12 @@ ends on a "Back on Kickstarter" CTA.
   desk never lets the audience see or hear a broken feed.
 - Honest: NCB separates "commanded" from "confirmed", trusts a measurement over
   a device's own claim, and never says a dead device did something.
-- A typed "what if the hall light stops working?" is not run as a request: NCB
-  says how to pick a failure, with the closest request first.
+- A typed "what if the hall light stops working?" (or "tell me if the kettle
+  plug stops working") is not run as a request: NCB says how to pick a failure,
+  with the closest request first.
+- The previous what-if's fault leaves the room, the tiles and the status line as
+  soon as the visitor picks the next one: the room is replayed first, then NCB
+  says what fails this time.
 
 ## Engine
 
@@ -82,7 +86,8 @@ ends on a "Back on Kickstarter" CTA.
 - `panel.js` — one card per device from the store; unavailable = red; sync
   highlight with room picking.
 - `chat.js` — NCB messages, user messages, chips, plan/ask/re-plan cards, end
-  card, the picker of failures, text input.
+  card, the picker of failures, text input (on phones the bar only shows while
+  there is something to type, so an end card and its four buttons fit).
 - `player.js` — runs a scene's step list: `say`, `user`, `plan` (waits for
   approve), `ask`, `set`/`tween` with duration and label, `wait`, `fail`,
   `replan`, `failPoint`, `end`. Supports skip-to-beat, quiet replays with the

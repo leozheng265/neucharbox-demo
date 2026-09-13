@@ -27,8 +27,11 @@ const readUW = (st) => Math.round(shown(st)); // a reading as a whole µW, for a
 // `text` and `hold` may be functions of the store, for a move whose shape depends on a plan Edit.
 const cue = (id, text, hold = 1500) => ({ fn: ({ store, fast }) => { if (!fast) store.set('plan.cue', { id, text: typeof text === 'function' ? text(store) : text, hold: typeof hold === 'function' ? hold(store) : hold }); } });
 // A move cut short by a fault: a new label for the device (a same-device ping replaces its move label), without the
-// pulse, so the eye stays on the fault.
+// pulse or the ring (R.ping's ring: false), so the eye stays on the fault.
 const recue = (id, text, hold = 1500) => ({ fn: ({ store, fast }) => { if (!fast) store.set('plan.cue', { id, text, hold, calm: true }); } });
+// A move that has stopped (a scan NCB halted): its label goes now, not when its hold runs out. A faulted device's
+// marker stays.
+const uncue = (id) => ({ fn: ({ store, fast }) => { if (!fast) store.set('plan.cue', { id, off: true }); } });
 const r3 = (v) => Math.round(v * 1000) / 1000;                          // exact positions: r3(0.12 + 0.05) === 0.17
 const deg = (y) => `${y >= 0 ? '+' : '−'}${Math.abs(y).toFixed(3)}°`;   // angles, chat and tiles: +0.140°, −0.020° (−0 prints +0.000°)
 const px = (v) => `${v < 0 ? '−' : ''}${Math.abs(v)}`;                  // whole pixels, same minus glyph: −4
@@ -163,14 +166,16 @@ export default {
     const shutterPivot = new THREE.Group(); shutterPivot.position.set(-0.83, Y + 0.03, 0.3); R.scene.add(shutterPivot); R.scene.remove(shutter); shutter.position.set(0, -0.03, 0); shutterPivot.add(shutter);
     const hinge = P.box(0.014, 0.01, 0.05, M.black, -0.835, Y + 0.033, 0.3); // hinge block: laser face → flag pivot (x −0.842..−0.828, y 1.028..1.038), above the beam
 
-    // mirror mounts (post + plate + round mirror), M1 folds +x → -z, M2 folds -z → -x
+    // mirror mounts (post + plate + round mirror), M1 folds +x → -z, M2 folds -z → -x. The mirror's edge is ground glass
+    // (matte): polished like its faces, the 6 mm rim caught a downlight at some orbit angles and bloomed into a white blob.
+    const mirFace = new THREE.MeshStandardMaterial({ color: 0xF0F4F8, roughness: 0.05, metalness: 1 }), mirEdge = new THREE.MeshStandardMaterial({ color: 0x8A9096, roughness: 0.6, metalness: 0.3 });
     function mirror(x, z, rotY) {
       const g = new THREE.Group(); g.position.set(x, Y, z); R.scene.add(g);
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.1, 16), M.steel); post.position.y = -0.05; post.castShadow = true; g.add(post);
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.01, 20), M.black); base.position.y = -0.1; g.add(base);
       const tilt = new THREE.Group(); tilt.rotation.y = rotY; g.add(tilt);
       const plate = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.075, 0.075), M.anodized); plate.castShadow = true; tilt.add(plate);
-      const mir = new THREE.Mesh(new THREE.CylinderGeometry(0.0254, 0.0254, 0.006, 32), new THREE.MeshStandardMaterial({ color: 0xF0F4F8, roughness: 0.05, metalness: 1 })); mir.rotation.z = Math.PI / 2; mir.position.x = 0.011; tilt.add(mir);
+      const mir = new THREE.Mesh(new THREE.CylinderGeometry(0.0254, 0.0254, 0.006, 32), [mirEdge, mirFace, mirFace]); mir.rotation.z = Math.PI / 2; mir.position.x = 0.011; tilt.add(mir); // materials: rim, then both faces
       for (const [dy, dz] of [[0.028, 0.028], [0.028, -0.028], [-0.028, 0.028]]) { const k = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.02, 12), M.steel); k.rotation.z = Math.PI / 2; k.position.set(-0.015, dy, dz); tilt.add(k); }
       return { group: g, tilt, plate, mir, rotY };
     }
@@ -325,10 +330,14 @@ export default {
     const focus = (id, hex) => { const red = hex === 0xE0563A || faulted === id; faulted = null; hi.focus(id, hex); shellMat[id]?.color.setHex(red ? 0xE0563A : 0x29EEE5); };
     // A move step names the device it's about to move (see cue()): pulse it and ping it with the move, so the eye goes
     // where the tiny motion is (a 0.05° tilt or a 2 mm stage move is only a few pixels from the default view). recue()
-    // only relabels (calm: no pulse).
+    // only relabels (calm: no pulse, no ring); uncue() takes the label away (off).
     store.subscribe((st, path, v) => {
       if (isQuiet()) return; // a what-if's silent replay rings and pulses nothing
-      if (path === 'plan.cue' && v) { if (!v.calm) focus(v.id); R.ping(v.id, v.text, { hold: Math.max(1200, v.hold / (speed || 1)) }); }
+      if (path === 'plan.cue' && v) {
+        if (v.off) { if (store.state[v.id]?.status !== 'fault') R.unping(v.id); return; }
+        if (!v.calm) focus(v.id);
+        R.ping(v.id, v.text, { hold: Math.max(1200, v.hold / (speed || 1)), ring: !v.calm });
+      }
       if (v === 'fault' && path.endsWith('.status')) faulted = path.slice(0, -7); // main.js's fault handler focuses it next
     });
 
@@ -431,7 +440,7 @@ export default {
           { set: 'laser.stuck', to: true },     // the flag drops back into the beam; the driver still says "open" (tile stays "open · 5.0 mW set")
           { status: '01:00 · meter 0 µW, shutter still reports open' },
           { fn: ({ chat }) => chat.alert('01:00 — meter dropped to 0 µW and the camera lost the spot, but the shutter still reports "open".', '⚠ Beam lost, shutter says open') }, { wait: 600 },
-          { say: 'The device says one thing and the measurement says another. I trust the measurement. Closing the shutter and stopping — I won\'t hold a laser I can\'t see.' },
+          { say: 'The device says one thing and the measurement says another. I trust the measurement. Closing the shutter and stopping — I won\'t hold a beam I can\'t see.' },
           { set: 'laser.shutter', to: 'closed', label: 'Shutter → closed (safe state)' }, { wait: 700 },
           { fail: 'laser', faultText: 'closed · inspect flag' },     // after the close, so the red fault line stays up
           { wait: 1200 },
@@ -517,7 +526,7 @@ export default {
             st.get('plan.stepped') ? 'Readings kept: 194, 173 and 154 µW; no after reading' : 'Baseline kept: 194 µW; no after reading'],
             needsYou: 'Find out why the interlock tripped, then reset it at the laser. I\'ll check for 0 µW with the shutter closed, and reopen it only when you ask.' })),
           { wait: 1200 },
-          { end: { headline: 'The beam went out. So did the motion.', body: 'When the laser\'s interlock cut the beam, NeuCharBox stopped the mirror and closed the shutter, and it will check the shutter on the meter once the laser is back on. It didn\'t pass off 0 µW as the result of your tilt.' } },
+          { end: { headline: 'The beam went out. So did the motion.', body: 'When the laser\'s interlock cut the beam, NeuCharBox stopped the mirror, closed the shutter, and will check the shutter on the meter once the laser is back on. It didn\'t pass off 0 µW as the result of your tilt.' } },
         ] },
         m2: { at: 'move', intro: 'Replaying this request. This time Mirror M2 stalls partway through the move.', steps: [
           P1_CUE, P1_STATUS,
@@ -587,7 +596,7 @@ export default {
             { fn: async (ctx) => { await ctx.tween('m2.yaw', 0.17, 150); if (ctx.store.get('plan.stepped')) ctx.chat.ncb(m2Line(ctx.store.state, 5)); } },
           ] },
           { wait: 1200 },
-          { fn: ({ say, store }) => say(`Asked it for a frame twice more: nothing. It's the camera, not the beam: the meter still reads ${fmtUW(shown(store.state))}.`) },
+          { fn: ({ say, store }) => say(`I asked it for a frame twice more: nothing. It's the camera, not the beam: the meter still reads ${fmtUW(shown(store.state))}.`) },
           { fn: ({ say, store }) => say(`So here's your report, with that gap marked. M2 yaw +0.170° on its encoder. Meter ${fmtUW(shown(store.state))}, from ${fmtUW(store.get('plan.base'))} at +0.120°. What I can't give you is the camera's check of where the spot sits.`) },
           { status: 'M2 at +0.170° · beam camera down' },
           { replan: { intro: 'Done, with one check missing:', changes: ['Move: +0.170° on M2\'s encoder', 'Meter: 102 µW after, 194 µW before', 'Spot position not confirmed: beam camera flagged'], needsYou: 'Get the beam camera sending images again, and I\'ll confirm where the spot sits.' } },
@@ -606,9 +615,10 @@ export default {
           { wait: 1200 },
           { end: { headline: 'The stage lost count. Nothing moved.', body: 'Stage X\'s controller restarted and forgot where it was. NeuCharBox confirmed on the meter that nothing had moved, finished your report, and left the homing to a person rather than sweep the iris through the beam.' } },
         ] },
-        wantedMore: { label: 'You wanted more power', ask: 'What if I wanted that tilt to raise the power?', at: 'report',
+        wantedMore: { label: 'You wanted more power', ask: 'What if I wanted that tilt to raise the power?', at: 'report', show: ['m2', 'meter'], // no tile changes: the phone strip goes to M2 and the meter
           intro: 'Replaying this request. This time, suppose you wanted the tilt to raise the power.', steps: [
           { status: (st) => `M2 yaw +0.170° · meter ${fmtUW(shown(st.state))}` },
+          cue('m2', (st) => `Mirror M2 · yaw +0.170° · meter ${fmtUW(shown(st.state))}`, 2400),   // nothing moves here: the label shows the room what NCB reports
           { fn: ({ chat, store }) => chat.alert(`M2 yaw +0.170°, encoder confirms. Meter ${fmtUW(shown(store.state))}, down from ${fmtUW(store.get('plan.base'))}. If you wanted more power, this move went the wrong way: it took the beam further from centre, not closer.`, '⚠ Worse than before') },
           { ask: { intro: 'I did exactly what you asked, and it\'s worse for what you wanted. I won\'t "fix" it without being told. What do you want?', options: [
             { label: 'Keep it there', primary: true, apply: [
@@ -645,7 +655,7 @@ export default {
           { text: 'Open the shutter so the meter has a beam to log' },
           { text: 'Move X from 10.000 to 12.400 mm in 0.100 mm steps (24 steps), settling 200 ms per step' },
           { text: 'Log the meter after every step' },
-          { text: 'Stay inside the soft limit: if 12.400 is past it, stop at the limit and ask. I don\'t go past a soft limit on my own' },
+          { text: 'Stay inside the soft limit: if 12.400 is past it, stop at the limit and ask. I don\'t go past a soft limit on my own.' },
         ] } },
         { beat: 'run' },
         { set: 'laser.shutter', to: 'open', label: 'Shutter → open' }, { wait: 600 },
@@ -675,17 +685,17 @@ export default {
           { say: 'Shutter closed, since there\'s nothing more to log. The meter reads 0 µW.' },
           { replan: { intro: 'Scan stopped at step 13:', changes: ['Log kept: 12 entries, 10.100 to 11.200 mm', 'Stage X stalled near 11.237 mm (its last report); not retried', 'Shutter closed; laser at 5.0 mW, blocked'], needsYou: 'Check Stage X for a bind or something in its travel. When it answers again, I\'ll check its position and resume from 11.300 mm.' } },
           { wait: 1200 },
-          { end: { headline: 'It didn\'t force a stuck stage.', body: 'Stage X stalled mid-step. NeuCharBox kept the 12 good entries, used the meter to confirm where the stage had stopped, and didn\'t force it.' } },
+          { end: { headline: 'It didn\'t force a stuck stage.', body: 'Stage X stalled mid-step. NeuCharBox kept the 12 good entries, used the meter to confirm where the stage had stopped, and left the stage for a person to check instead of pushing it again.' } },
         ] },
         meter: { at: 'scan', intro: 'Replaying this request. This time the power meter goes silent partway through the scan.', steps: [
           P2_STATUS,
-          cue('stage', 'Stage X · scanning on from 11.000 mm', 1800),
+          cue('stage', 'Stage X · scanning on from 11.000 mm', 1500),   // steps 11–15
           scan(11, 14),                                                     // four lines, 11.100 → 349 … 11.400 → 385 µW
           { parallel: [                                                     // the meter dies as step 15 starts: it never reads 11.500 mm
             { fail: 'meter', faultText: 'no reading', title: '⚠ Meter went quiet', say: 'The power meter went silent as Stage X started step 15. The last reading it sent was 385 µW, at 11.400 mm.' },
             { fn: (ctx) => stageStep(ctx, 15) },                            // the step already sent: the stage reaches 11.500 mm
           ] },
-          { set: 'stage.moving', to: false },
+          { set: 'stage.moving', to: false }, uncue('stage'),
           { say: 'Stage X finished the step at 11.500 mm, with no reading for it. I\'ve stopped the scan there: a log with blank entries isn\'t the log you asked for, and I won\'t fill gaps with guesses.' },
           { set: 'laser.shutter', to: 'closed' }, { wait: 700 },
           { say: 'Shutter closed: the beam camera shows no beam. With the meter silent, the camera is my check.' },
@@ -710,6 +720,7 @@ export default {
           cue('stage', 'Stage X · scanning on from 12.000 mm', 1200),
           scan(21, 21),                                                     // "12.100 mm → 440 µW"
           { wait: 500 },
+          uncue('stage'),                                                   // the scan's label goes as the fault shows: the eye goes to the laser
           { fail: 'laser', faultText: 'not answering', title: '⚠ Laser not answering', say: 'The laser\'s controller stopped answering: no reply to three status checks in a row. The beam is still on: the meter reads 440 µW.' },
           { set: 'stage.moving', to: false },
           { say: 'I\'ve stopped the scan at 12.100 mm, before step 22. I won\'t keep running a procedure on a laser whose shutter I can\'t close from here.' },
@@ -731,9 +742,10 @@ export default {
         ] },
         beamcam: { at: 'scan', intro: 'Replaying this request. This time the beam camera stops sending images partway through the scan.', steps: [
           P2_STATUS,
+          { set: 'stage.moving', to: false },                               // the scan pauses at 11.000 mm, after step 10, while NCB checks
           { fail: 'beamcam', faultText: 'no image', title: '⚠ No camera images', say: 'The beam camera stopped sending images at 11.000 mm. This scan logs the meter, not the camera, and the meter still reads 336 µW, the same as step 10.' },
           { say: 'So the scan goes on. If the meter drops out as well, I stop and close the shutter.' },
-          cue('stage', 'Stage X · scanning on from 11.000 mm', 4200),
+          cue('stage', 'Stage X · scanning on from 11.000 mm', 4200), { set: 'stage.moving', to: true },
           scan(11, 24),
           { set: 'stage.moving', to: false },
           { fn: ({ say, store }) => { const log = store.get('plan.log'); return say(`Log complete: ${log.length} entries, from ${log[0]} µW at 10.100 mm to ${log[log.length - 1]} µW at 12.400 mm, every one from the meter. Soft limit untouched.`); } },
@@ -746,10 +758,11 @@ export default {
         // would put its own change into the log. M1: one repeat reading; M2: the camera spot watched at every step.
         m1: { at: 'scan', intro: 'Replaying this request. This time Mirror M1\'s controller goes offline partway through the scan.', steps: [
           P2_STATUS,
+          { set: 'stage.moving', to: false },                               // the scan pauses at 11.000 mm for the repeat reading
           { fail: 'm1', title: '⚠ M1 offline', say: 'Mirror M1\'s controller went offline at 11.000 mm. The scan doesn\'t move M1, but M1 steers the beam through the iris: if it drifted, the log would measure the mirror, not the stage.' },
           { say: 'So before the next step, a repeat reading at 11.000 mm.' },
           { fn: async ({ say, store, sleep }) => { await sleep(900); await say(`Re-read at 11.000 mm: ${readUW(store.state)} µW, the same as step 10, and the camera spot is still at ${pxy(spotPx(store.state))} px. M1 is holding its angle, so the scan goes on.`); } },
-          cue('stage', 'Stage X · scanning on from 11.000 mm', 4200),
+          cue('stage', 'Stage X · scanning on from 11.000 mm', 4200), { set: 'stage.moving', to: true },
           scan(11, 24),
           { set: 'stage.moving', to: false },
           { fn: ({ say, store }) => { const log = store.get('plan.log'); return say(`Log complete: ${log.length} entries, from ${log[0]} µW at 10.100 mm to ${log[log.length - 1]} µW at 12.400 mm. The camera spot stayed at ${pxy(spotPx(store.state))} px, so M1 didn't move under the log.`); } },
@@ -760,9 +773,10 @@ export default {
         ] },
         m2: { at: 'scan', intro: 'Replaying this request. This time Mirror M2\'s controller goes offline partway through the scan.', steps: [
           P2_STATUS,
+          { set: 'stage.moving', to: false },                               // the scan pauses at 11.000 mm while NCB checks the spot
           { fail: 'm2', title: '⚠ M2 offline', say: 'Mirror M2\'s controller went offline at 11.000 mm. M2 aims the beam into the iris, so if it drifted, the log would follow the mirror, not the stage. Right now the meter reads 336 µW, the same as step 10, and the camera spot hasn\'t moved.' },
           { say: 'So the scan goes on, and I\'m checking the camera spot after every step. If it moves, I stop the scan and close the shutter.' },
-          cue('stage', 'Stage X · scanning on from 11.000 mm', 4200),
+          cue('stage', 'Stage X · scanning on from 11.000 mm', 4200), { set: 'stage.moving', to: true },
           scan(11, 24),
           { set: 'stage.moving', to: false },
           { fn: ({ say, store }) => { const log = store.get('plan.log'); return say(`Log complete: ${log.length} entries, from ${log[0]} µW at 10.100 mm to ${log[log.length - 1]} µW at 12.400 mm. The camera spot sat at ${pxy(spotPx(store.state))} px after every step since M2 went offline, so the rise comes from the stage, not the mirror.`); } },
@@ -778,7 +792,7 @@ export default {
           cue('stage', 'Stage X · 10.000 → 12.000 mm', 6000), { set: 'stage.moving', to: true, label: 'Stage X → 12.000 mm in 0.100 mm steps' },
           scan(1, 20),
           { set: 'stage.moving', to: false, label: 'Stage X stopped at the 12.000 mm limit' },
-          { say: 'Stage is at 12.000 mm, the soft limit, so I stopped there as planned. 4 steps remain to reach 12.400.' },
+          { say: 'Stage X is at 12.000 mm, the soft limit, so I stopped there as planned. Four steps remain to reach 12.400.' },
           { ask: { intro: 'The limit exists for a reason I can\'t see from here. Your call:', options: [
             { label: 'Stop here at 12.000 mm', primary: true, apply: [
               { say: 'Stopped at 12.000 mm. Log has 20 entries. Limit unchanged.' },
@@ -880,7 +894,7 @@ export default {
           cue('m2', 'Mirror M2 · yaw +0.060° → +0.040°', 900), { status: 'M2 yaw → +0.040° · step 4' },
           { set: 'm2.reported', to: 0.04 }, { wait: 700 },          // tile: "yaw +0.040°"; the mirror, spot and meter don't move
           { fail: 'm2', faultText: 'drive slipping', title: '⚠ M2 didn\'t move', say: 'Step 4: M2\'s controller counted the step to +0.040°, but nothing moved. The camera spot is still at (11,\u00A0−4) px and the meter still reads 313 µW, exactly as at step 3. Most likely its drive is slipping.' },
-          { say: 'Halting the walk. I can\'t walk a mirror whose reported position isn\'t where it is. The camera puts it at +0.060°, the best reading so far.' },
+          { say: 'Halting the walk. I can\'t walk a mirror whose reported position isn\'t where it is. The camera puts it at +0.060°, the best position so far.' },
           { ask: { intro: 'M2\'s controller and the camera disagree by 0.020°. What now?', options: [
             { label: 'Close the shutter', primary: true, apply: [
               { set: 'laser.shutter', to: 'closed' }, { wait: 700 },

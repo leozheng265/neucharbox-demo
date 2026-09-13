@@ -7,6 +7,17 @@ const line = (f) => ({ fn: ({ store, say }) => say(f(store)) });              //
 const replanWith = (f) => ({ fn: async ({ chat, store, sleep }) => { chat.replan(f(store)); await sleep(700); } }); // a re-plan card that does
 const pat = (st) => !!st.get('plan.neighbour');                                // p0 Edit: Pat also gets the 09:30 message
 const hallPct = (st) => (st.get('plan.brighter') ? 50 : 30);                  // p1 Edit: the night-time limit, in %
+// Routing (avoid phrases, js/engine/match.js): the kettle plug or a sensor that stops working is a what-if, not one of
+// these requests. The words alone can't be ruled out: "fails" is "the auto-off fails" and "she fails to get up by 9:30",
+// "breaks" and "broken" the kettle's auto-off, "stops" the kettle stopping after 10 minutes. As phrases, every request
+// avoids them, so "let me know if the kettle plug breaks" gets the chips back instead of running the first request on
+// "know" (with only the kettle request avoiding them, it did).
+const PLUG_FAULT = ['plug stops', 'plug stopped', 'plug breaks', 'plug broke', 'plug broken', 'plug fails', 'plug failed'];
+const SENSOR_FAULT = ['sensor fails', 'sensor failed'];
+// A device that dies, goes dead or disconnects, as phrases: "dies" or "died" alone would ask back on "since dad died
+// she lives alone", a natural thing to say here.
+const DEVICE_DEAD = [...['plug', 'sensor', 'light', 'lamp', 'bulb', 'kettle'].flatMap((d) => ['dies', 'died', 'dead', 'disconnects', 'disconnected'].map((v) => `${d} ${v}`)), 'goes dead', 'gone dead'];
+const KETTLE_STOPS = ['kettle stops', 'kettle stopped']; // the kettle stopping (working, or after 10 minutes): the first two requests never watch it
 
 // ── p0: Mum's up ────────────────────────────────────────────────────────────────────────────────────────────────────
 const P0_TO_0708 = [{ status: 'Tuesday 07:08' }, { tween: 'env.hour', to: 31.13, ms: 2000 }];
@@ -279,15 +290,17 @@ export default {
       // Nor does going to bed ("let me know when she's going to bed" asks back; 'going' alone isn't ruled out, so "let me
       // know when she's up and going" runs this), or making her bed ('makes' alone isn't ruled out either: "tell me when
       // mum's up and makes her tea" runs this). No request here watches her bed being made: all three avoid it, so it gets
-      // the plain "not sure" answer rather than a tie of the other two.
-      avoid: ['falls', 'fell', 'fallen', 'wrong', 'happens', 'happen', 'happened', 'going bed', 'makes bed', 'made bed', 'making bed', 'bed made'],
+      // the plain "not sure" answer rather than a tie of the other two. The kettle or its plug failing: see PLUG_FAULT.
+      avoid: ['falls', 'fell', 'fallen', 'wrong', 'happens', 'happen', 'happened', 'going bed', 'makes bed', 'made bed', 'making bed', 'bed made', ...KETTLE_STOPS, ...PLUG_FAULT, ...SENSOR_FAULT, ...DEVICE_DEAD],
       // telling Pat is the Edit, not this plan ("message you once — no calls to anyone else"), and it has no microphone,
       // video or recording ("record her room" ran it): asked for, they're asked about (a close form counts too: plurals,
       // "recording", "listening"). It watches 05:00–10:00 only ("let me know if she wakes up at night" ran it), not her
-      // going (back) to bed or getting into it, and not whether a sensor works ("…stops working"; not 'working'
-      // itself, a close form of "work": "let me know when she's up, I'm at work" runs this): named, those are asked about.
+      // going (back) to bed or getting into it, and not whether a sensor works ("…stops working", "let me know if the bed
+      // sensor breaks / dies" ran it, as phrases for dies: DEVICE_DEAD; not 'working' itself, a close form of "work": "let me know when she's up, I'm at
+      // work" runs this, nor 'fails': "tell me if she fails to get up by 9:30" does too): named, those are asked about.
       rulesOut: ['pat', 'neighbour', 'neighbor', 'record', 'microphone', 'mic', 'mics', 'listen', 'hear', 'video', 'audio', 'film',
-        'night', 'midnight', 'gone', 'goes', 'went', 'back', 'into', 'stops', 'stopped', 'broken', 'battery', 'batteries', 'offline', 'faulty'],
+        'night', 'midnight', 'gone', 'goes', 'went', 'back', 'into', 'stops', 'stopped', 'broken', 'breaks', 'broke',
+        'battery', 'batteries', 'offline', 'faulty'], // a sensor that dies or disconnects: DEVICE_DEAD
       expect: { 'mat.pressed': false, 'door.open': 1, 'kettle.on': false, 'motion.last': '07:11', 'mat.status': 'online', 'door.status': 'online' },
       steps: [
         { beat: 'plan' }, { status: 'Checking connected devices' },
@@ -361,7 +374,7 @@ export default {
           { fail: 'motion', title: '📝 Hallway sensor down · logged', faultText: 'tamper alert · silent', say: '06:40 — the hallway motion sensor sent a tamper alert and has said nothing since. That usually means it has come off its mount. From now on it tells me nothing about the hallway: not movement, and not "no movement".' },
           { wait: 1500 },
           { say: 'Your rule needs the bed sensor and either her door or the hallway, so it still works on the bed and the door. Nothing here is worth waking you for.' },
-          replanWith((st) => ({ intro: 'This morning, one sensor short:', changes: ['Hallway motion sensor: tamper alert at 06:40, silent since', '"Mum\'s up" comes from the bed sensor and her door, which your rule already allows', `The 09:30 check runs on the bed and the door; if they show nothing by then, I message ${pat(st) ? 'you and Pat' : 'you'}`, 'No hallway times in my notes until it\'s back'], needsYou: 'When you visit, check the small white sensor high on the hallway wall is still on its bracket, and clip it back if not. It should rejoin on its own.' })),
+          replanWith((st) => ({ intro: 'This morning, one sensor short:', changes: ['Hallway motion sensor: tamper alert at 06:40, silent since then', '"Mum\'s up" comes from the bed sensor and her door, which your rule already allows', `The 09:30 check runs on the bed and the door; if they show nothing by then, I message ${pat(st) ? 'you and Pat' : 'you'}`, 'No hallway times in my notes until it\'s back'], needsYou: 'When you visit, check the small white sensor high on the hallway wall is still on its bracket, and clip it back if not. It should rejoin on its own.' })),
           { status: 'Tuesday 07:08' }, { tween: 'env.hour', to: 31.13, ms: 1500 },
           { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { wait: 900 },
           { tween: 'door.open', to: 1, ms: 1200, label: 'Bedroom door → open' }, { wait: 600 },
@@ -371,7 +384,9 @@ export default {
           ...P0_KETTLE_OFF,
           { status: 'Tuesday 07:15 · Mum\'s up · hallway sensor flagged' },
           HOLD,
-          { end: { headline: 'Down to two sensors. Still enough.', body: 'The hallway sensor sent a tamper alert and went quiet before she woke. NeuCharBox ran your rule on the bed and the door, which it already allowed, and told you which sensor was missing.' } },
+          // not "Down to two sensors": the bed, her door and the kettle plug still report (the rule needs the bed and her
+          // door or the hallway), and not "one sensor down", which the re-plan card's "one sensor short" just said
+          { end: { headline: 'The door covered for the hallway.', body: 'The hallway sensor sent a tamper alert and went quiet before she woke. NeuCharBox ran your rule on the bed and the door, which it already allowed, and told you which sensor was missing.' } },
         ] },
         kettle: { at: 'kettle', intro: 'Replaying this request. This time the kettle plug drops off the network just as she makes her tea.', steps: [
           { status: 'Tuesday 07:12 · Mum\'s up at 07:11' }, { tween: 'env.hour', to: 31.2, ms: 1000 },
@@ -408,8 +423,9 @@ export default {
       keywords: ['night', 'light', 'way', 'bathroom', 'softly', 'soft', 'gets up', 'got', 'dark', 'path', 'toilet', 'fall', 'trip', 'safe', 'safely', 'more', 'bed'],
       // routing (js/engine/match.js): fall detection or leaving the house is something else, and so is a TV left on all
       // night (it ran this on "night"); brighter, another room or telling the neighbour is not this plan ("light the way
-      // to the kitchen" asks back; "tell Pat if she's not up" ran it). Making her bed: see the first request.
-      avoid: ['falls', 'fell', 'fallen', 'detect', 'detects', 'detection', 'leaves house', 'leaves flat', 'leaves home', 'goes out', 'outside', 'wander', 'wanders', 'wandering', 'tv', 'telly', 'television', 'wrong', 'happens', 'happen', 'happened', 'makes bed', 'made bed', 'making bed', 'bed made'],
+      // to the kitchen" asks back; "tell Pat if she's not up" ran it). Making her bed: see the first request; the kettle or
+      // its plug failing: see PLUG_FAULT.
+      avoid: ['falls', 'fell', 'fallen', 'detect', 'detects', 'detection', 'leaves house', 'leaves flat', 'leaves home', 'goes out', 'outside', 'wander', 'wanders', 'wandering', 'tv', 'telly', 'television', 'wrong', 'happens', 'happen', 'happened', 'makes bed', 'made bed', 'making bed', 'bed made', ...KETTLE_STOPS, ...PLUG_FAULT, ...SENSOR_FAULT, ...DEVICE_DEAD],
       rulesOut: ['bright', 'kitchen', 'stairs', 'garden', 'lounge', 'garage', 'front', 'pat', 'neighbour', 'neighbor'],
       expect: { 'mat.pressed': true, 'door.open': 0, 'night.brightness': 0, 'hall.brightness': 0, 'night.status': 'online', 'hall.status': 'online' },
       steps: [
@@ -480,7 +496,8 @@ export default {
           replanWith((st) => ({ intro: 'Tonight, without the night light:', changes: ['Night light: no answer at 02:40, or to the retry', `Hall light: on as soon as she was up, at ${hallPct(st)}%, your limit`, 'Her first steps, from the bed to her door, had no light', 'Logged for your morning, not sent at 3 am'], needsYou: 'Check that her bedside lamp\'s own switch is on. If it is, the bulb itself may need replacing.' })),
           { status: 'Tuesday 02:54 · lights off · night light flagged' },
           HOLD,
-          { end: { headline: 'No night light. Only the hall light answered.', body: 'The night light didn\'t answer when she got up, so the hall light was the only light she had, at your limit. NeuCharBox said her first steps were dark instead of pretending the hall light covered them.' } },
+          // short enough for one line on a phone (the old headline broke after "Only")
+          { end: { headline: 'Only the hall light answered.', body: 'The night light didn\'t answer when she got up, so the hall light was the only light she had, at your limit. NeuCharBox said her first steps were dark instead of pretending the hall light covered them.' } },
         ] },
         door: { at: 'door', intro: 'Replaying this request. This time the bedroom door sensor starts flickering as she goes through.', steps: [
           { status: 'Tuesday 02:41' }, { wait: 600 },
@@ -539,13 +556,21 @@ export default {
       // (see the first request); "boil the kettle" (exact words, not negated: "don't let the kettle boil dry" still runs
       // it) asks for the opposite of a watch that switches it off; "let me know if she's still asleep at 10" is the first
       // request's, not this one's on the chip's "10", and so are "…asleep at 10", "…sleeps past 10" and "…in bed at 10".
-      // Making her bed: see the first request.
-      avoid: ['falls', 'fell', 'fallen', 'boil kettle', 'still asleep', 'wrong', 'happens', 'happen', 'happened', 'asleep 10', 'sleeps 10', 'sleep 10', 'sleeping 10', 'bed 10', 'makes bed', 'made bed', 'making bed', 'bed made'],
+      // Making her bed: see the first request. The kettle stopping is this plan ("make sure the kettle stops after 10
+      // minutes", "tell me if the kettle hasn't stopped after 10 minutes" run it), the kettle or a device no longer working
+      // isn't ("tell me if the kettle plug stops working / breaks"): as phrases here and in PLUG_FAULT, since 'stops' or
+      // 'breaks' ruled out would ask back on both. A normal boil ending isn't this watch either ("…stops boiling").
+      avoid: ['falls', 'fell', 'fallen', 'boil kettle', 'still asleep', 'wrong', 'happens', 'happen', 'happened', 'asleep 10', 'sleeps 10', 'sleep 10', 'sleeping 10', 'bed 10', 'makes bed', 'made bed', 'making bed', 'bed made',
+        'stops working', 'stopped working', 'stop working', 'sensor stops', 'sensor stopped', 'stops boiling', 'stopped boiling', 'finishes boiling', 'finished boiling', ...PLUG_FAULT, ...SENSOR_FAULT, ...DEVICE_DEAD],
       // so do "switch on the kettle" and "put the kettle on"; "message me first" is the Edit; it tells no neighbour. It
       // watches the kettle, not whether the floor or the washing is dry ('dry' is a keyword for "…boil dry"), nor the
-      // washing machine, nor whether the plug itself works ("tell me if the kettle plug stops working / goes offline" ran
-      // it; not 'broken': "…if the kettle's auto-off is broken" is this request): named, those are asked about.
-      rulesOut: ['turn on', 'switch on', 'put', 'first', 'pat', 'neighbour', 'neighbor', 'floor', 'floors', 'washing', 'laundry', 'clothes', 'towels', 'hair', 'paint', 'dishes', 'stops', 'stopped', 'offline', 'faulty'],
+      // washing machine or the TV, nor whether the plug itself works ("…goes offline", "…goes dead"; not 'broken': "…if the
+      // kettle's auto-off is broken" is this request), nor the flat's other devices ("tell me if the hall light is on
+      // for more than 10 minutes", "…if the door is open for…" ran it on "10 minutes"): named, those are asked about.
+      // Not 'telly': as a close form it rules out every "tell me…".
+      rulesOut: ['turn on', 'switch on', 'put', 'first', 'pat', 'neighbour', 'neighbor', 'floor', 'floors', 'washing', 'laundry', 'clothes', 'towels', 'hair', 'paint', 'dishes',
+        'offline', 'faulty', 'responding', 'battery', 'batteries', 'tv', 'television', // a plug that dies or goes dead: DEVICE_DEAD
+        'light', 'lights', 'lamp', 'bulb', 'door', 'hall', 'hallway', 'motion', 'sensor', 'sensors'],
       expect: { 'kettle.on': false, 'kettle.watts': 0, 'kettle.status': 'online', 'mat.pressed': false, 'door.open': 1, 'motion.last': '17:58' },
       steps: [
         { beat: 'plan' }, { status: 'Checking connected devices' },
@@ -633,7 +658,8 @@ export default {
           replanWith((st) => ({ intro: 'Kettle off, one sensor short:', changes: [`Kettle: switched off at the plug at ${offAt(st)}, confirmed at 0 W`, 'Hallway motion sensor: offline since 18:05. Its silence isn\'t read as her not moving', 'Your message is about the kettle only, as planned'], needsYou: 'If you want to know how she is, call her: a sensor that has stopped can\'t tell you either way. Then the hallway sensor needs a look, batteries first.' })),
           { status: (st) => `Tuesday ${offAt(st)} · kettle off · hallway sensor flagged` },
           HOLD,
-          { end: { headline: 'No reading isn\'t the same as no movement.', body: 'The hallway sensor went offline while the kettle was on. NeuCharBox switched the kettle off as planned, and told you the sensor had stopped instead of letting its silence read like hers.' } },
+          // one line on a phone (the old one, "No reading isn't the same as no movement.", broke after "the")
+          { end: { headline: 'Silence isn\'t stillness.', body: 'The hallway sensor went offline while the kettle was on. NeuCharBox switched the kettle off as planned, and told you the sensor had stopped instead of letting its silence read like hers.' } },
         ] },
       },
     },

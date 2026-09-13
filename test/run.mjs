@@ -18,9 +18,9 @@
 // whatIf.*.steps):
 // 10. What-if data: failPoints only at the top level of steps, names unique; every `at` and `genericAt` names one;
 //     whatIf keys are devices, or specials with a label and an ask; scenarios have steps and no { beat }; alsoFaults
-//     are devices; genericTitle is text; plural is a boolean. The last step of the clean steps and of every scenario
-//     is its { end } card (an end card with steps after it would show buttons while the request still runs). Every
-//     device has a `ref`.
+//     and show are devices; genericTitle is text; plural is a boolean. The last step of the clean steps and of every
+//     scenario is its { end } card (an end card with steps after it would show buttons while the request still runs).
+//     Every device has a `ref`.
 // 11. Every connected device and every special, after the clean run of every Edit / ask-option combination, under
 //     every option of the scenario's own asks: the what-if flow (the same runWhatIf() as main.js) runs headless to
 //     exactly one end card and one recover beat; the quiet replay says, shows and beats nothing, reaches its failPoint
@@ -161,6 +161,7 @@ async function whatIfRun(scene, prompt, key, choices, askIdx = 0, { declinePlans
   const store = createStore(initialOf(scene), { headless: true });
   const log = [], beats = [], statuses = [], problems = [];
   let quiet = false, quietFrom = 0, replayState = null, res = null, plans = 0, scenarioFrom = null, statusAt = null;
+  const intro = scenarioOf(scene, prompt, key)?.intro; // said in the replayed room, while it is still held quiet
   const status = (t) => { statuses.push(t); if (scenarioFrom != null && statusAt == null) statusAt = log.length; };
   const player = createPlayer({ store, chat: stubChat(log), headless: true,
     autoPlan: (spec) => { if (quiet) return {}; plans++; log.push(['plan', ...cardWords('plan', spec)]); return declinePlans ? false : {}; },
@@ -173,7 +174,8 @@ async function whatIfRun(scene, prompt, key, choices, askIdx = 0, { declinePlans
     await player.play(setupSteps(scene)); const baseline = store.snapshot(); log.length = 0; statuses.length = 0; beats.length = 0;
     res = await runWhatIf({ player, scene, prompt, key, choices, host: {
       quiet: (on) => {
-        if (on) quietFrom = log.length; else if (log.length > quietFrom) problems.push(`chat during the quiet replay: ${log.slice(quietFrom).map(([k, t]) => `${k} "${String(t).slice(0, 40)}"`).join(', ')}`);
+        const said = on ? [] : log.slice(quietFrom).filter(([k, t], i) => !(i === 0 && k === 'ncb' && t === intro));
+        if (on) quietFrom = log.length; else if (said.length) problems.push(`chat during the quiet replay: ${said.map(([k, t]) => `${k} "${String(t).slice(0, 40)}"`).join(', ')}`);
         quiet = on; if (!on && scenarioFrom == null) scenarioFrom = log.length; // the scenario starts
       },
       freshRoom: () => store.restore(baseline),
@@ -215,6 +217,8 @@ function dataProblems(scene, prompt) {
     if (!Array.isArray(w.steps) || !w.steps.length) p.push(`whatIf.${k} has no steps`); else endLast(w.steps, `whatIf.${k}'s steps`);
     if (w.alsoFaults != null && !Array.isArray(w.alsoFaults)) p.push(`whatIf.${k}.alsoFaults is not a list`);
     for (const id of w.alsoFaults || []) if (!ids.includes(id)) p.push(`whatIf.${k}.alsoFaults: "${id}" is not a device`);
+    if (w.show != null && !Array.isArray(w.show)) p.push(`whatIf.${k}.show is not a list`);
+    for (const id of w.show || []) if (!ids.includes(id)) p.push(`whatIf.${k}.show: "${id}" is not a device`);
     for (const f of ['intro', 'ask', 'label']) if (w[f] != null && typeof w[f] !== 'string') p.push(`whatIf.${k}.${f} is not a string`);
   }
   return p;
