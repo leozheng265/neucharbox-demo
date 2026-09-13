@@ -49,6 +49,7 @@ button { font: inherit; color: inherit; }
 .beats button.done { color: var(--ink-2); border-color: var(--line-2); }
 .beats button.now { color: var(--ink); border-image: linear-gradient(90deg, var(--accent-a), var(--accent-b)) 1; }
 .beats button:disabled { cursor: default; }
+.beats button[hidden] { display: none; } /* Recover, outside what-if runs */
 .beats button:disabled:not(.now) { opacity: .6; }
 .beats button:not(:disabled):not(.now) { color: var(--ink-2); border-color: var(--line-2); }
 .beats button:not(:disabled):not(.now)::after { content: ' ›'; }
@@ -97,6 +98,8 @@ button { font: inherit; color: inherit; }
 .msg.me { align-self: flex-end; background: var(--ink); color: #fff; border-bottom-right-radius: 4px; }
 .msg.ncb { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg.alert { border-color: var(--red); } .msg.alert b { display: block; color: var(--red); margin-bottom: 3px; }
+/* A calm note (title starting with 📝): nothing is wrong enough to alarm anyone. */
+.msg.alert.note { border-color: var(--line-2); } .msg.alert.note b { color: var(--ink); }
 .msg.typing { display: flex; gap: 4px; padding: 12px 14px; }
 .msg.typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); animation: blink 1s infinite; }
 .msg.typing span:nth-child(2) { animation-delay: .2s; } .msg.typing span:nth-child(3) { animation-delay: .4s; }
@@ -142,6 +145,28 @@ button { font: inherit; color: inherit; }
 .card.end { background: linear-gradient(180deg, #fff, #EEFBF9); text-align: left; }
 .card.end h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -0.01em; }
 .card.end p { margin: 0 0 12px; color: var(--ink-2); }
+/* end card: "What if something fails?" / "Try another failure" (a warning sign, then the label) */
+.card.end .btn.whatif { display: inline-flex; align-items: center; gap: 6px; background: #fff; border-color: var(--amber); }
+.card.end .btn.whatif svg { width: 16px; height: 16px; flex: 0 0 auto; color: #D9930A; }
+.card.end .btn.whatif:not(:disabled):hover { background: #FFF8E8; }
+/* the picker of failures: tiles like the dashboard's, two or more to a row; the specials full width under "Or" */
+.card.failures .intro { margin-bottom: 2px; }
+.card.failures .sec { margin: 10px 0 6px; font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
+.card.failures .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); gap: 8px; }
+.card.failures .tiles.special { grid-template-columns: minmax(0, 1fr); }
+.pick { display: flex; align-items: center; gap: 9px; min-width: 0; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 7px 8px; background: #fff; font-size: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .2s; }
+.pick .ico { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #EEF3F2; color: #6E8785; transition: background .2s, color .2s; }
+.pick .ico svg { width: 20px; height: 20px; }
+.pick .txt { min-width: 0; display: flex; flex-direction: column; }
+.pick b { font-size: 12.5px; font-weight: 650; color: var(--ink); line-height: 1.25; overflow-wrap: anywhere; }
+.pick .hint { margin-top: 1px; color: var(--ink-3); font-size: 11px; line-height: 1.25; }
+.pick.special .ico { background: #FFF1CC; color: #D9930A; }
+.pick:not(:disabled):hover { border-color: var(--red); }
+.pick:not(:disabled):hover .ico { background: #FDE4DF; color: var(--red); }
+.pick:focus-visible { outline: none; border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.35); }
+.card.failures.done .pick { opacity: .45; cursor: default; }
+.card.failures.done .pick.chosen { opacity: 1; border-color: var(--red); }
+.card.failures.done .pick.chosen .ico { background: #FDE4DF; color: var(--red); }
 
 @media (min-width: 960px) {
   .stage { grid-template-columns: minmax(0, 1fr) 440px; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
@@ -192,4 +217,8 @@ button { font: inherit; color: inherit; }
   .beats button { font-size: 10.5px; letter-spacing: .03em; }
   .beats button:not(:disabled):not(.now)::after { content: ''; }
   .beats button:not(:disabled):not(.now) { text-decoration: underline dotted; text-underline-offset: 3px; }
+  .card.failures .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .card.failures .tiles.special { grid-template-columns: minmax(0, 1fr); }
+  .pick { gap: 7px; padding: 6px 8px 6px 6px; }
+  .pick .ico { width: 30px; height: 30px; } .pick .ico svg { width: 18px; height: 18px; }
 }

@@ -31,6 +31,7 @@ export const ICONS = {
   strip:      S('<path d="M3 12h18"/><circle cx="6" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/><path d="M6 8v1M12 8v1M18 8v1M6 15v1M12 15v1M18 15v1"/>'),
   hub:        S('<rect x="3" y="9" width="18" height="7" rx="2.5"/><path d="M7 16v2M17 16v2"/><path d="M8 12.5h8"/>'),
   generic:    S('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'),
+  whatif:     S('<path d="M10.3 4.3a2 2 0 0 1 3.4 0l7.4 12.8a2 2 0 0 1-1.7 3H4.6a2 2 0 0 1-1.7-3z"/><path d="M12 9.5v4"/><path d="M12 16.8v.2"/>'), // "What if something fails?": a warning sign
 };
 
 export const icon = (name) => ICONS[name] || ICONS.generic;

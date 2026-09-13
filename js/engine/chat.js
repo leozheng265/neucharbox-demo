@@ -1,6 +1,8 @@
 // The NeuCharBox conversation column. All wording comes from the scene.
 // Every interactive card owns its resolver. A beat skip (resolvePending) settles each open card with the
 // visitor's current choices, marks it done and disables its buttons, so a stale card can't answer a later one.
+import { icon } from './icons.js';
+
 export function createChat(root, { onPromptText } = {}) {
   root.innerHTML = `
     <div class="chat-log" id="chatLog" role="log" aria-live="polite" aria-label="Conversation with NeuCharBox" tabindex="-1"></div>
@@ -13,6 +15,7 @@ export function createChat(root, { onPromptText } = {}) {
   const input = root.querySelector('#chatText');
   const send = form.querySelector('button');
   let pending = [];   // [{ node, settle(value), skipValue() }]
+  let picker = null;  // the last picker of failures
   let typingEl = null;
   const finePointer = typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches;
 
@@ -58,7 +61,12 @@ export function createChat(root, { onPromptText } = {}) {
     typing(on) { if (on) { if (!typingEl) typingEl = push(el('<div class="msg ncb typing" aria-hidden="true"><span></span><span></span><span></span></div>')); } else if (typingEl) { typingEl.remove(); typingEl = null; } },
     ncb(text) { push(el(`<div class="msg ncb">${esc(text)}</div>`)); },
     user(text) { push(el(`<div class="msg me">${esc(text)}</div>`)); },
-    alert(text, title = '⚠ Something changed') { push(el(`<div class="msg ncb alert" role="alert"><b>${esc(title)}</b>${esc(text)}</div>`)); },
+    // An alert is red (role="alert"). A title starting with 📝 is a calm note instead: neutral border and title,
+    // role="status" (e.g. a device flagged at night that nothing depends on, prompt.genericTitle in whatif.js).
+    alert(text, title = '⚠ Something changed') {
+      const note = /^📝/u.test(String(title));
+      push(el(`<div class="msg ncb alert${note ? ' note' : ''}" role="${note ? 'status' : 'alert'}"><b>${esc(title)}</b>${esc(text)}</div>`));
+    },
     resolvePending() { for (const p of [...pending]) p.settle(p.skipValue()); },
 
     button(label) {
@@ -119,12 +127,42 @@ export function createChat(root, { onPromptText } = {}) {
     replan(spec) {
       push(el(`<div class="card replan"><p class="intro">${esc(spec.intro)}</p><ul>${(spec.changes || []).map((c) => `<li>${esc(c)}</li>`).join('')}</ul>${spec.needsYou ? `<p class="needs"><b>Needs you:</b> ${esc(spec.needsYou)}</p>` : ''}</div>`));
     },
-    // End card. `onMore` (optional) adds "Another request here", which the host uses to re-offer prompts.
-    end(spec, { onMore } = {}) {
+    // End card. `onMore` (optional) adds "Another request here", which the host uses to re-offer prompts. `onWhatIf`
+    // (optional) adds the what-if button first, labelled `whatIfLabel` ("What if something fails?" on a success card,
+    // "Try another failure" on a what-if's): the host opens the picker of failures (failures() below). Pressed from the
+    // keyboard (Enter or Space), focus moves to that picker's first choice; a mouse or touch press leaves focus alone.
+    end(spec, { onMore, onWhatIf, whatIfLabel } = {}) {
       setInput(false);
-      const node = push(el(`<div class="card end"><h3>${esc(spec.headline)}</h3><p>${esc(spec.body)}</p><div class="row">${onMore ? '<button class="btn more" type="button">Another request here</button>' : ''}<a class="btn" href="#">Try another scene</a><a class="btn primary" href="${spec.cta || 'https://www.kickstarter.com/projects/neucharbox/neucharbox-ai-operating-system-for-the-physical-world?ref=demo'}" target="_blank" rel="noopener">Back on Kickstarter</a></div></div>`));
+      const node = push(el(`<div class="card end"><h3>${esc(spec.headline)}</h3><p>${esc(spec.body)}</p><div class="row">${onWhatIf ? `<button class="btn whatif" type="button">${icon('whatif')}<span>${esc(whatIfLabel || 'What if something fails?')}</span></button>` : ''}${onMore ? '<button class="btn more" type="button">Another request here</button>' : ''}<a class="btn" href="#">Try another scene</a><a class="btn primary" href="${spec.cta || 'https://www.kickstarter.com/projects/neucharbox/neucharbox-ai-operating-system-for-the-physical-world?ref=demo'}" target="_blank" rel="noopener">Back on Kickstarter</a></div></div>`));
       if (onMore) { const b = node.querySelector('.more'); b.onclick = () => { b.disabled = true; onMore(); }; }
+      if (onWhatIf) {
+        const b = node.querySelector('.whatif');
+        b.onclick = (e) => {
+          // A keyboard press: the button has focus and the click has no pointer behind it (detail 0) or shows the ring.
+          const had = document.activeElement === b, keyboard = had && (e.detail === 0 || b.matches(':focus-visible'));
+          b.disabled = true; if (had) log.focus({ preventScroll: true });
+          onWhatIf();
+          const first = keyboard && picker && !picker.classList.contains('done') ? picker.querySelector('.pick') : null;
+          if (first) first.focus({ preventScroll: true });
+        };
+      }
       return node;
     },
+    // The picker of failures: { heading, devices: [{ key, icon, name, hint? }], specials: [{ key, label }],
+    // devicesLabel?, specialsLabel? }. Tiles like the dashboard's (icon + name, a small grey hint), in a grid; the
+    // specials follow under "Or". One pick per card: the picked tile stays marked, the rest go inert, onPick(key).
+    failures({ heading, devices = [], specials = [], devicesLabel = 'A device stops working', specialsLabel = 'Or' }, onPick) {
+      const tile = (o, cls) => `<button class="pick ${cls}" type="button" data-key="${esc(o.key)}"><span class="ico">${icon(o.icon || 'whatif')}</span><span class="txt"><b>${esc(o.name || o.label)}</b>${o.hint ? `<span class="hint">${esc(o.hint)}</span>` : ''}</span></button>`;
+      const group = (label, list, cls, aria = label) => (list.length ? `<p class="sec">${esc(label)}</p><div class="tiles ${cls}" role="group" aria-label="${esc(aria)}">${list.map((o) => tile(o, cls)).join('')}</div>` : '');
+      const node = push(el(`<div class="card failures"><p class="intro">${esc(heading || '')}</p>${group(devicesLabel, devices, 'device')}${group(specialsLabel, specials, 'special', 'Something else goes wrong')}</div>`));
+      node.querySelectorAll('.pick').forEach((b) => { b.onclick = () => { if (node.classList.contains('done')) return; b.classList.add('chosen'); b.setAttribute('aria-pressed', 'true'); closeCard(node); onPick && onPick(b.dataset.key); }; });
+      picker = node;
+      return node;
+    },
+    // Close any open picker (the visitor moved on), and the what-if / "Another request here" buttons of past end cards;
+    // take away any list of chips (a request started).
+    closeChips() { log.querySelectorAll('.chips').forEach((n) => { if (n.contains(document.activeElement)) log.focus({ preventScroll: true }); n.remove(); }); },
+    closeFailures() { log.querySelectorAll('.card.failures:not(.done)').forEach((n) => closeCard(n)); },
+    closeEnds() { log.querySelectorAll('.card.end button').forEach((b) => { if (b === document.activeElement) log.focus({ preventScroll: true }); b.disabled = true; }); },
   };
 }

@@ -104,7 +104,9 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     for (const id of ids) {
       const s = state[id], d = scene.devices[id], c = cards[id];
       const tone = s.status === 'offline' ? 'offline' : s.status === 'fault' ? 'bad' : s.status === 'busy' ? 'busy' : (d.active ? d.active(s, state) : looksActive(s)) ? 'on' : 'idle';
-      const v = s.status === 'offline' ? 'not connected' : s.status === 'fault' ? (d.faultText || 'unavailable') : d.format(s, state);
+      // A fault shows the scenario's note for it (fail.faultText → <id>.faultNote, rewritten later if the scene says so;
+      // every store write re-renders), else the device's default fault text.
+      const v = s.status === 'offline' ? 'not connected' : s.status === 'fault' ? (s.faultNote || d.faultText || 'unavailable') : d.format(s, state);
       if (c._tone === tone && c._v === v) continue;
       if (c._tone !== tone) { c._tone = tone; for (const t of ['offline', 'bad', 'busy', 'on', 'idle']) c.classList.toggle(t, t === tone); }
       if (c._v !== v) { c._v = v; c.querySelector('.val').textContent = v; c.title = `${d.name}: ${v}`; } // title: the full value if the tile cuts it
