@@ -1,28 +1,26 @@
 // Headless check of every scene script. Usage: node test/run.mjs [--scene <id>]
 //   --scene <id>          one scene only (its checks, typed-request cases and room); --scene fixture: the engine checks
-//   NCB_REQUIRE_WHATIF=1  every prompt must have a failPoint (opt-in failures). Off by default while scenes convert.
+// Failures are opt-in: every request runs clean, and has at least one { failPoint } so the visitor can pick what fails.
 // Every prompt:
 //  1. Default path (auto-approve, ask option 0): doesn't throw, ends in the prompt's `expect` state, touches only
-//     known devices, chip matches itself, copy guardrails hold. A request that still scripts its failure (no failPoint)
-//     must reach plan, run, recover and end. A request with what-ifs (a failPoint) must run CLEAN: plan, run and end,
-//     no recover beat, no *.status = 'fault' write, no chat.alert, exactly one end card (headline ≤ 8 words, body ≤ 2
-//     sentences), guardrails on everything it said.
-//  2. Every plan Edit alternative and every ask option: runs to the end card without throwing (clean and in its
-//     `expect` state, for a request with what-ifs), and an Edit must change what NCB says or the final state.
+//     known devices, chip matches itself, copy guardrails hold, and it has a failPoint. It runs CLEAN: plan, run and
+//     end, no recover beat, no *.status = 'fault' write, no chat.alert, exactly one end card (headline ≤ 8 words, body
+//     ≤ 2 sentences), guardrails on everything it said.
+//  2. Every plan Edit alternative and every ask option: runs to the end card without throwing, clean and in its
+//     `expect` state, and an Edit must change what NCB says or the final state.
 //  3. All prompts back-to-back with ONE shared player and ONE store, restored to the post-setup snapshot before
 //     each prompt, as main.js does: restore must reproduce the snapshot and each prompt must reach `expect`.
-//  4. Real-timer skip: a non-headless player at high speed, skipped once the plan card is up (to Recover for a request
-//     that scripts its failure, to Done for one with what-ifs), must still show the plan card, reach the end, and
-//     leave the player at normal speed for the next request.
+//  4. Real-timer skip: a non-headless player at high speed, skipped to Done once the plan card is up, must still show
+//     the plan card, reach exactly one end card, and leave the player at normal speed for the next request.
 //  9. "Not this" on a plan (real timers): play() returns { declined: true }, nothing after the plan runs (store, chat
 //     and beats as they were when the plan showed; no end card), and the next play() runs to the end.
-// Every prompt with what-ifs (js/engine/whatif.js; the walkers go into parallel, plan alt applies, ask option applies
-// and whatIf.*.steps):
+// Every prompt's what-ifs (js/engine/whatif.js; the walkers go into parallel, plan alt applies, ask option applies and
+// whatIf.*.steps):
 // 10. What-if data: failPoints only at the top level of steps, names unique; every `at` and `genericAt` names one;
 //     whatIf keys are devices, or specials with a label and an ask; scenarios have steps and no { beat }; alsoFaults
-//     are devices; genericTitle is text. The last step of the clean steps and of every scenario is its { end } card
-//     (an end card with steps after it would show buttons while the request still runs). Every device of a scene
-//     with what-ifs has a `ref`.
+//     are devices; genericTitle is text; plural is a boolean. The last step of the clean steps and of every scenario
+//     is its { end } card (an end card with steps after it would show buttons while the request still runs). Every
+//     device has a `ref`.
 // 11. Every connected device and every special, after the clean run of every Edit / ask-option combination, under
 //     every option of the scenario's own asks: the what-if flow (the same runWhatIf() as main.js) runs headless to
 //     exactly one end card and one recover beat; the quiet replay says, shows and beats nothing, reaches its failPoint
@@ -45,26 +43,30 @@
 //     store.tween(...) / setTimeout(...) (use ctx.tween / ctx.sleep), and no text in them trips the copy guardrails.
 // 14. End-card headlines differ across a scene's success and scenario cards (the engine's own aside).
 //  7. Every scene's 3D room builds in Node (fake canvas) and update() runs through every prompt and every what-if
-//     (test/build.mjs); a quiet replay rings (R.ping) and pulses (highlighter focus) nothing in the room.
+//     (test/build.mjs); a quiet replay rings (R.ping) and pulses (highlighter focus) nothing in the room. Home: the
+//     soil probe knocked out of its pot lies outside the pot and above the floor.
 // 17. (test/build.mjs) The quiet replay puts the room where the request played in real time had it: the clean run on
 //     the virtual clock, at normal speed, its room updated every frame, against the replay at each failure point, for
 //     every Edit / ask-option combination. Device state must match; a difference in plan.* only counts if a scenario
-//     starting there says something different.
-//  8. Typed requests route correctly: run the intended chip, refuse negations, ask when vague (test/routing.mjs).
+//     starting there says something different. No tween may still be moving when the played run reaches the point.
+//  8. Typed requests route correctly: run the intended chip, refuse negations, ask when vague (test/routing.mjs); a
+//     typed "what if <device> fails?" is told how to pick a failure.
 // The engine itself, on test/fixtures/scene.js (three devices, one request with what-ifs; skipped with --scene <id>):
 // 15. Player: failPoint is a no-op; `until` at any nesting level; choices in encounter order (asks in ask options, alt
 //     applies, parallel branches) and replayed in that order, cards an fn step builds anew too; quiet plays are silent
 //     and instant; faultText → faultNote; carry.
-// 16. Host logic: the picker, scenario defaults (A1, A9), the what-if flow's order of events, the generic scenario's
-//     fast-forward with the remaining answers, the room's quiet flag, leaving mid-run; the checks above catch broken
-//     data (a misspelt `at`, a nested failPoint, a generic device the copy names, steps after an end card, a scenario
-//     that talks before the status line changes); and the page's request flow (js/engine/flow.js, without a DOM):
-//     phases, the beat bar, end-card buttons and their labels, the picker, a declined plan in a request and in a
-//     scenario, an end-card button pressed while its request still runs, no ping or pop while quiet, fault lines.
+// 16. Host logic: the picker, scenario defaults (A1, A9, plural devices), the what-if flow's order of events (no hold
+//     between the fresh room and the replay), the generic scenario's skip-ahead line, fast-forward with the remaining
+//     answers and closing status line, the room's quiet flag, leaving mid-run; the checks above catch broken data (a
+//     misspelt `at`, a nested failPoint, a missing failPoint, a generic device the copy names, steps after an end card,
+//     a scenario that talks before the status line changes); and the page's request flow (js/engine/flow.js, without
+//     a DOM): phases, the beat bar, end-card buttons and their labels, the picker, a declined plan in a request and in
+//     a scenario, an end-card button pressed while its request still runs, no ping or pop while quiet, fault lines, the
+//     dashboard strip back to its first tile as a what-if starts and on the faulted device(s) at its end card.
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
 import { matchPrompt } from '../js/engine/match.js';
-import { hasWhatIf, failPointsOf, isFailPoint, pickerOf, scenarioOf, runWhatIf, refOf, devicesOf, GENERIC_HEADLINE, REPLAYING, ENGINE_HEADLINES, DECLINED_END, DECLINED_SAY } from '../js/engine/whatif.js';
+import { hasWhatIf, failPointsOf, isFailPoint, pickerOf, scenarioOf, runWhatIf, refOf, devicesOf, GENERIC_HEADLINE, REPLAYING, SKIP_AHEAD, ENGINE_HEADLINES, DECLINED_END, DECLINED_SAY } from '../js/engine/whatif.js';
 import { createFlow, WHATIF_LABEL, ANOTHER_FAILURE, FRESH_START } from '../js/engine/flow.js';
 import { virtualTime } from './clock.mjs';
 import { sceneSource } from './source.mjs';
@@ -76,7 +78,6 @@ register('./loader.mjs', import.meta.url); // 'three' -> vendor/three for the ro
 
 const argv = process.argv.slice(2);
 const ONLY = (() => { const i = argv.indexOf('--scene'); return i >= 0 ? String(argv[i + 1] || '') : null; })();
-const REQUIRE_WHATIF = process.env.NCB_REQUIRE_WHATIF === '1';
 
 const GUARD = [/\bzigbee\b/, /\bmatter\b/, /\bthread\b/, /\bz-?wave\b/, /100\s?%/, /\bguarantee/, /home assistant(?![^.]{0,80}\b(?:bridge|in progress)\b)/];
 const guardHits = (text) => { const t = String(text).toLowerCase(); return GUARD.filter((g) => g.test(t)).map((g) => `matches ${g}`); };
@@ -136,8 +137,9 @@ async function play(scene, prompt, { alts = {}, askIdx = 0 } = {}) {
   for (const [id, d] of Object.entries(scene.devices)) { try { d.format(store.state[id], store.state); } catch (e) { problems.push(`format(${id}) threw at end: ${e.message}`); } }
   return { store, log, beats, statuses, writes, problems, choices: res?.choices || [] };
 }
-const legacyBeats = (r) => ['plan', 'run', 'recover', 'end'].filter((b) => !r.beats.includes(b)).map((b) => `beat "${b}" never reached`);
-// A request with what-ifs runs clean (check 1).
+// Every request has a failPoint (check 1): what the visitor's picks replay up to.
+const failPointProblems = (prompt) => (hasWhatIf(prompt) ? [] : ['no failPoint: every request needs at least one { failPoint } at the top level of its steps, so the visitor can pick what fails from its end card']);
+// A request runs clean (check 1): its failures are the visitor's pick.
 function cleanProblems(r, prompt) {
   const p = [...r.problems];
   for (const b of ['plan', 'run', 'end']) if (!r.beats.includes(b)) p.push(`beat "${b}" never reached`);
@@ -325,7 +327,10 @@ async function sceneChecks(scene, { src = null, meta = {} } = {}) {
     for (const [id, d] of Object.entries(scene.devices)) for (const status of ['offline', 'online', 'fault', 'busy']) { try { const st = { ...init, [id]: { ...init[id], status } }; d.format(st[id], st); } catch (e) { problems.push(`format(${id}, ${status}) threw: ${e.message}`); } }
     const text = JSON.stringify([meta.title, meta.promise, meta.tag, scene.title, scene.setupIntro, scene.askIntro, Object.values(scene.devices).map((d) => [d.name, d.ref, d.faultText])]).toLowerCase();
     for (const g of GUARD) if (g.test(text)) problems.push(`guardrail (scene copy): matches ${g}`);
-    if (scene.prompts.some(hasWhatIf)) for (const id of devicesOf(scene)) if (!(typeof scene.devices[id].ref === 'string' && scene.devices[id].ref.trim())) problems.push(`device "${id}" has no ref (how NCB names it mid-sentence in what-ifs)`);
+    for (const id of devicesOf(scene)) {
+      if (!(typeof scene.devices[id].ref === 'string' && scene.devices[id].ref.trim())) problems.push(`device "${id}" has no ref (how NCB names it mid-sentence in what-ifs)`);
+      if (scene.devices[id].plural != null && typeof scene.devices[id].plural !== 'boolean') problems.push(`device "${id}": plural is not true or false`);
+    }
     report(`${scene.id} · device formatters and scene copy`, problems);
   }
   // 6. the scene's source outside build() (module-level helpers and constants, the prompts): fn code uses ctx.tween /
@@ -339,32 +344,31 @@ async function sceneChecks(scene, { src = null, meta = {} } = {}) {
     const tag = `${scene.id} · "${prompt.chip.slice(0, 48)}"`, wi = hasWhatIf(prompt);
     // 1. default path
     const base = await play(scene, prompt);
-    const problems = wi ? cleanProblems(base, prompt) : [...base.problems, ...legacyBeats(base), ...checkExpect(prompt, base.store)];
+    const problems = cleanProblems(base, prompt);
+    problems.push(...failPointProblems(prompt));
     const touched = new Set(); walkPrompt(prompt, (s) => { for (const k of ['set', 'tween']) if (s[k]) touched.add(s[k].split('.')[0]); if (s.fail) touched.add(s.fail); });
     for (const id of touched) if (!(id in init)) problems.push(`unknown device "${id}"`);
-    // A request shows its plan or asks. One with what-ifs may go without a plan card when it doesn't wait for approval
-    // (a safety stop): its Plan beat is enough (check 1 above requires it).
-    if (!prompt.steps.some((s) => s.plan || s.ask) && !(wi && prompt.steps.some((s) => s.beat === 'plan'))) problems.push('no plan/ask step');
+    // A request shows its plan or asks. It may go without a plan card when it doesn't wait for approval (a safety
+    // stop): its Plan beat is enough (check 1 above requires it).
+    if (!prompt.steps.some((s) => s.plan || s.ask || s.beat === 'plan')) problems.push('no plan/ask step');
     if (matchPrompt(prompt.chip, scene.prompts).prompt !== prompt) problems.push('chip does not match its own prompt');
     for (const g of GUARD) if (g.test(JSON.stringify(prompt).toLowerCase())) problems.push(`guardrail: matches ${g}`); // whatIf included
-    if (!wi && prompt.whatIf) problems.push('has whatIf entries but no failPoint: nobody can reach them');
-    if (!wi && REQUIRE_WHATIF) problems.push('no failPoint (NCB_REQUIRE_WHATIF=1: every request needs what-ifs)');
     report(tag, problems);
     // 2. every Edit alternative (must change something) and every ask option
     const plan = prompt.steps.find((s) => s.plan)?.plan; const asks = []; walk(prompt.steps, (s) => { if (s.ask) asks.push(s.ask); });
     const sig = (r) => JSON.stringify([r.log, r.store.state]);
     const combos = [{ label: 'default plan', alts: {}, askIdx: 0, run: base }];
     for (const [i, ps] of (plan?.steps || []).entries()) if (ps.alt) {
-      const rr = await play(scene, prompt, { alts: { [i]: true } }); const pr = wi ? cleanProblems(rr, prompt) : [...rr.problems, ...legacyBeats(rr)];
+      const rr = await play(scene, prompt, { alts: { [i]: true } }); const pr = cleanProblems(rr, prompt);
       if (sig(rr) === sig(base)) pr.push('Edit changes nothing: same chat and same final state as the default path');
       report(`${tag} · edit #${i + 1}`, pr); combos.push({ label: `edit #${i + 1}`, alts: { [i]: true }, askIdx: 0, run: rr });
     }
     const maxOpts = Math.max(0, ...asks.map((a) => a.options.length));
     for (let k = 1; k < maxOpts; k++) {
-      const rr = await play(scene, prompt, { askIdx: k }); report(`${tag} · ask option ${k + 1}`, wi ? cleanProblems(rr, prompt) : [...rr.problems, ...legacyBeats(rr)]);
+      const rr = await play(scene, prompt, { askIdx: k }); report(`${tag} · ask option ${k + 1}`, cleanProblems(rr, prompt));
       combos.push({ label: `ask option ${k + 1}`, alts: {}, askIdx: k, run: rr });
     }
-    if (!wi) continue;
+    if (!wi) continue; // reported above: without a failPoint there is nothing to replay
     for (const [, h] of base.log.filter(([k]) => k === 'end')) { if (!heads.has(h)) heads.set(h, new Set()); heads.get(h).add(`p${pi + 1} success`); }
     // 10. data, 12. generic eligibility, 11. every pick, 13. skips on the virtual clock
     report(`${tag} · what-if data`, dataProblems(scene, prompt));
@@ -378,7 +382,7 @@ async function sceneChecks(scene, { src = null, meta = {} } = {}) {
     }
   }
   // 14. headlines differ
-  if (scene.prompts.some(hasWhatIf)) {
+  {
     const problems = [];
     for (const [h, from] of heads) if (!ENGINE_HEADLINES.includes(h) && from.size > 1) problems.push(`"${h}" is the headline of ${[...from].join(', ')}`);
     report(`${scene.id} · end-card headlines are all different`, problems);
@@ -397,11 +401,11 @@ async function sceneChecks(scene, { src = null, meta = {} } = {}) {
     }
     report(`${scene.id} · all prompts back-to-back`, problems);
   }
-  // 4. real-timer skip once the plan card is up: to Recover (scripted failure) or Done (what-ifs)
+  // 4. real-timer skip to Done once the plan card is up
   {
     const problems = [];
     for (const prompt of scene.prompts) {
-      const target = hasWhatIf(prompt) ? 'end' : 'recover';
+      const target = 'end';
       const store = createStore(init); const iv = setInterval(() => store.tick(performance.now()), 4);
       let plans = 0; const beats = [], log = []; let player;
       const chat = { ...stubChat(log), plan: (spec, { skipped } = {}) => { plans++; if (skipped) return Promise.resolve({ approved: true, alts: {} }); setTimeout(() => player.skipTo(target), 5); return new Promise((r) => { chat._r = r; }); }, ask: (spec) => Promise.resolve(primaryOf(spec)), resolvePending: () => { chat._r?.({ approved: true, alts: {} }); chat._r = null; } };
@@ -411,10 +415,10 @@ async function sceneChecks(scene, { src = null, meta = {} } = {}) {
       clearInterval(iv);
       if (prompt.steps.some((s) => s.plan) && plans === 0) problems.push(`"${prompt.chip.slice(0, 30)}": plan card never shown`); // a safety stop deliberately has no plan
       if (!beats.includes('end')) problems.push(`"${prompt.chip.slice(0, 30)}": never reached the end after a skip`);
-      if (target === 'end' && log.filter(([k]) => k === 'end').length !== 1) problems.push(`"${prompt.chip.slice(0, 30)}": ${log.filter(([k]) => k === 'end').length} end cards after a skip to Done`);
+      if (log.filter(([k]) => k === 'end').length !== 1) problems.push(`"${prompt.chip.slice(0, 30)}": ${log.filter(([k]) => k === 'end').length} end cards after a skip to Done`);
       if (player.fast) problems.push(`"${prompt.chip.slice(0, 30)}": player left in fast mode after the prompt`);
     }
-    report(`${scene.id} · skip with real timers (to Recover, or to Done with what-ifs)`, problems);
+    report(`${scene.id} · skip to Done with real timers`, problems);
   }
   // 9. "Not this" on the plan stops the request there; the next request runs normally
   {
@@ -594,7 +598,11 @@ async function engineChecks(fixture) {
     const refs = ['a', 'b', 'c', 'd'].map((id) => refOf(noRef, id)).join(' / ');
     if (refs !== 'the water pump / Mirror M2 / the USB webcam / Cart A') problems.push(`ref fallbacks: ${refs}`);
     const gen = s('fan'); if (!gen.head || gen.head[0].say !== 'Ceiling fan stopped responding · off the network.' || gen.head[0].title !== '⚠ Device down' || gen.tail.at(-1).end.headline !== GENERIC_HEADLINE || !gen.tail.at(-1).end.body.startsWith('The ceiling fan stopped responding, but this request didn')) problems.push('generic scenario copy');
+    if (gen.head?.at(-1)?.say !== SKIP_AHEAD || gen.tail?.[0]?.status !== 'Ceiling fan flagged · the rest ran as planned') problems.push(`generic scenario: the skip-ahead line ${JSON.stringify(gen.head?.at(-1))}, the closing status ${JSON.stringify(gen.tail?.[0])}`);
     const noted = scenarioOf(fixture, { ...P, genericTitle: '📝 Noted, not urgent' }, 'fan'); if (noted?.head?.[0]?.title !== '📝 Noted, not urgent') problems.push(`genericTitle (A9): the generic alert is titled ${JSON.stringify(noted?.head?.[0]?.title)}`);
+    // a device whose name takes a plural verb: "fail", "them", "they're"
+    const pl = { ...fixture, devices: { ...fixture.devices, fan: { ...fixture.devices.fan, name: 'Blinds', ref: 'the blinds', plural: true } } }, gp = scenarioOf(pl, P, 'fan') || {};
+    if (gp.ask !== 'What if the blinds fail?' || gp.intro !== 'Replaying this request. This time, the blinds fail during the run.' || gp.head?.[1]?.say !== "This request doesn't use the blinds, so nothing in the plan changes. I've flagged them, and I'll tell you when they're back." || !String(gp.tail?.at(-1)?.end?.body).startsWith("The blinds stopped responding, but this request didn't need them.")) problems.push(`a plural device: ${JSON.stringify([gp.ask, gp.intro, gp.head?.[1]?.say, gp.tail?.at(-1)?.end?.body])}`);
     report('engine · picker and what-if defaults', problems);
   }
   // 16b. the what-if flow's order of events, and the generic scenario's fast-forward
@@ -617,15 +625,27 @@ async function engineChecks(fixture) {
     if (log[0]?.[0] !== 'me' || log[1]?.[1] !== 'Replaying this request. This time, the water pump fails during the run.') problems.push(`pump opens with ${JSON.stringify(log.slice(0, 2))}`);
     if (store.get('pump.faultNote') !== 'stalled · left off' || store.get('plan.dim') !== true || store.get('plan.litres') !== 3) problems.push(`pump ends ${JSON.stringify(store.state.pump)} / plan ${JSON.stringify(store.state.plan)}: the replay should keep the recorded Edit and ask answer`);
     const res = await flow('fan');
-    const gseq = events.join(' > ');
-    if (!/beat:recover > quiet:true > quiet:false > beat:end$/.test(gseq)) problems.push(`fan: ${gseq}`);
-    const said = log.map(([k, t]) => `${k}:${t}`);
+    const gseq = events.join(' > '), said = log.map(([k, t]) => `${k}:${t}`);
+    if (!gseq.endsWith('beat:recover > quiet:true > quiet:false > status:Ceiling fan flagged · the rest ran as planned > beat:end')) problems.push(`fan: ${gseq}`);
+    if (!said.includes(`ncb:${SKIP_AHEAD}`) || said.indexOf(`ncb:${SKIP_AHEAD}`) > said.indexOf('ncb:The rest of the request ran as planned.')) problems.push('fan: NCB should say it skips ahead before the fast-forward');
     if (!said.includes('alert:Ceiling fan stopped responding · off the network.') || !said.includes("ncb:This request doesn't use the ceiling fan, so nothing in the plan changes. I've flagged it, and I'll tell you when it's back.") || said.at(-2) !== 'ncb:The rest of the request ran as planned.' || !said.at(-1).startsWith(`end:${GENERIC_HEADLINE}`)) problems.push(`fan says ${said.join(' / ')}`);
     if (store.get('lamp.level') !== 0.2 || store.get('fan.status') !== 'fault' || store.get('pump.litres') !== 3) problems.push(`fan: the fast-forward should use the rest of the recorded answers (lamp ${JSON.stringify(store.state.lamp)}, pump ${JSON.stringify(store.state.pump)})`);
     if (res.rest?.stopped !== true) problems.push('fan: the fast-forward should stop before the end card');
     let alive = true; const ab = await flow('lamp', { freshRoom: () => { events.push('freshRoom'); store.restore(baseline); alive = false; }, alive: () => alive });
     if (!ab.aborted || events.includes('clearMarkers') || events.includes('beat:recover')) problems.push(`leaving mid-run: ${events.join(' > ')}`);
-    report('engine · the what-if flow: bubble, intro, fresh room, quiet replay, Recover, scenario; generic fast-forward', problems);
+    // the quiet replay follows the fresh room at once (virtual clock, normal speed): no frame between them, or a frame
+    // would show the room right after setup (a daylight room before a night-time failure)
+    {
+      let frames = 0, atFresh = -1, lastQuiet = -1, quietOn = false; const s2 = createStore(initialOf(fixture));
+      await virtualTime(async () => {
+        const pl = createPlayer({ store: s2, chat: stubChat([]), speed: 1 });
+        await pl.play(setupSteps(fixture).filter((x) => !x.fn)); const base2 = s2.snapshot();
+        s2.subscribe(() => { if (quietOn) lastQuiet = frames; });
+        await runWhatIf({ player: pl, scene: fixture, prompt: P, key: 'pump', choices: rec, host: { quiet: (on) => { quietOn = on; }, freshRoom: () => { s2.restore(base2); atFresh = frames; } } });
+      }, { onFrame: (now) => { frames++; s2.tick(now); } });
+      if (atFresh < 0 || lastQuiet !== atFresh) problems.push(`${lastQuiet - atFresh} frames between the fresh room and the end of the quiet replay`);
+    }
+    report('engine · the what-if flow: bubble, intro, fresh room, quiet replay, Recover, scenario; generic skip-ahead, fast-forward and closing status', problems);
   }
   // 16c. the room's quiet flag: build() gets quiet(), and a quiet replay rings nothing
   {
@@ -648,6 +668,7 @@ async function engineChecks(fixture) {
     if (!dataProblems(fixture, bad1).some((m) => m.includes('"lt" is not a failPoint'))) problems.push('a misspelt `at` went unnoticed');
     const bad2 = clone(); bad2.steps = [...P.steps.slice(0, 5), { parallel: [{ failPoint: 'deep' }] }, ...P.steps.slice(5)];
     if (!dataProblems(fixture, bad2).some((m) => m.includes('"deep" is nested'))) problems.push('a nested failPoint went unnoticed');
+    if (!failPointProblems({ ...P, steps: P.steps.filter((x) => !isFailPoint(x)) }).length || failPointProblems(P).length) problems.push('a request without a failPoint went unnoticed (or one with failPoints was flagged)');
     const bad3 = clone(); bad3.whatIf.x = { steps: [{ beat: 'recover' }, { end: { headline: 'h', body: 'b' } }] };
     const d3 = dataProblems(fixture, bad3); if (!d3.some((m) => m.includes('needs a label')) || !d3.some((m) => m.includes('{ beat'))) problems.push(`a special without label/ask, with a beat: ${d3.join(' / ')}`);
     const bad4 = { ...clone(), chip: 'Light the desk, water the plant, leave the ceiling fan.' };
@@ -695,6 +716,7 @@ async function engineChecks(fixture) {
         ping: (id, text) => { ev.push(`ping:${id}:${text}`); if (t.flow.quiet()) noise.push(`ping ${text}`); },
         pop: (id) => { ev.push(`pop:${id}`); if (t.flow.quiet()) noise.push(`pop ${id}`); },
         focus: (id) => { if (t.flow.quiet()) noise.push(`focus ${id}`); }, unping: (id, k) => ev.push(`unping:${id}:${k}`),
+        rewind: () => ev.push('rewind'), show: (ids) => ev.push(`show:${ids.join(',')}`),
       } });
       return t;
     };
@@ -713,6 +735,8 @@ async function engineChecks(fixture) {
       if (t.noise.length) problems.push(`rang or popped while quiet: ${t.noise.join(' / ')}`);
       const rec = t.beats.find((b) => b.current === 'recover'); if (!rec || rec.recoverHidden || rec.skippable.join() !== 'end') problems.push(`beat bar at Recover in a what-if: ${JSON.stringify(rec)}`);
       const after = t.ev.slice(ev0); if (!after.includes(`status:${REPLAYING}`) || !after.includes('status:Water pump · stalled (red)') || !after.includes('status:Water pump · stalled · left off (red)')) problems.push(`status lines of the what-if: ${after.filter((e) => e.startsWith('status:')).join(' / ')}`);
+      // the dashboard strip: back to its first tile as the room resets, and on the faulted device at the end card
+      if (!(after.indexOf('rewind') >= 0 && after.indexOf('rewind') < after.indexOf(`status:${REPLAYING}`)) || after.at(-1) !== 'show:pump') problems.push(`the dashboard strip in a what-if: ${after.filter((e) => /^(?:rewind|show:|status:Repl)/.test(e)).join(' / ')}, last ${after.at(-1)}`);
       if (t.flow.phase !== 'end' || t.ends.length !== 2 || t.ends[1].opts.whatIfLabel !== ANOTHER_FAILURE) problems.push(`after the what-if: phase ${t.flow.phase}, end cards ${JSON.stringify(t.ends.map((e) => e.opts.whatIfLabel))}`);
       t.ends[1].opts.onMore();
       if (t.flow.phase !== 'chips' || t.chips.length !== 2 || !t.log.some(([k, s]) => k === 'ncb' && s === FRESH_START) || t.store.get('pump.status') !== 'online') problems.push(`"Another request here": phase ${t.flow.phase}, pump ${t.store.get('pump.status')}`);
@@ -747,13 +771,16 @@ async function engineChecks(fixture) {
       await u.flow.start(); await u.chips[0].onPick(withPlan); u.ends[0].opts.onWhatIf(); await u.pickers[0].onPick('pump');
       const last = u.ends.at(-1); if (u.flow.phase !== 'end' || last?.spec.headline !== DECLINED_END.headline || last?.opts.whatIfLabel !== ANOTHER_FAILURE || !last?.opts.onMore) problems.push(`"Not this" on a scenario's plan: phase ${u.flow.phase}, last card ${JSON.stringify(last?.spec)} ${JSON.stringify(last?.opts.whatIfLabel)}`);
     }
-    // a device that drops offline mid-run (A5); a request without failPoints (legacy); a bug in a request; leaving mid-what-if
+    // a device that drops offline mid-run (A5); a request without failPoints (the tests don't allow one, but it must not
+    // break the page: one end card, no what-if button, no Recover beat); a bug in a request; leaving mid-what-if
     {
-      const legacy = { ...P, steps: P.steps.filter((s) => !isFailPoint(s)).map((s) => (s.beat === 'run' ? [s, { set: 'lamp.status', to: 'offline' }, { set: 'lamp.status', to: 'online' }] : s)).flat(), whatIf: undefined };
-      const t = mk({ ...fixture, prompts: [legacy] }); await t.flow.start(); const e0 = t.ev.length; await t.chips[0].onPick(legacy);
+      const blip = { ...P, steps: P.steps.map((s) => (s.beat === 'run' ? [s, { set: 'lamp.status', to: 'offline' }, { set: 'lamp.status', to: 'online' }] : s)).flat() };
+      const t = mk({ ...fixture, prompts: [blip] }); await t.flow.start(); const e0 = t.ev.length; await t.chips[0].onPick(blip);
       const run = t.ev.slice(e0); if (run.some((e) => e.startsWith('ping:lamp')) || !run.includes('unping:lamp:fault')) problems.push(`a device offline then online mid-run: ${run.filter((e) => /lamp/.test(e)).join(' / ')}`);
-      const atPlan = t.beats.find((b) => b.current === 'plan'); if (!atPlan || atPlan.recoverHidden || atPlan.skippable.join() !== 'run,recover') problems.push(`beat bar of a request without failPoints: ${JSON.stringify(atPlan)}`);
-      if (t.ends[0]?.opts.onWhatIf) problems.push('a request without failPoints offers what-ifs');
+      const bare = { ...P, steps: P.steps.filter((s) => !isFailPoint(s)), whatIf: undefined };
+      const n = mk({ ...fixture, prompts: [bare] }); await n.flow.start(); await n.chips[0].onPick(bare);
+      const atPlan = n.beats.find((b) => b.current === 'plan'); if (!atPlan || !atPlan.recoverHidden || atPlan.skippable.join() !== 'run,end') problems.push(`beat bar of a request without failPoints: ${JSON.stringify(atPlan)}`);
+      if (n.ends.length !== 1 || n.ends[0].opts.onWhatIf || !n.ends[0].opts.onMore) problems.push(`a request without failPoints: ${n.ends.length} end cards, what-if button ${!!n.ends[0]?.opts.onWhatIf}`);
       const broken = { ...P, steps: [P.steps[0], { fn: () => { throw new Error('boom'); } }, ...P.steps.slice(1)] };
       const b = mk({ ...fixture, prompts: [broken] }); const err = console.error; console.error = () => {};
       try { await b.flow.start(); await b.chips[0].onPick(broken); } finally { console.error = err; }
@@ -766,7 +793,8 @@ async function engineChecks(fixture) {
     report('engine · the page\'s request flow: phases, beat bar, end-card buttons, picker, "Not this", quiet, faults', problems);
   }
   // 16f. check 17 (test/build.mjs) sees a replay that differs from the request played in real time: device state written
-  //      only when not fast, and a plan flag written only when not fast that a scenario then reads; not a cue nothing reads
+  //      only when not fast, a plan flag written only when not fast that a scenario then reads (not a cue nothing reads),
+  //      and a tween still moving when the played run reaches the failure point
   {
     const problems = [], { realTimeProblems } = await import('./build.mjs');
     const at = P.steps.findIndex((s) => s.failPoint === 'lit');
@@ -777,6 +805,8 @@ async function engineChecks(fixture) {
     const r2 = await realTimeProblems(s2, p2, { initialOf, stubChat }); if (!r2.some((m) => m.includes('plan.announced') && m.includes('says something else'))) problems.push(`a plan flag set only when not fast, read by a scenario: ${r2.join(' / ') || 'not seen'}`);
     const [s3, p3] = variant({ fn: ({ store, fast }) => { if (!fast) store.set('plan.cue', { id: 'lamp', text: 'Desk lamp · on' }); } });
     const r3 = await realTimeProblems(s3, p3, { initialOf, stubChat }); if (r3.length) problems.push(`a cue nothing reads after the failure point counted as a difference: ${r3.join(' / ')}`);
+    const [s4, p4] = variant({ fn: ({ tween }) => { tween('lamp.level', 0.1, 3000); } }); // not awaited: still moving at the failure point
+    const r4 = await realTimeProblems(s4, p4, { initialOf, stubChat }); if (!r4.some((m) => m.includes('lamp.level is still moving'))) problems.push(`a tween still moving at a failure point: ${r4.join(' / ') || 'not seen'}`);
     // check 7 sees a room that pulses a device (a highlighter's focus) during the quiet replay
     const pulsing = { ...fixture, id: 'pulsing', build(o) { const room = fixture.build(o); const g = new o.THREE.Group(); o.R.scene.add(g); const hi = o.P.highlighter({ pump: [g] }); o.store.subscribe((st, path, v) => { if (path === 'pump.running' && v) hi.focus('pump'); }); return room; } };
     const seen = []; await (await import('./build.mjs')).buildChecks({ report: (tag, pr) => seen.push(...pr), initialOf, stubChat, scenes: [pulsing] });
@@ -809,6 +839,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // 7. room builds (and every what-if through update())
   await buildChecks({ scenes: [...scenes.map(({ scene }) => scene), ...(fixture ? [fixture] : [])] });
 
-  console.log(`\n${runs - failures}/${runs} checks pass across ${scenes.length} scene file(s)${fixture ? ' and the engine fixture' : ''}${REQUIRE_WHATIF ? ' (NCB_REQUIRE_WHATIF=1)' : ''}`);
+  console.log(`\n${runs - failures}/${runs} checks pass across ${scenes.length} scene file(s)${fixture ? ' and the engine fixture' : ''}`);
   process.exit(failures ? 1 : 0);
 }

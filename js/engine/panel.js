@@ -61,8 +61,9 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     focus = got;
     return got;
   }
-  // Back to the first tile (when the chips are offered); drops any reveal still waiting.
-  function rewind() { queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; focus = []; if (!handBusy() && (root.scrollLeft > 0 || root.scrollTop > 0)) root.scrollTo({ left: 0, top: 0, behavior: 'smooth' }); }
+  // Back to the first tile (when the chips are offered, and when a what-if starts over); drops any reveal still waiting
+  // and the faulted tile it kept in view.
+  function rewind() { pinned = null; queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; focus = []; if (!handBusy() && (root.scrollLeft > 0 || root.scrollTop > 0)) root.scrollTo({ left: 0, top: 0, behavior: 'smooth' }); }
 
   // Following a request (the host turns this on at its start and again at each beat, and off at its end): a tile is
   // brought into view the first time it changes in the request, and after that when its state changes kind (a new
@@ -71,8 +72,11 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   // two states moves it at most twice a beat. The strip holds still for DWELL before each jump (a change that happens
   // in view holds it too), then shows the oldest waiting tiles (of tiles that changed together, the nearest first), as
   // many as fit together; what is still waiting when the request ends is shown after it. The tile in view is kept
-  // fully in view while its value grows.
-  let changed = null, beatKeys = null, queue = [], timer = 0, batch = 0;
+  // fully in view while its value grows. While a device is in fault (`pinned`, from its pop), its tile stays in view:
+  // later changes show beside it if they fit together, else not at all, so the strip doesn't scroll away from what
+  // failed while NCB talks about it.
+  let changed = null, beatKeys = null, queue = [], timer = 0, batch = 0, pinned = null;
+  const pinNow = () => (pinned && store.state[pinned]?.status === 'fault' ? pinned : null);
   function track(on) {
     if (!on) { changed = beatKeys = null; return; }
     if (!changed) { changed = new Set(); queue = []; clearTimeout(timer); timer = 0; }
@@ -81,7 +85,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   function note(id, key, prev) {
     const first = !changed.has(id); changed.add(id);
     const ks = beatKeys.get(id); const fresh = key !== prev && !ks.has(key); if (key !== prev) ks.add(key);
-    if (!first && !fresh) { if (focus.includes(id) && !queue.length && !shown(id)) reveal([id]); return; }
+    if (!first && !fresh) { if (focus.includes(id) && !queue.length && !shown(id)) reveal(pinNow() && pinNow() !== id ? [pinNow(), id] : [id]); return; }
     const q = queue.find((e) => e.id === id); if (q) { if (fresh) q.keys.push(key); q.first ||= first; } else queue.push({ id, keys: fresh ? [key] : [], first, batch });
     if (!timer) timer = setTimeout(flush, 0);
   }
@@ -95,7 +99,9 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
       const x = root.scrollLeft, y = root.scrollTop, w = root.clientWidth, h = root.clientHeight;
       const away = (e) => { const b = box(cards[e.id]); return Math.max(0, x - b.l, b.r - x - w) + Math.max(0, y - b.t, b.b - y - h); };
       const head = queue.filter((e) => e.batch === queue[0].batch).map((e) => [away(e), e]).sort((a, b) => a[0] - b[0]).map(([, e]) => e.id);
-      const got = reveal(head); queue = queue.filter((e) => !got.includes(e.id));
+      const pin = pinNow() && !head.includes(pinned) ? pinned : null;
+      const got = reveal(pin ? [pin, ...head] : head);
+      queue = pin && got.length < 2 ? queue.filter((e) => !head.includes(e.id)) : queue.filter((e) => !got.includes(e.id));
     }
     if (queue.length) timer = setTimeout(flush, DWELL);
   }
@@ -123,11 +129,16 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   // they don't scroll the strip away from a faulted tile while NCB asks what to do about it.
   let popTimer = 0;
   function pop(id) {
-    const c = cards[id]; if (!c) return; c.classList.remove('pop'); void c.offsetWidth; c.classList.add('pop');
+    const c = cards[id]; if (!c) return;
+    if (store.state[id]?.status === 'fault') pinned = id;
+    c.classList.remove('pop'); void c.offsetWidth; c.classList.add('pop');
     queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer);
     const show = () => { popTimer = 0; if (handBusy()) popTimer = setTimeout(show, Math.max(100, handAt + 3050 - now())); else reveal([id]); };
     show();
   }
+  // The end of a what-if: these tiles (the devices it left in fault) come into view now, and reveals still waiting are
+  // dropped, so the strip ends on what failed. No pop: nothing new happened to them.
+  function show(list) { queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; reveal(list); }
   store.subscribe(render); render(store.state);
-  return { select, render, pop, reveal, rewind, track };
+  return { select, render, pop, reveal, rewind, track, show };
 }

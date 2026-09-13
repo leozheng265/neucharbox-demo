@@ -1,4 +1,55 @@
-// Scene 3 — Elder care. Proves: sensing without cameras. "Mum's up · 7:12".
+// Scene 3 — Elder care. Proves: sensing without cameras. "Mum's up · 07:11". Failures are opt-in ("What if something
+// fails?"): every request runs clean, and each connected device's failure is a what-if (js/engine/whatif.js).
+
+// ── shared ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+const HOLD = { wait: 3000 };                                                   // before every scenario's end card
+const line = (f) => ({ fn: ({ store, say }) => say(f(store)) });              // an NCB line that depends on a plan Edit
+const replanWith = (f) => ({ fn: async ({ chat, store, sleep }) => { chat.replan(f(store)); await sleep(700); } }); // a re-plan card that does
+const pat = (st) => !!st.get('plan.neighbour');                                // p0 Edit: Pat also gets the 09:30 message
+const hallPct = (st) => (st.get('plan.brighter') ? 50 : 30);                  // p1 Edit: the night-time limit, in %
+
+// ── p0: Mum's up ────────────────────────────────────────────────────────────────────────────────────────────────────
+const P0_TO_0708 = [{ status: 'Tuesday 07:08' }, { tween: 'env.hour', to: 31.13, ms: 2000 }];
+const P0_UP = [
+  { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { wait: 900 },
+  { tween: 'door.open', to: 1, ms: 1200, label: 'Bedroom door → open' },
+  { set: 'motion.active', to: true, label: 'Hallway → movement' }, { set: 'motion.last', to: '07:11' }, { wait: 800 },
+];
+const P0_KETTLE_ON = [{ set: 'kettle.on', to: true }, { tween: 'kettle.watts', to: 1850, ms: 600, label: 'Kettle → on' }];
+const P0_KETTLE_LINE = line((st) => (pat(st) ? '07:12 — and the kettle\'s on. Normal morning. Nothing goes to Pat: that was only for 09:30.' : '07:12 — and the kettle\'s on. Normal morning.'));
+// the 3-minute boil takes the clock to 07:15
+const P0_KETTLE_OFF = [{ parallel: [{ tween: 'kettle.minutes', to: 3, ms: 1500 }, { tween: 'env.hour', to: 31.25, ms: 1500 }] }, { set: 'kettle.on', to: false }, { set: 'kettle.watts', to: 0 }, { set: 'kettle.minutes', to: 0 }];
+
+// ── p1: light the way ───────────────────────────────────────────────────────────────────────────────────────────────
+const hallOn = (label) => ({ fn: ({ store, tween, status }) => { const b = store.get('plan.brighter') ? 0.5 : 0.3; if (label) status(`Hall light → ${Math.round(b * 100)}%`); return tween('hall.brightness', b, 900); } });
+const P1_THROUGH = [{ tween: 'door.open', to: 1, ms: 1000, label: 'Bedroom door → open' }, { set: 'motion.active', to: true }, { set: 'motion.last', to: '02:41' }, { wait: 700 }, { set: 'motion.active', to: false }];
+const P1_BACK = [{ status: 'Tuesday 02:49' }, { parallel: [{ tween: 'env.hour', to: 26.82, ms: 800 }, { tween: 'door.open', to: 0, ms: 800 }] }, { set: 'mat.pressed', to: true, label: 'Bed sensor → in bed' }];
+const P1_OFF = [{ status: 'Tuesday 02:54' }, { tween: 'env.hour', to: 26.9, ms: 1200 }, { parallel: [{ tween: 'night.brightness', to: 0, ms: 1200 }, { tween: 'hall.brightness', to: 0, ms: 1200 }] }, { set: 'night.on', to: false }, { set: 'hall.on', to: false }];
+// a door contact with a loose magnet: seven changes in about two seconds, no labels (the door itself opens once: door.leaf)
+const FLICKER = { fn: async ({ store, sleep }) => { for (const v of [1, 0, 1, 0, 1, 0, 1]) { store.set('door.open', v); await sleep(280); } } };
+
+// ── p2: the kettle ──────────────────────────────────────────────────────────────────────────────────────────────────
+const P2_UP = [{ set: 'mat.pressed', to: false }, { set: 'motion.last', to: '07:10' }, { tween: 'door.open', to: 1, ms: 700 }]; // she's up: bed, hallway and door agree
+const P2_BOIL_ON = [{ set: 'kettle.on', to: true }, { tween: 'kettle.watts', to: 1850, ms: 500, label: 'Kettle → on' }];
+const P2_BOIL_OFF = [
+  { parallel: [{ tween: 'kettle.minutes', to: 3, ms: 1500 }, { tween: 'env.hour', to: 31.25, ms: 1500 }] }, // the 3-minute boil takes the clock to 07:15
+  { set: 'kettle.on', to: false }, { set: 'kettle.watts', to: 0 }, { set: 'kettle.minutes', to: 0 },
+  { status: 'Tuesday 07:15' }, { say: '07:15 — the kettle was on for 3 minutes, then off. A normal boil, ignored as planned.' },
+];
+const P2_TENMIN = { parallel: [{ tween: 'kettle.minutes', to: 10, ms: 2600 }, { tween: 'env.hour', to: 42.2, ms: 2600 }] };
+const P2_AT_TEN = { fn: ({ chat, store }) => chat.ncb(store.get('plan.warnFirst') ? '18:12 — the kettle has been drawing 1,850 W for 10 minutes. Messaging you first, as you chose. I\'ll switch it off at 18:17 if it\'s still on.' : '18:12 — the kettle has been drawing 1,850 W for 10 minutes. Switching it off at the plug.') };
+const P2_WARN = { fn: async ({ store, chat, tween, sleep, status }) => {
+  if (!store.get('plan.warnFirst')) return;
+  await Promise.all([tween('kettle.minutes', 15, 1600), tween('env.hour', 42.28, 1600)]);
+  status('Tuesday 18:17'); chat.ncb('18:17 — still on, still drawing 1,850 W. Switching it off at the plug.'); await sleep(1500);
+} };
+// "off" is confirmed by the meter falling to 0 W, not by the plug's word (plan line 2): the label comes after the fall
+const P2_OFF = [{ status: 'Kettle plug: sending "off"…' }, { wait: 900 }, { tween: 'kettle.watts', to: 0, ms: 700 }, { set: 'kettle.on', to: false, label: 'Kettle plug → off · 0 W, confirmed' }, { set: 'kettle.minutes', to: 0 }, { wait: 800 }];
+const offAt = (st) => (st.get('plan.warnFirst') ? '18:17' : '18:12');
+// the message the plan promised: about the kettle, nothing else (no sensor readings ride along)
+const P2_MESSAGE = line((st) => (st.get('plan.warnFirst')
+  ? 'Off, and confirmed: the plug says off and the meter reads 0 W. Messaged you again: "It was still on at 18:17, so I switched it off at the plug."'
+  : 'Off, and confirmed: the plug says off and the meter reads 0 W. Messaged you: "Mum\'s kettle was on for 10 minutes, so I switched it off at the plug at 18:12."'));
 
 export default {
   id: 'elder',
@@ -11,15 +62,16 @@ export default {
   askIntro: 'What do you want to know, or have happen, without putting a camera in her home? Pick one, or type your own.',
   deviceOrder: ['mat', 'door', 'motion', 'kettle', 'night', 'hall'],
   devices: {
-    mat:    { icon: 'bed', name: 'Bed sensor', initial: { pressed: true }, format: (s) => (s.pressed ? 'in bed' : 'out of bed'), faultText: 'no signal' },
-    door:   { icon: 'door', name: 'Bedroom door', initial: { open: 0 }, format: (s) => (s.open > 0.5 ? 'open' : 'closed'), faultText: 'no signal' },
-    motion: { icon: 'motion', name: 'Hallway motion', initial: { active: false, last: '—' }, format: (s) => (s.active ? 'movement now' : `last ${s.last}`), faultText: 'offline' },
-    kettle: { icon: 'kettle', name: 'Kettle plug', initial: { on: false, watts: 0, minutes: 0 }, format: (s) => (s.on ? `on · ${Math.round(s.watts).toLocaleString('en-GB')} W · ${s.minutes.toFixed(0)} min` : 'off'), faultText: 'says off · 1,850 W' },
-    night:  { icon: 'bulb', name: 'Night light', initial: { on: false, brightness: 0 }, active: (s) => s.brightness > 0.02, format: (s) => (s.brightness > 0.02 ? `on · ${Math.round(s.brightness * 100)}%` : 'off'), faultText: 'no response' },
-    hall:   { icon: 'bulb', name: 'Hall light', initial: { on: false, brightness: 0 }, active: (s) => s.brightness > 0.02, format: (s) => (s.brightness > 0.02 ? `on · ${Math.round(s.brightness * 100)}%` : 'off'), faultText: 'no response' },
+    mat:    { icon: 'bed', name: 'Bed sensor', ref: 'the bed sensor', initial: { pressed: true }, format: (s) => (s.pressed ? 'in bed' : 'out of bed'), faultText: 'no signal' },
+    door:   { icon: 'door', name: 'Bedroom door', ref: 'the bedroom door sensor', initial: { open: 0 }, format: (s) => (s.open > 0.5 ? 'open' : 'closed'), faultText: 'no signal' },
+    motion: { icon: 'motion', name: 'Hallway motion', ref: 'the hallway motion sensor', initial: { active: false, last: '—' }, format: (s) => (s.active ? 'movement now' : `last ${s.last}`), faultText: 'offline' },
+    kettle: { icon: 'kettle', name: 'Kettle plug', ref: 'the kettle plug', initial: { on: false, watts: 0, minutes: 0 }, format: (s) => (s.on ? `on · ${Math.round(s.watts).toLocaleString('en-GB')} W · ${s.minutes.toFixed(0)} min` : 'off'), faultText: 'off the network' },
+    night:  { icon: 'bulb', name: 'Night light', ref: 'the night light', initial: { on: false, brightness: 0 }, active: (s) => s.brightness > 0.02, format: (s) => (s.brightness > 0.02 ? `on · ${Math.round(s.brightness * 100)}%` : 'off'), faultText: 'off the network' },
+    hall:   { icon: 'bulb', name: 'Hall light', ref: 'the hall light', initial: { on: false, brightness: 0 }, active: (s) => s.brightness > 0.02, format: (s) => (s.brightness > 0.02 ? `on · ${Math.round(s.brightness * 100)}%` : 'off'), faultText: 'off the network' },
   },
 
-  build({ R, P, M, THREE, store, parts }) {
+  build({ R, P, M, THREE, store, parts, quiet }) {
+    const isQuiet = typeof quiet === 'function' ? quiet : () => false; // true while a what-if replays the request quietly (A2)
     // ceilShadows: the pendant's cone and the lamp shade darken the ceiling above them instead of leaving a hot spot
     const shell = P.roomShell({ w: 7, d: 5, h: 2.7, window: { x: 1.9, y: 1.6, ww: 1.4, wh: 1.1 }, ceilShadows: true });
     // The garden's trees stand 12–15 m back for eye-level cameras; from up here their tops still showed at the top of the
@@ -145,7 +197,20 @@ export default {
     P.table(1.8, 0.4, 0.9, 0.9, 0.75, M.woodLight, M.woodLight); P.box(0.42, 0.04, 0.42, M.woodLight, 1.1, 0.46, 0.4); [[-0.18, -0.18], [0.18, -0.18], [-0.18, 0.18], [0.18, 0.18]].forEach((p) => P.box(0.03, 0.46, 0.03, M.woodLight, 1.1 + p[0], 0.23, 0.4 + p[1])); P.box(0.03, 0.4, 0.42, M.woodLight, 0.905, 0.68, 0.4);
 
     R.addPickable(mat, 'mat'); R.addPickable(mattress, 'mat'); R.addPickable(doorPivot, 'door'); R.addPickable(contact, 'door'); R.addPickable(pir, 'motion'); R.addPickable(pirPlate, 'motion'); R.addPickable(pirLed, 'motion'); R.addPickable(pirHit, 'motion'); R.addPickable(plug, 'kettle', { anchor: true }); R.addPickable(kettleBody, 'kettle'); R.addPickable(nl.shade, 'night'); R.addPickable(nl.pole, 'night'); R.addPickable(nlBase, 'night'); R.addPickable(nl.bulbMesh, 'night'); R.addPickable(pendant, 'hall');
-    const hi = P.highlighter({ mat: [mat, mattress], door: [doorLeaf], motion: [pir, pirPlate], kettle: [plug, kettleBody], night: [nl.shade], hall: [pendant] });
+    // bed sensor controller: the small box on the side of her bed that the family is sent to check (the bed sensor's
+    // what-ifs). On the bed frame's hall-side face (frame x −2.825…−1.775, y 0.075…0.325), towards the foot, below the
+    // mattress and clear of the folded duvet. No LED: a controller that has gone silent (unplugged, flat batteries)
+    // couldn't light one.
+    const matCtl = P.box(0.02, 0.05, 0.08, M.white, -1.765, 0.2, -0.75, 0.004); R.addPickable(matCtl, 'mat');
+    const rp = {}; // when each faulted device last got NCB's red pulse (update's t, in seconds)
+    const hiMap = { mat: [mat, mattress, matCtl], door: [doorLeaf, contact], motion: [pir, pirPlate], kettle: [plug, kettleBody], night: [nl.shade], hall: [pendant] };
+    const hi = P.highlighter(hiMap);
+    // A reset (a what-if's fresh room, "Another request here") cuts off any pulse still running from before it, so the
+    // last scenario's red mark never glows in the reset room. The highlighter can't cancel a pulse: update() hides its
+    // shells (the outline meshes it adds to the targets, tagged isShell) until that device's next pulse.
+    const shells = Object.fromEntries(Object.entries(hiMap).map(([id, ts]) => { const l = []; for (const o of ts) o.traverse((m) => { if (m.userData.isShell) l.push(m); }); return [id, l]; }));
+    const pulsed = {}; let resetAt = -Infinity; // performance.now() of each device's last pulse, and of the last reset
+    const focus = (id, hex) => { pulsed[id] = performance.now(); hi.focus(id, hex); };
     // The pendant doesn't take shadows (inside, its own bulb would shade it), so the morning sun lit it through the walls
     // and ceiling. It keeps only its inside and gets an outer skin that does take shadows (its bulb never lights the
     // outside); the cone itself still casts from both sides. Added after the highlighter, so a tap doesn't pulse two
@@ -156,9 +221,17 @@ export default {
     });
 
     return {
-      focus: hi.focus,
+      focus,
+      // main.js resetRoom, once the store is back at the post-setup snapshot
+      reset() { resetAt = performance.now(); for (const id of Object.keys(rp)) delete rp[id]; for (const l of Object.values(shells)) for (const o of l) o.visible = false; },
       update(s, t) {
-        hi.update(); R.daylight(s.env.hour);
+        hi.update(); for (const id in shells) if (pulsed[id] < resetAt) for (const o of shells[id]) o.visible = false;
+        R.daylight(s.env.hour);
+        // A faulted device keeps NCB's red mark after the host's 3.2 s ring: the highlighter's pulse on its big shells
+        // (mattress, door leaf, lamp shade, pendant, plug and kettle, sensor), again every 2.4 s, so it reads on a phone
+        // too. It is NCB's mark, not a light on the device: right for a silent sensor or a bulb with no power. Not while a
+        // what-if replays quietly (an instant stretch on the page; nothing may pulse then).
+        if (!isQuiet()) for (const id of ['mat', 'door', 'motion', 'kettle', 'night', 'hall']) if (s[id].status === 'fault' && t - (rp[id] ?? -9) > 2.4) { focus(id, 0xE0563A); rp[id] = t; }
         // Deep night (from about 23:00 to 05:30) is darker than the evening the flat is set up in, so a 20–30% light,
         // or a hall light that didn't come on, shows in the room; on a phone the flat itself still reads (at ×0.3 the
         // hall table and the kitchen went black). No sun then: before 04:30 it sits below the garden, which casts no
@@ -168,14 +241,14 @@ export default {
         const deep = hod >= 12 ? ramp(hod, 22.5, 23.5) : 1 - ramp(hod, 5, 6);
         if (deep > 0) { R.lights.hemi.intensity *= 1 - 0.5 * deep; R.lights.fill.intensity *= 1 - 0.5 * deep; R.scene.environmentIntensity *= 1 - 0.45 * deep; R.lights.sun.intensity *= 1 - deep; }
         hub.ledMat.emissiveIntensity = s.hub.status === 'on' ? (2.5 + Math.sin(t * 2.2) * 1.5) * s.hub.led : 0;
-        doorPivot.rotation.y = -s.door.open * 1.4;
-        const mBad = s.motion.status === 'fault';
-        pirLed.material.color.set(mBad ? 0xE0563A : s.motion.active ? 0xFFB020 : 0x2FBF71); pirLed.material.emissive.copy(pirLed.material.color);
-        pirLed.material.emissiveIntensity = s.motion.status === 'offline' ? 0 : mBad ? (Math.floor(t * 3) % 2 ? 6 : 1) : s.motion.active ? 6 : 1;
+        doorPivot.rotation.y = -(s.door.leaf ?? s.door.open) * 1.4; // leaf: where the door really is, when its sensor reads it wrong
+        const mBad = s.motion.status === 'fault', mDead = mBad && /^(missed check-in|offline)/.test(s.motion.faultNote || ''); // silent: a flat battery lights nothing
+        pirLed.material.color.set(mDead ? 0x3A3F44 : mBad ? 0xE0563A : s.motion.active ? 0xFFB020 : 0x2FBF71); pirLed.material.emissive.copy(pirLed.material.color);
+        pirLed.material.emissiveIntensity = s.motion.status === 'offline' || mDead ? 0 : mBad ? (Math.floor(t * 3) % 2 ? 6 : 1) : s.motion.active ? 6 : 1;
         plugLed.material.color.set(s.kettle.status === 'fault' ? 0xE0563A : s.kettle.on ? 0xFFB020 : 0x2FBF71); plugLed.material.emissive.copy(plugLed.material.color); plugLed.material.emissiveIntensity = s.kettle.status === 'fault' ? (Math.floor(t * 3) % 2 ? 6 : 1) : 2; plugLed.visible = s.kettle.status !== 'offline';
         const grey = Math.min(1, 0.3 + R.lights.hemi.intensity * 1.4 + R.lights.sun.intensity * 0.12);
         puffs.forEach((p, i) => {
-          const k = (t * 0.55 + i / puffs.length) % 1; p.visible = s.kettle.on; if (!p.visible) return;
+          const k = (t * 0.55 + i / puffs.length) % 1; p.visible = s.kettle.on || !!s.kettle.steam; if (!p.visible) return; // steam: a boil the plug can't report
           p.position.set(2.76 + 0.025 * Math.sin(t * 1.1 + i * 1.7) - k * 0.03, 1.2 + k * 0.2, -2.15 + 0.015 * Math.cos(t * 0.9 + i));
           p.scale.setScalar(0.035 + k * 0.09); p.material.opacity = 0.6 * Math.sin(k * Math.PI) * (1 - k * 0.4); p.material.color.setScalar(grey);
         });
@@ -203,14 +276,19 @@ export default {
       keywords: ['up', 'morning', 'awake', 'camera', 'without', 'wake', 'woke', 'wakes', 'waking', 'get', 'gets', 'got', 'yet', 'routine', 'more', 'leave', 'bed', 'stills'],
       // routing (js/engine/match.js): a fall question never names this request, nor does "if something's wrong / happens"
       // (it ran the kettle request on "know" and the kettle's 'somethin' stem)
-      avoid: ['falls', 'fell', 'fallen', 'wrong', 'happens', 'happen', 'happened'],
+      // Nor does going to bed ("let me know when she's going to bed" asks back; 'going' alone isn't ruled out, so "let me
+      // know when she's up and going" runs this), or making her bed ('makes' alone isn't ruled out either: "tell me when
+      // mum's up and makes her tea" runs this). No request here watches her bed being made: all three avoid it, so it gets
+      // the plain "not sure" answer rather than a tie of the other two.
+      avoid: ['falls', 'fell', 'fallen', 'wrong', 'happens', 'happen', 'happened', 'going bed', 'makes bed', 'made bed', 'making bed', 'bed made'],
       // telling Pat is the Edit, not this plan ("message you once — no calls to anyone else"), and it has no microphone,
       // video or recording ("record her room" ran it): asked for, they're asked about (a close form counts too: plurals,
       // "recording", "listening"). It watches 05:00–10:00 only ("let me know if she wakes up at night" ran it), not her
-      // going (back) to bed, and not whether a sensor works: named, those are asked about.
+      // going (back) to bed or getting into it, and not whether a sensor works ("…stops working"; not 'working'
+      // itself, a close form of "work": "let me know when she's up, I'm at work" runs this): named, those are asked about.
       rulesOut: ['pat', 'neighbour', 'neighbor', 'record', 'microphone', 'mic', 'mics', 'listen', 'hear', 'video', 'audio', 'film',
-        'night', 'midnight', 'gone', 'goes', 'going', 'went', 'back', 'working', 'broken', 'battery', 'batteries', 'offline', 'faulty'],
-      expect: { 'mat.pressed': false, 'door.open': 1, 'kettle.on': false },
+        'night', 'midnight', 'gone', 'goes', 'went', 'back', 'into', 'stops', 'stopped', 'broken', 'battery', 'batteries', 'offline', 'faulty'],
+      expect: { 'mat.pressed': false, 'door.open': 1, 'kettle.on': false, 'motion.last': '07:11', 'mat.status': 'online', 'door.status': 'online' },
       steps: [
         { beat: 'plan' }, { status: 'Checking connected devices' },
         { say: 'No camera, no microphone. I can answer "is she up?" from four things that don\'t look at anyone: the bed sensor, the bedroom door, the hallway motion sensor and the kettle plug.' },
@@ -224,30 +302,104 @@ export default {
         { beat: 'run' },
         { status: 'Tuesday 03:10' }, { say: 'Running. Fast-forwarding through the night.' },
         { tween: 'env.hour', to: 27.17, ms: 2000 },
-        { status: 'Tuesday 07:08' }, { tween: 'env.hour', to: 31.13, ms: 2500 },
-        { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { wait: 900 },
-        { tween: 'door.open', to: 1, ms: 1200, label: 'Bedroom door → open' },
-        { set: 'motion.active', to: true, label: 'Hallway → movement' }, { set: 'motion.last', to: '07:11' }, { wait: 800 },
+        { failPoint: 'night' },
+        { status: 'Tuesday 05:00' }, { tween: 'env.hour', to: 29, ms: 1500 },
+        { say: '05:00 — the watch starts. All four sensors checked in: weight on the bed, her door closed, the hallway quiet, the kettle off.' },
+        { failPoint: 'watch' },
+        ...P0_TO_0708,
+        { failPoint: 'waking' },
+        ...P0_UP,
         { say: 'Mum\'s up · 07:11' },
         { set: 'motion.active', to: false },
-        { set: 'kettle.on', to: true }, { tween: 'kettle.watts', to: 1850, ms: 600, label: 'Kettle → on' },
-        { say: '07:12 — and the kettle\'s on. Normal morning.' },
-        { tween: 'kettle.minutes', to: 3, ms: 1500 }, { set: 'kettle.on', to: false }, { set: 'kettle.watts', to: 0 }, { set: 'kettle.minutes', to: 0 },
-        // that evening she goes to bed as usual: last hallway movement 22:40, door shut, weight on the bed
-        { status: 'Tuesday 22:40' }, { tween: 'env.hour', to: 46.67, ms: 2200 },
-        { set: 'motion.active', to: true }, { set: 'motion.last', to: '22:40' }, { wait: 500 }, { set: 'motion.active', to: false },
-        { tween: 'door.open', to: 0, ms: 800, label: 'Bedroom door → closed' }, { set: 'mat.pressed', to: true, label: 'Bed sensor → in bed' }, { wait: 500 },
-        { status: 'Wednesday 09:30' }, { tween: 'env.hour', to: 57.5, ms: 2200 },
-        { beat: 'recover' },
-        { fn: async ({ chat, sleep }) => { chat.alert('09:30 and she\'s not up yet. Bed sensor still shows weight, door closed, no hallway movement since 22:40 last night. Yesterday she was up at 07:11.', '⏰ Not up yet'); await sleep(600); } },
-        { fn: ({ chat, store }) => { const pat = store.get('plan.neighbour'); chat.replan({ intro: pat ? 'That\'s the message I said I\'d send, to you and to Pat.' : 'That\'s the one message I said I\'d send.', changes: ['No alarm, no siren, no lights flashing in her flat', pat ? 'Pat has the same message, as you chose. No one else' : 'I haven\'t contacted anyone else', pat ? 'I\'ll tell you and Pat the moment anything changes' : 'I\'ll tell you the moment anything changes'], needsYou: 'A late morning is usually just a late morning. A phone call from you is the right next step, not a device.' }); } },
-        { wait: 700 },
-        { status: 'Wednesday 09:41' }, { tween: 'env.hour', to: 57.68, ms: 1200 },
-        { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { tween: 'door.open', to: 1, ms: 1000, label: 'Bedroom door → open' }, { set: 'motion.active', to: true }, { set: 'motion.last', to: '09:41' }, { wait: 600 },
-        { fn: ({ store, say }) => say(store.get('plan.neighbour') ? 'Mum\'s up · 09:41. All clear. I\'ve told Pat too.' : 'Mum\'s up · 09:41. All clear.') }, { set: 'motion.active', to: false },
-        { status: 'Wednesday 09:41 · Mum\'s up' },
-        { end: { headline: 'She was never watched. You still knew.', body: 'Four small sensors, a rule you approved, and a message when she wasn\'t up by 09:30. NeuCharBox answers the question without a camera, and escalates by telling you, not by alarming her.' } },
+        { failPoint: 'kettle' },
+        ...P0_KETTLE_ON,
+        P0_KETTLE_LINE,
+        ...P0_KETTLE_OFF,
+        { status: 'Tuesday 07:15 · Mum\'s up' },
+        { end: { headline: 'Up at 07:11. Nobody had to watch.', body: 'The bed sensor, her door and the hallway sensor agreed at 07:11, and the kettle backed them up a minute later. You got one message, and no camera or microphone was involved.' } },
       ],
+      genericAt: 'waking',
+      genericTitle: '📝 Noted, not urgent',
+      whatIf: {
+        mat: { at: 'night', intro: 'Replaying this request. This time the bed sensor goes quiet in the night.', steps: [
+          { status: 'Tuesday 03:40' }, { tween: 'env.hour', to: 27.67, ms: 1200 },
+          { status: 'Tuesday 04:10 · bed sensor check-in due' }, { tween: 'env.hour', to: 28.17, ms: 1200 },
+          { fail: 'mat', title: '📝 Logged, not sent at 4 am', faultText: 'silent since 03:40', say: '04:10 — the bed sensor missed its check-in. The last thing it sent, at 03:40, was weight on the bed. Its silence doesn\'t tell me she\'s asleep, or that she isn\'t.' },
+          { wait: 1500 },
+          { say: 'Your rule starts with the bed sensor, so it can\'t run as approved. No 4 am message about a sensor: when she\'s up, I\'ll tell you what the others show.' },
+          replanWith((st) => ({ intro: 'This morning, without the bed sensor:', changes: ['Bed sensor: silent since 03:40. Its last reading, weight on the bed, stays on screen, and I don\'t count it', 'Her door, the hallway sensor and the kettle plug still watch from 05:00', 'No "Mum\'s up" from me without the bed sensor: I\'ll send what the others show, and name the missing one', `The 09:30 check runs on the door and the hallway: if neither shows anything by then, I message ${pat(st) ? 'you and Pat' : 'you'}`], needsYou: 'Next time you visit, look at the small box on the side of her bed: it may be unplugged or need new batteries.' })),
+          { status: 'Tuesday 07:08' }, { tween: 'env.hour', to: 31.13, ms: 1800 },
+          { tween: 'door.open', to: 1, ms: 1200, label: 'Bedroom door → open' }, { set: 'motion.active', to: true, label: 'Hallway → movement' }, { set: 'motion.last', to: '07:11' }, { wait: 800 },
+          { say: 'Messaged you: "Her bedroom door opened and the hallway sensor saw movement at 07:11. The bed sensor has been silent since 03:40, so this is from the door and the hallway only."' },
+          { set: 'motion.active', to: false },
+          ...P0_KETTLE_ON,
+          { say: '07:12 — and the kettle\'s on: another sign, from a different sensor. I\'ve sent you that as well.' },
+          ...P0_KETTLE_OFF,
+          { status: 'Tuesday 07:15 · bed sensor flagged' },
+          HOLD,
+          { end: { headline: 'No bed sensor, and no guessing.', body: 'The bed sensor went silent at 03:40, and NeuCharBox read that as neither asleep nor awake. You got what her door, the hallway and the kettle showed, with the missing sensor named.' } },
+        ] },
+        door: { at: 'waking', intro: 'Replaying this request. This time the bedroom door sensor gets its reading wrong.', steps: [
+          { status: 'Tuesday 07:10' }, { tween: 'env.hour', to: 31.17, ms: 900 },
+          { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { wait: 900 },
+          { set: 'door.leaf', to: 0 }, { tween: 'door.leaf', to: 1, ms: 1200 },   // the door opens; its sensor still reports "closed"
+          { set: 'motion.active', to: true, label: 'Hallway → movement' }, { set: 'motion.last', to: '07:11' }, { wait: 900 },
+          { fail: 'door', title: '📝 Door sensor disagrees', faultText: 'stuck on "closed"', say: '07:11 — the bed released and the hallway sensor saw movement right outside her door, but the bedroom door sensor still says "closed". Two sensors agree and one doesn\'t.' },
+          { set: 'motion.active', to: false }, { wait: 1500 },
+          { say: 'I\'m going with the two that agree. Mum\'s up · 07:11. Your rule needs the bed sensor plus her door or the hallway, so the bed and the hallway are enough on their own.' },
+          { say: 'A door sensor that says "closed" with the door open usually means its magnet has come off the door and is stuck to the part on the frame. I\'ve stopped counting it until it\'s fixed.' },
+          ...P0_KETTLE_ON,
+          { say: '07:12 — and the kettle\'s on. A third sign that agrees.' },
+          ...P0_KETTLE_OFF,
+          replanWith((st) => ({ intro: 'Mum\'s up, from the sensors that agree:', changes: ['Bed released at 07:10, hallway movement at 07:11, kettle on at 07:12', 'Bedroom door sensor: says "closed" while the other sensors say she\'s up. Not counted', `Until it's fixed, "Mum's up" needs the bed and the hallway; the 09:30 check${pat(st) ? ', to you and Pat,' : ''} runs on those two`], needsYou: 'The sensor on her door frame has two parts: a small magnet that belongs on the door, and the part on the frame. On your next visit, check the magnet is still on the door, not stuck to the frame part, and stick it back in line.' })),
+          { status: 'Tuesday 07:15 · Mum\'s up · door sensor flagged' },
+          HOLD,
+          { end: { headline: 'Two sensors agreed. The door didn\'t.', body: 'The bedroom door sensor said "closed" while the hallway saw movement just outside it. NeuCharBox went with the two sensors that agreed, sent your "Mum\'s up" on time, and stopped counting the one that disagreed.' } },
+        ] },
+        motion: { at: 'watch', intro: 'Replaying this request. This time the hallway motion sensor sends a tamper alert and goes quiet before she\'s up.', steps: [
+          { status: 'Tuesday 06:40' }, { tween: 'env.hour', to: 30.67, ms: 1500 },
+          { fail: 'motion', title: '📝 Hallway sensor down · logged', faultText: 'tamper alert · silent', say: '06:40 — the hallway motion sensor sent a tamper alert and has said nothing since. That usually means it has come off its mount. From now on it tells me nothing about the hallway: not movement, and not "no movement".' },
+          { wait: 1500 },
+          { say: 'Your rule needs the bed sensor and either her door or the hallway, so it still works on the bed and the door. Nothing here is worth waking you for.' },
+          replanWith((st) => ({ intro: 'This morning, one sensor short:', changes: ['Hallway motion sensor: tamper alert at 06:40, silent since', '"Mum\'s up" comes from the bed sensor and her door, which your rule already allows', `The 09:30 check runs on the bed and the door; if they show nothing by then, I message ${pat(st) ? 'you and Pat' : 'you'}`, 'No hallway times in my notes until it\'s back'], needsYou: 'When you visit, check the small white sensor high on the hallway wall is still on its bracket, and clip it back if not. It should rejoin on its own.' })),
+          { status: 'Tuesday 07:08' }, { tween: 'env.hour', to: 31.13, ms: 1500 },
+          { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { wait: 900 },
+          { tween: 'door.open', to: 1, ms: 1200, label: 'Bedroom door → open' }, { wait: 600 },
+          { say: 'Mum\'s up · 07:11. From the bed sensor and her door; the hallway sensor is still down.' },
+          ...P0_KETTLE_ON,
+          P0_KETTLE_LINE,
+          ...P0_KETTLE_OFF,
+          { status: 'Tuesday 07:15 · Mum\'s up · hallway sensor flagged' },
+          HOLD,
+          { end: { headline: 'Down to two sensors. Still enough.', body: 'The hallway sensor sent a tamper alert and went quiet before she woke. NeuCharBox ran your rule on the bed and the door, which it already allowed, and told you which sensor was missing.' } },
+        ] },
+        kettle: { at: 'kettle', intro: 'Replaying this request. This time the kettle plug drops off the network just as she makes her tea.', steps: [
+          { status: 'Tuesday 07:12 · Mum\'s up at 07:11' }, { tween: 'env.hour', to: 31.2, ms: 1000 },
+          { set: 'kettle.steam', to: true },   // she's boiling the kettle; the plug can't report it
+          { fail: 'kettle', title: '📝 Kettle plug offline', faultText: 'off the network', say: '07:12 — the kettle plug dropped off the network. Its last report, at 07:11, was "off, 0 W". From now on I can\'t see the kettle, on or off.' },
+          { wait: 1500 },
+          { say: '"Mum\'s up · 07:11" stands: it came from the bed sensor, her door and the hallway. The kettle was only ever the second confirmation, so I\'m not counting it either way.' },
+          { tween: 'env.hour', to: 31.25, ms: 2500 }, { set: 'kettle.steam', to: false }, { wait: 1000 },
+          replanWith((st) => ({ intro: 'This morning, without the kettle plug:', changes: ['"Mum\'s up · 07:11" sent, from the bed sensor, her door and the hallway', 'Kettle plug: off the network since 07:12; the kettle isn\'t counted as on or off', 'A plug that drops off the network normally keeps passing power, so her kettle should work as usual', pat(st) ? 'Nothing goes to Pat: that was only for 09:30' : 'Nothing else changes in her flat'], needsYou: 'No rush. When you\'re next there, unplug the kettle plug for ten seconds and plug it back in. If it doesn\'t show up here again, I\'ll walk you through reconnecting it.' })),
+          { status: 'Tuesday 07:15 · Mum\'s up · kettle plug flagged' },
+          HOLD,
+          { end: { headline: 'The kettle went quiet. Nothing was assumed.', body: 'The kettle plug dropped off the network as she made her tea. NeuCharBox kept the "Mum\'s up" it had already confirmed, and didn\'t count a silent plug as a kettle on or off.' } },
+        ] },
+        sleepIn: { label: 'She isn\'t up by 09:30', ask: 'What if she isn\'t up by 09:30?', at: 'waking', intro: 'Replaying this request. This time she sleeps in.', steps: [
+          { status: 'Tuesday 08:20' }, { tween: 'env.hour', to: 32.33, ms: 1500 },
+          { status: 'Tuesday 09:30' }, { tween: 'env.hour', to: 33.5, ms: 1500 },
+          { fn: async ({ chat, sleep }) => { chat.alert('09:30 and she\'s not up yet. The bed sensor still shows weight, her door is closed, and the hallway sensor hasn\'t seen movement all night. All four sensors are checking in, so this isn\'t a sensor gone quiet.', '⏰ Not up yet'); await sleep(600); } },
+          { wait: 3000 },   // the alert is read on its own before the re-plan card pushes it up (on a phone)
+          replanWith((st) => ({ intro: pat(st) ? 'That\'s the message I said I\'d send, to you and to Pat.' : 'That\'s the one message I said I\'d send.', changes: ['No alarm, no siren, no lights flashing in her flat', pat(st) ? 'Pat has the same message, as you chose. No one else' : 'I haven\'t contacted anyone else', pat(st) ? 'I\'ll tell you and Pat the moment anything changes' : 'I\'ll tell you the moment anything changes'], needsYou: 'A late morning is usually just a late morning. A phone call from you is the right next step, not a device.' })),
+          { wait: 1500 },
+          { status: 'Tuesday 09:41' }, { tween: 'env.hour', to: 33.68, ms: 1200 },
+          { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { wait: 900 }, { tween: 'door.open', to: 1, ms: 1000, label: 'Bedroom door → open' }, { set: 'motion.active', to: true }, { set: 'motion.last', to: '09:41' }, { wait: 600 },
+          line((st) => (pat(st) ? 'Mum\'s up · 09:41. All clear. I\'ve told Pat too.' : 'Mum\'s up · 09:41. All clear.')), { set: 'motion.active', to: false },
+          { status: 'Tuesday 09:41 · Mum\'s up' },
+          HOLD,
+          { end: { headline: 'She was never watched. You still knew.', body: 'Four small sensors, a rule you approved, and one message when she wasn\'t up by 09:30. NeuCharBox answered the question without a camera, and escalated by telling you, not by alarming her.' } },
+        ] },
+      },
     },
     {
       chip: 'If she gets up at night, light the way to the bathroom, softly.',
@@ -256,10 +408,10 @@ export default {
       keywords: ['night', 'light', 'way', 'bathroom', 'softly', 'soft', 'gets up', 'got', 'dark', 'path', 'toilet', 'fall', 'trip', 'safe', 'safely', 'more', 'bed'],
       // routing (js/engine/match.js): fall detection or leaving the house is something else, and so is a TV left on all
       // night (it ran this on "night"); brighter, another room or telling the neighbour is not this plan ("light the way
-      // to the kitchen" asks back; "tell Pat if she's not up" ran it)
-      avoid: ['falls', 'fell', 'fallen', 'detect', 'detects', 'detection', 'leaves house', 'leaves flat', 'leaves home', 'goes out', 'outside', 'wander', 'wanders', 'wandering', 'tv', 'telly', 'television', 'wrong', 'happens', 'happen', 'happened'],
+      // to the kitchen" asks back; "tell Pat if she's not up" ran it). Making her bed: see the first request.
+      avoid: ['falls', 'fell', 'fallen', 'detect', 'detects', 'detection', 'leaves house', 'leaves flat', 'leaves home', 'goes out', 'outside', 'wander', 'wanders', 'wandering', 'tv', 'telly', 'television', 'wrong', 'happens', 'happen', 'happened', 'makes bed', 'made bed', 'making bed', 'bed made'],
       rulesOut: ['bright', 'kitchen', 'stairs', 'garden', 'lounge', 'garage', 'front', 'pat', 'neighbour', 'neighbor'],
-      expect: { 'hall.status': 'fault', 'night.brightness': 0.3 },
+      expect: { 'mat.pressed': true, 'door.open': 0, 'night.brightness': 0, 'hall.brightness': 0, 'night.status': 'online', 'hall.status': 'online' },
       steps: [
         { beat: 'plan' }, { status: 'Checking connected devices' },
         { say: 'Night light and hall light, triggered by the bed sensor — not by motion, because by the time motion sees her she\'s already walking in the dark.' },
@@ -271,31 +423,110 @@ export default {
         ] } },
         { beat: 'run' },
         { status: 'Tuesday 02:40' }, { tween: 'env.hour', to: 26.67, ms: 2000 },
+        { failPoint: 'up' },
         { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' },
         { set: 'night.on', to: true }, { tween: 'night.brightness', to: 0.2, ms: 700, label: 'Night light → 20%' },
-        { wait: 500 }, { set: 'hall.on', to: true },
-        { fn: ({ store, tween, status }) => { const b = store.get('plan.brighter') ? 0.5 : 0.3; status(`Hall light → ${Math.round(b * 100)}%`); return tween('hall.brightness', b, 900); } },
-        { tween: 'door.open', to: 1, ms: 1000, label: 'Bedroom door → open' }, { set: 'motion.active', to: true }, { set: 'motion.last', to: '02:41' }, { wait: 700 }, { set: 'motion.active', to: false },
+        { wait: 500 }, { set: 'hall.on', to: true }, hallOn(true),
+        { failPoint: 'door' },
+        ...P1_THROUGH,
         { say: '02:41 — she\'s up. Night light 20%, hall light on. Nothing else.' },
-        { status: 'Tuesday 02:49' }, { tween: 'door.open', to: 0, ms: 800 }, { set: 'mat.pressed', to: true, label: 'Bed sensor → in bed' },
+        ...P1_BACK, { wait: 500 },
         { say: '02:49 — back in bed. Lights off in five minutes.' },
-        { status: 'Tuesday 02:54' }, { tween: 'env.hour', to: 26.9, ms: 1200 },
-        { parallel: [{ tween: 'night.brightness', to: 0, ms: 1200 }, { tween: 'hall.brightness', to: 0, ms: 1200 }] }, { set: 'night.on', to: false }, { set: 'hall.on', to: false },
-        // an hour later the same night (fast-forwarding to the next night flashed the dark flat through a whole day)
-        { status: 'Tuesday 03:55' }, { tween: 'env.hour', to: 27.92, ms: 1500 },
-        { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { set: 'night.on', to: true }, { tween: 'night.brightness', to: 0.2, ms: 700, label: 'Night light → 20%' },
-        { wait: 500 }, { status: 'Hall light: sending "on"…' }, { wait: 900 }, // an arrow means the state changed; this one never does
-        { beat: 'recover' },
-        { fail: 'hall', title: '📝 Logged for your morning', say: '03:55 — the hall light didn\'t respond. She\'s up and the hallway is dark.' },
-        { say: 'The hall light is the one that matters here and it\'s not answering. I can\'t make it work, so I\'m using what I have:' },
-        { fn: ({ chat, store }) => chat.replan({ intro: 'Right now:', changes: [`Night light up from 20% to ${store.get('plan.brighter') ? 50 : 30}%, the most your limit allows. It's by the bed, so it lights her way to the door, not the hall`, 'Retrying the hall light while she\'s up', 'Logging this so you see it in the morning, not at 4 am'], needsYou: 'It could be the bulb or the wall switch; I can\'t tell which from here. Check it tomorrow.' }) },
-        { wait: 700 },
-        { fn: ({ store, tween, status }) => { const b = store.get('plan.brighter') ? 0.5 : 0.3; status(`Night light → ${Math.round(b * 100)}%`); return tween('night.brightness', b, 700); } },
-        // the retry the new plan promises, shown: sent again, and again no answer (red status line, ring and tile)
-        { status: 'Hall light: sending "on" again…' }, { wait: 900 }, { fail: 'hall' },
-        { tween: 'door.open', to: 1, ms: 1000 }, { set: 'motion.active', to: true }, { set: 'motion.last', to: '03:56' }, { wait: 600 }, { set: 'motion.active', to: false },
-        { end: { headline: 'It did the most it could, and said so.', body: 'When the important device failed, NeuCharBox didn\'t pretend. It used what still worked, kept retrying, and left you a note for the morning instead of a 4 am alert.' } },
+        { failPoint: 'back' },
+        ...P1_OFF,
+        { failPoint: 'later' },
+        { status: 'Tuesday 02:54 · back in bed · lights off' },
+        { end: { headline: 'Lit before she reached the door.', body: 'The bed sensor felt her get up at 02:40, so both lights were on before she reached her door, never brighter than your limit. Five minutes after she was back in bed, the flat was dark again.' } },
       ],
+      genericAt: 'back',
+      genericTitle: '📝 Noted, not urgent',
+      whatIf: {
+        mat: { at: 'up', intro: 'Replaying this request. This time the bed sensor has gone quiet before she gets up.', steps: [
+          { status: 'Tuesday 02:40' }, { wait: 1200 },
+          { tween: 'door.open', to: 1, ms: 1000, label: 'Bedroom door → open' }, { set: 'motion.active', to: true, label: 'Hallway → movement' }, { set: 'motion.last', to: '02:41' },
+          // her door and the hallway are all that's left to go on: the lights come on at once, then NCB says why so late.
+          // The fail is the last device change for a while, so on a phone the strip stays on the red Bed sensor tile.
+          { set: 'night.on', to: true }, { set: 'hall.on', to: true },
+          { fn: ({ store, tween }) => Promise.all([tween('night.brightness', 0.2, 700), tween('hall.brightness', store.get('plan.brighter') ? 0.5 : 0.3, 700)]) },
+          { set: 'motion.active', to: false },
+          { fail: 'mat', title: '📝 Bed sensor silent', faultText: 'silent since 02:20', say: '02:41 — her door opened and the hallway saw movement, but the bed sensor still says "in bed". It hasn\'t sent anything since 02:20, so it never told me she got up.' },
+          { wait: 1500 },
+          line((st) => `Both lights on now: night light 20%, hall light ${hallPct(st)}%. They came on at her door, not at her bed, so her first steps were in the dark.`),
+          { say: 'Until the bed sensor is back, her door and the hallway sensor are the trigger. They\'re later than the bed, but they\'re what I have. Same lights, same limit, and it\'s 2 am, so I didn\'t wait to ask you.' },
+          { status: 'Tuesday 02:49' }, { parallel: [{ tween: 'env.hour', to: 26.82, ms: 800 }, { tween: 'door.open', to: 0, ms: 800, label: 'Bedroom door → closed' }] }, { wait: 600 },
+          { say: '02:49 — her door closed. Without the bed sensor I can\'t see her back in bed, so the night light stays on at 20% until 06:00.' },
+          { status: 'Tuesday 02:54' }, { tween: 'env.hour', to: 26.9, ms: 1000 },
+          { tween: 'hall.brightness', to: 0, ms: 1200, label: 'Hall light → off' }, { set: 'hall.on', to: false },
+          replanWith((st) => ({ intro: 'Until the bed sensor is back:', changes: ['Bed sensor: silent since 02:20. It still shows its last reading, "in bed"', 'Trigger: her door or the hallway sensor. Later than the bed, so tonight her first steps from the bed were dark', 'Night light: on at 20% until 06:00, because I can\'t see her get back into bed', `Hall light: off 5 minutes after her door closes; nothing brighter than ${hallPct(st)}%`], needsYou: 'Look at the small box on the side of her bed when you\'re next there: it may be unplugged or need new batteries. Until it\'s fixed, the first time she gets up each night, her first steps are dark. If you like, I can leave the night light on at 20% from 23:00 until then.' })),
+          { status: 'Tuesday 02:54 · night light 20% · bed sensor flagged' },
+          HOLD,
+          { end: { headline: 'Lights at her door, not her bed.', body: 'The bed sensor had gone silent, so the lights came on at her door instead of at her bed. NeuCharBox said so, and left a soft light on rather than guess she was back in bed.' } },
+        ] },
+        night: { at: 'up', intro: 'Replaying this request. This time the night light doesn\'t answer when she gets up.', steps: [
+          { status: 'Tuesday 02:40' }, { wait: 1000 },
+          { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' },
+          { status: 'Night light: sending "on" at 20%…' }, { wait: 900 },
+          { fail: 'night', title: '📝 Night light not answering', faultText: 'no answer to "on"', say: '02:40 — she\'s out of bed and the night light didn\'t answer. As far as I know, her bedroom is dark.' },
+          { set: 'hall.on', to: true }, hallOn(false), { wait: 800 },
+          line((st) => `Hall light on now: it\'s the only light I have. It\'s at ${hallPct(st)}%, your limit, and it only reaches her room once her door is open.`),
+          ...P1_THROUGH,
+          { status: 'Night light: sending "on" again…' }, { wait: 900 }, { fail: 'night' },
+          { wait: 1500 },
+          { say: 'Still nothing from the night light. If her lamp was switched off at its own switch, the bulb has no power and can\'t hear me. I can\'t tell that from here.' },
+          ...P1_BACK, { wait: 500 },
+          { say: '02:49 — back in bed. Hall light off in five minutes.' },
+          { status: 'Tuesday 02:54' }, { tween: 'env.hour', to: 26.9, ms: 1200 },
+          { tween: 'hall.brightness', to: 0, ms: 1200 }, { set: 'hall.on', to: false },
+          replanWith((st) => ({ intro: 'Tonight, without the night light:', changes: ['Night light: no answer at 02:40, or to the retry', `Hall light: on as soon as she was up, at ${hallPct(st)}%, your limit`, 'Her first steps, from the bed to her door, had no light', 'Logged for your morning, not sent at 3 am'], needsYou: 'Check that her bedside lamp\'s own switch is on. If it is, the bulb itself may need replacing.' })),
+          { status: 'Tuesday 02:54 · lights off · night light flagged' },
+          HOLD,
+          { end: { headline: 'No night light. Only the hall light answered.', body: 'The night light didn\'t answer when she got up, so the hall light was the only light she had, at your limit. NeuCharBox said her first steps were dark instead of pretending the hall light covered them.' } },
+        ] },
+        door: { at: 'door', intro: 'Replaying this request. This time the bedroom door sensor starts flickering as she goes through.', steps: [
+          { status: 'Tuesday 02:41' }, { wait: 600 },
+          { set: 'door.leaf', to: 0 }, { parallel: [{ tween: 'door.leaf', to: 1, ms: 1000 }, FLICKER] },   // the door opens once; its sensor chatters
+          { set: 'motion.active', to: true }, { set: 'motion.last', to: '02:41' },
+          { fail: 'door', title: '📝 Door sensor flickering', faultText: 'flickering open/closed', say: '02:41 — the bedroom door sensor kept flicking between open and closed, seven times in two seconds. A door doesn\'t do that; a loose magnet does.' },
+          { set: 'motion.active', to: false }, { wait: 1500 },
+          { say: 'Your lights don\'t use the door: they follow the bed sensor, and both are on as planned. I\'ve stopped listening to the door sensor, so its flicker can\'t be read as her coming and going.' },
+          { status: 'Tuesday 02:49' }, { parallel: [{ tween: 'env.hour', to: 26.82, ms: 800 }, { tween: 'door.leaf', to: 0, ms: 800 }] }, { set: 'mat.pressed', to: true, label: 'Bed sensor → in bed' }, { wait: 500 },
+          { say: '02:49 — back in bed. Lights off in five minutes.' },
+          ...P1_OFF,
+          { replan: { intro: 'Tonight:', changes: ['Bedroom door sensor: flickering open/closed since 02:41. Ignored until it\'s fixed', 'Lights: on and off with the bed sensor, exactly as planned', 'None of the door sensor\'s readings go into a message or note'], needsYou: 'The sensor on her door frame works with a small magnet on the door. Press the magnet back in line when you can; if its sticky pad has worn out, a new pad fixes it.' } },
+          { status: 'Tuesday 02:54 · lights off · door sensor flagged' },
+          HOLD,
+          { end: { headline: 'A flickering door, calmly ignored.', body: 'The door sensor started flicking between open and closed as she went through. NeuCharBox recognised a loose magnet, kept the lights on the bed sensor as planned, and left the door out of everything.' } },
+        ] },
+        motion: { at: 'back', intro: 'Replaying this request. This time the hallway motion sensor goes quiet once she\'s back in bed.', steps: [
+          { status: 'Tuesday 02:50 · hallway sensor check-in due' }, { tween: 'env.hour', to: 26.83, ms: 1000 },
+          { fail: 'motion', title: '📝 Hallway sensor quiet', faultText: 'missed check-in', say: '02:50 — the hallway motion sensor missed its check-in. It last checked in at 02:20 and saw her at 02:41. Most likely its battery is flat.' },
+          { wait: 1500 },
+          { say: 'This is why your lights follow the bed sensor, not the hallway: they came on at 02:40, before she reached her door, and they go off five minutes after she\'s back in bed. Nothing tonight needs the hallway sensor.' },
+          { say: 'I won\'t read its silence as an empty hallway, either. Until it\'s back, it just isn\'t there.' },
+          ...P1_OFF, { wait: 1000 },
+          replanWith((st) => ({ intro: 'Tonight:', changes: ['Hallway motion sensor: missed its 02:50 check-in, most likely a flat battery', `Lights: on and off with the bed sensor, exactly as planned, never above ${hallPct(st)}%`, 'No hallway times in my notes until it\'s back'], needsYou: 'It most likely needs new batteries. Swap them when you visit; it should rejoin on its own.' })),
+          { status: 'Tuesday 02:54 · lights off · hallway sensor flagged' },
+          HOLD,
+          { end: { headline: 'Built on the bed, not the hallway.', body: 'The hallway sensor went quiet after she went back to bed. The lights never depended on it, so NeuCharBox turned them off on time and flagged the sensor for the morning.' } },
+        ] },
+        hall: { at: 'later', intro: 'Replaying this request. This time the hall light doesn\'t answer when she gets up again, an hour later.', steps: [
+          { status: 'Tuesday 03:55' }, { tween: 'env.hour', to: 27.92, ms: 1500 },
+          { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { set: 'night.on', to: true }, { tween: 'night.brightness', to: 0.2, ms: 700, label: 'Night light → 20%' },
+          { wait: 500 }, { status: 'Hall light: sending "on"…' }, { wait: 900 },
+          { fail: 'hall', title: '📝 Logged for your morning', faultText: 'no answer to "on"', say: '03:55 — the hall light didn\'t respond. She\'s up and the hallway is dark.' },
+          { wait: 1500 },
+          { say: 'The hall light is the one that matters here and it\'s not answering. I can\'t make it work, so I\'m using what I have:' },
+          replanWith((st) => ({ intro: 'Right now:', changes: [`Night light up from 20% to ${hallPct(st)}%, the most your limit allows. It's by the bed, so it lights her way to the door, not the hall`, 'Retrying the hall light while she\'s up', 'Logging this so you see it in the morning, not at 4 am'], needsYou: 'It\'s most likely the bulb; I can\'t be sure from here. Check it tomorrow.' })),
+          { fn: ({ store, tween, status }) => { const b = store.get('plan.brighter') ? 0.5 : 0.3; status(`Night light → ${Math.round(b * 100)}%`); return tween('night.brightness', b, 700); } },
+          // she opens her door into the dark hallway, then the retry the new plan promises: sent again, and again no answer.
+          // The retry is the last device change, so on a phone the dashboard strip ends on the red Hall light tile.
+          { tween: 'door.open', to: 1, ms: 1000 }, { set: 'motion.active', to: true }, { set: 'motion.last', to: '03:56' }, { wait: 600 }, { set: 'motion.active', to: false },
+          { status: 'Hall light: sending "on" again…' }, { wait: 900 }, { fail: 'hall' }, { wait: 1200 },
+          { status: (st) => `Tuesday 03:56 · night light ${hallPct(st)}% · hall light flagged` },
+          HOLD,
+          { end: { headline: 'It did what it could, and said so.', body: 'When the important device failed, NeuCharBox didn\'t pretend. It used what still worked, retried, and left you a note for the morning instead of a 4 am alert.' } },
+        ] },
+      },
     },
     {
       chip: 'Tell me if the kettle\'s been on for more than 10 minutes.',
@@ -307,11 +538,15 @@ export default {
       // routing (js/engine/match.js): a fall question never names this request, nor does "if something's wrong / happens"
       // (see the first request); "boil the kettle" (exact words, not negated: "don't let the kettle boil dry" still runs
       // it) asks for the opposite of a watch that switches it off; "let me know if she's still asleep at 10" is the first
-      // request's, not this one's on the chip's "10"
-      avoid: ['falls', 'fell', 'fallen', 'boil kettle', 'still asleep', 'wrong', 'happens', 'happen', 'happened'],
-      // so do "switch on the kettle" and "put the kettle on"; "message me first" is the Edit; it tells no neighbour
-      rulesOut: ['turn on', 'switch on', 'put', 'first', 'pat', 'neighbour', 'neighbor'],
-      expect: { 'kettle.status': 'fault', 'kettle.on': true },
+      // request's, not this one's on the chip's "10", and so are "…asleep at 10", "…sleeps past 10" and "…in bed at 10".
+      // Making her bed: see the first request.
+      avoid: ['falls', 'fell', 'fallen', 'boil kettle', 'still asleep', 'wrong', 'happens', 'happen', 'happened', 'asleep 10', 'sleeps 10', 'sleep 10', 'sleeping 10', 'bed 10', 'makes bed', 'made bed', 'making bed', 'bed made'],
+      // so do "switch on the kettle" and "put the kettle on"; "message me first" is the Edit; it tells no neighbour. It
+      // watches the kettle, not whether the floor or the washing is dry ('dry' is a keyword for "…boil dry"), nor the
+      // washing machine, nor whether the plug itself works ("tell me if the kettle plug stops working / goes offline" ran
+      // it; not 'broken': "…if the kettle's auto-off is broken" is this request): named, those are asked about.
+      rulesOut: ['turn on', 'switch on', 'put', 'first', 'pat', 'neighbour', 'neighbor', 'floor', 'floors', 'washing', 'laundry', 'clothes', 'towels', 'hair', 'paint', 'dishes', 'stops', 'stopped', 'offline', 'faulty'],
+      expect: { 'kettle.on': false, 'kettle.watts': 0, 'kettle.status': 'online', 'mat.pressed': false, 'door.open': 1, 'motion.last': '17:58' },
       steps: [
         { beat: 'plan' }, { status: 'Checking connected devices' },
         { say: 'The kettle plug reports power draw, so I can see "on" without seeing the kitchen. Ten minutes at full draw means it\'s stuck on or the auto-off has failed.' },
@@ -323,32 +558,84 @@ export default {
         ] } },
         { beat: 'run' },
         { status: 'Tuesday 07:12' }, { tween: 'env.hour', to: 31.2, ms: 1800 },
-        // she's up: the bed and door agree with someone being in the kitchen
-        { set: 'mat.pressed', to: false }, { set: 'motion.last', to: '07:10' }, { tween: 'door.open', to: 1, ms: 700 },
-        { set: 'kettle.on', to: true }, { tween: 'kettle.watts', to: 1850, ms: 500, label: 'Kettle → on' },
-        { parallel: [{ tween: 'kettle.minutes', to: 3, ms: 1500 }, { tween: 'env.hour', to: 31.25, ms: 1500 }] }, // the 3-minute boil takes the clock to 07:15
-        { set: 'kettle.on', to: false }, { set: 'kettle.watts', to: 0 }, { set: 'kettle.minutes', to: 0 },
-        { status: 'Tuesday 07:15' }, { say: '07:15 — the kettle was on for 3 minutes, then off. A normal boil, ignored as planned.' },
+        { failPoint: 'morning' },
+        ...P2_UP,
+        ...P2_BOIL_ON,
+        ...P2_BOIL_OFF,
         { status: 'Tuesday 18:02' }, { tween: 'env.hour', to: 42.03, ms: 2000 }, { set: 'motion.last', to: '17:58' },
         { set: 'kettle.on', to: true }, { tween: 'kettle.watts', to: 1850, ms: 500, label: 'Kettle → on' },
-        { parallel: [{ tween: 'kettle.minutes', to: 10, ms: 2600 }, { tween: 'env.hour', to: 42.2, ms: 2600 }] },
-        { fn: ({ chat, store }) => chat.ncb(store.get('plan.warnFirst') ? '18:12 — the kettle has been drawing 1,850 W for 10 minutes. Messaging you first, as you chose. I\'ll switch it off at 18:17 if it\'s still on.' : '18:12 — the kettle has been drawing 1,850 W for 10 minutes. Switching it off at the plug.') },
-        { wait: 1500 },
-        { fn: async ({ store, chat, tween, sleep, status }) => {
-          if (!store.get('plan.warnFirst')) return;
-          await Promise.all([tween('kettle.minutes', 15, 1600), tween('env.hour', 42.28, 1600)]);
-          status('Tuesday 18:17'); chat.ncb('18:17 — still on, still drawing 1,850 W. Switching it off at the plug.'); await sleep(1500);
-        } },
-        { status: 'Kettle plug: sending "off"…' }, { wait: 900 }, // not "→ off": the tile still says on, and it never goes off
-        { beat: 'recover' },
-        // the title is the "NOT off, in those words" the new plan below promises
-        { fail: 'kettle', title: '⚠ The kettle is NOT off', say: 'The plug reports "off" — but it\'s still drawing 1,850 W. The relay hasn\'t actually opened.' },
-        { say: 'I don\'t trust the plug\'s word over the meter. A kettle that\'s been on this long with a stuck plug isn\'t something I can fix from here.' },
-        { replan: { intro: 'Escalating, by message, right now:', changes: ['Retrying the plug\'s off command', 'Telling you it\'s NOT off, in those words', 'Nothing else in the flat changes — no lights, no sounds'], needsYou: 'Call her now and ask her to switch the kettle off at the wall. Then that plug needs replacing.' } },
-        // the retry, shown: the off command again, and again "off" with 1,850 W still flowing (red status line, ring and tile)
-        { status: 'Kettle plug: sending "off" again…' }, { wait: 900 }, { fail: 'kettle' },
-        { end: { headline: '"Off" wasn\'t off. It said so.', body: 'The plug claimed success. The power draw said otherwise. NeuCharBox reported the measurement, not the claim, and handed you a phone call instead of a false all-clear.' } },
+        { failPoint: 'overrun' },
+        P2_TENMIN, P2_AT_TEN, { wait: 1500 }, P2_WARN,
+        { failPoint: 'switchOff' },
+        ...P2_OFF,
+        P2_MESSAGE,
+        { status: (st) => `Tuesday ${offAt(st)} · kettle off, confirmed` },
+        { end: { headline: 'On too long, off, and confirmed.', body: 'The morning boil was ignored, as planned. The evening one ran too long, so NeuCharBox switched it off at the plug when your plan said to, checked the meter read 0 W, and told you.' } },
       ],
+      genericAt: 'overrun',
+      genericTitle: '📝 Noted, not urgent',
+      whatIf: {
+        kettle: { at: 'switchOff', intro: 'Replaying this request. This time the kettle plug says "off" but doesn\'t switch off.', steps: [
+          { status: (st) => `Tuesday ${offAt(st)} · kettle on ${st.get('plan.warnFirst') ? 15 : 10} min` }, { wait: 800 },
+          { status: 'Kettle plug: sending "off"…' }, { wait: 900 },
+          { fn: ({ chat, store }) => chat.alert(`${offAt(store)} — the plug reports "off", but it\'s still drawing 1,850 W. The relay hasn\'t opened.`, '⚠ The kettle is NOT off') },
+          { fail: 'kettle', faultText: 'says off · 1,850 W' },   // the same moment as the alert: the fn above doesn't wait
+          { wait: 1500 },
+          { say: 'I don\'t trust the plug\'s word over the meter. A kettle that\'s been on this long with a stuck plug isn\'t something I can fix from here.' },
+          { replan: { intro: 'Escalating, by message, right now:', changes: ['Retrying the plug\'s off command', 'Telling you it\'s NOT off, in those words', 'Nothing else in the flat changes — no lights, no sounds'], needsYou: 'Call her now and ask her to switch the kettle off at its own switch or at the wall, and not to pick it up: it may be very hot. If you can\'t reach her, ask someone nearby to go round. Then that plug needs replacing.' } },
+          { status: 'Kettle plug: sending "off" again…' }, { wait: 900 }, { fail: 'kettle' },
+          { wait: 800 },
+          { say: 'Messaged you: "Mum\'s kettle is NOT off. It has been drawing 1,850 W since 18:02 and the plug won\'t switch it off. Please call her and ask her to switch it off at its own switch or at the wall."' },
+          { say: 'If she switches it off at the wall, the plug goes dark too, so I\'ll see it drop off rather than read 0 W. Tell me when it\'s done.' },
+          HOLD,
+          { end: { headline: '"Off" wasn\'t off. It said so.', body: 'The plug claimed success, but the power draw said otherwise. NeuCharBox reported the measurement, not the claim, and handed you a phone call instead of a false all-clear.' } },
+        ] },
+        mat: { at: 'morning', intro: 'Replaying this request. This time the bed sensor disagrees with the others in the morning.', steps: [
+          { status: 'Tuesday 07:12' }, { wait: 800 },
+          { set: 'motion.last', to: '07:10' }, { tween: 'door.open', to: 1, ms: 700, label: 'Bedroom door → open' },
+          ...P2_BOIL_ON,
+          { wait: 900 },
+          { fail: 'mat', title: '📝 Bed sensor disagrees', faultText: 'disagrees with others', say: '07:12 — her door is open, the hallway saw movement at 07:10 and the kettle is on, but the bed sensor still says "in bed", as it has since last night.' },
+          { wait: 1500 },
+          { say: 'Either someone else is with her this morning, or the bed sensor is stuck, or something heavy is on the bed. I can\'t tell which from here, so I won\'t use the bed sensor for anything today.' },
+          { parallel: [{ tween: 'kettle.minutes', to: 3, ms: 1500 }, { tween: 'env.hour', to: 31.25, ms: 1500 }] }, { set: 'kettle.on', to: false }, { set: 'kettle.watts', to: 0 }, { set: 'kettle.minutes', to: 0 },
+          { status: 'Tuesday 07:15' },
+          { say: '07:15 — the kettle was on for 3 minutes, then off. A normal boil, ignored as planned. The kettle watch reads the plug\'s meter, so the bed sensor makes no difference to it.' },
+          { wait: 1000 },
+          { replan: { intro: 'The kettle watch, unchanged:', changes: ['Bed sensor: "in bed" since last night, while her door, the hallway and the kettle say someone is up', 'Until you\'ve checked, nothing I tell you today leans on the bed sensor', 'The kettle watch reads the plug\'s meter, as planned, all day'], needsYou: 'Was anyone with her this morning? If not, check nothing heavy is on her bed, then the strip under the mattress.' } },
+          { status: 'Tuesday 07:15 · kettle watch on · bed sensor flagged' },
+          HOLD,
+          { end: { headline: 'The sensors disagreed. It didn\'t pick one.', body: 'The bed sensor said "in bed" while her door, the hallway and the kettle said someone was up. NeuCharBox flagged the disagreement, kept watching the kettle on its meter, and asked you what it couldn\'t know.' } },
+        ] },
+        door: { at: 'overrun', intro: 'Replaying this request. This time the bedroom door sensor goes quiet while the kettle is on.', steps: [
+          { status: 'Tuesday 18:04 · kettle on 2 min' }, { parallel: [{ tween: 'kettle.minutes', to: 2, ms: 1000 }, { tween: 'env.hour', to: 42.07, ms: 1000 }] },
+          { fail: 'door', title: '📝 Door sensor · not urgent', faultText: 'missed check-in', say: '18:04 — the bedroom door sensor missed its check-in. Most likely its battery is flat.' },
+          { wait: 1500 },
+          { say: 'The kettle watch doesn\'t use the door, so it carries on. I\'ll tell you about the sensor once the kettle is dealt with, in its own message: a message about the kettle should be about the kettle.' },
+          P2_TENMIN, P2_AT_TEN, { wait: 1500 }, P2_WARN,
+          ...P2_OFF,
+          P2_MESSAGE,
+          { wait: 1200 },
+          { say: 'Then, separately: "Not urgent: the bedroom door sensor in Mum\'s flat missed its 18:04 check-in, most likely a flat battery. Nothing else is affected."' },
+          replanWith((st) => ({ intro: 'The kettle first, then the sensor:', changes: [`Kettle: switched off at the plug at ${offAt(st)}, confirmed at 0 W, and you were told`, 'Door sensor: missed its 18:04 check-in, most likely a flat battery. In its own message, marked not urgent', 'Nothing in the kettle watch used it'], needsYou: 'Swap the door sensor\'s battery when you\'re next round. It should rejoin on its own.' })),
+          { status: (st) => `Tuesday ${offAt(st)} · kettle off · door sensor flagged` },
+          HOLD,
+          { end: { headline: 'One message, one subject.', body: 'The door sensor went quiet while the kettle was on. NeuCharBox kept every kettle message about the kettle, and sent the sensor news on its own, marked not urgent.' } },
+        ] },
+        motion: { at: 'overrun', intro: 'Replaying this request. This time the hallway motion sensor goes quiet while the kettle is on.', steps: [
+          { status: 'Tuesday 18:05 · kettle on 3 min' }, { parallel: [{ tween: 'kettle.minutes', to: 3, ms: 1200 }, { tween: 'env.hour', to: 42.08, ms: 1200 }] },
+          { fail: 'motion', title: '📝 Lost the hallway sensor', faultText: 'offline since 18:05', say: '18:05 — the hallway motion sensor missed its check-in. The last thing it reported was movement at 17:58.' },
+          { wait: 1500 },
+          { say: 'The kettle watch reads the plug\'s meter, so it carries on. But if you ask me whether she has moved since then, the honest answer is: I can\'t tell.' },
+          P2_TENMIN, P2_AT_TEN, { wait: 1500 }, P2_WARN,
+          ...P2_OFF,
+          P2_MESSAGE,
+          replanWith((st) => ({ intro: 'Kettle off, one sensor short:', changes: [`Kettle: switched off at the plug at ${offAt(st)}, confirmed at 0 W`, 'Hallway motion sensor: offline since 18:05. Its silence isn\'t read as her not moving', 'Your message is about the kettle only, as planned'], needsYou: 'If you want to know how she is, call her: a sensor that has stopped can\'t tell you either way. Then the hallway sensor needs a look, batteries first.' })),
+          { status: (st) => `Tuesday ${offAt(st)} · kettle off · hallway sensor flagged` },
+          HOLD,
+          { end: { headline: 'No reading isn\'t the same as no movement.', body: 'The hallway sensor went offline while the kettle was on. NeuCharBox switched the kettle off as planned, and told you the sensor had stopped instead of letting its silence read like hers.' } },
+        ] },
+      },
     },
   ],
 };

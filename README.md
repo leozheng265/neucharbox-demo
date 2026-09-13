@@ -52,21 +52,29 @@ a success end card. Failures are the visitor's choice:
    what it sees and does, puts things in a safe state or works around it,
    shows a re-plan card, and ends with the scenario's end card. If a scenario
    shows a plan card and the visitor answers "Not this", nothing more of it
-   runs: NCB says it left everything as it is, and the engine's end card ("You
+   runs: NCB says it will leave everything as it is, and the engine's end card ("You
    said no, so it waited.") closes the what-if with the same buttons.
 5. The scenario end card has **Try another failure** (the picker again, same
    request, same choices), **Another request here**, **Try another scene** and
    the Kickstarter button.
 
-The beat bar shows Recover only during a what-if (and for a request that still
-scripts its failure, see below). A beat skip works as before; with what-ifs,
-Done is a skip target too, and an ask card on the way takes its primary (safe)
-option. Typed requests are off during a what-if.
+The beat bar shows Recover only during a what-if. A beat skip goes to any later
+beat, Done included (it runs to the end card; an ask card on the way takes its
+primary, safe option). Typed requests are off during a what-if. A typed "what if
+the hall light stops working?" while the chips are up is not run as a request:
+NCB says how to pick a failure, with the closest request first
+(`asksWhatIfFails()` in `js/engine/match.js`).
 
 A device a request doesn't use gets an engine-made scenario: it fails at the
 prompt's `genericAt` point, NCB says the request doesn't use it and flags it,
-the rest of the request runs quietly as planned, and the end card reads "It
-knew what mattered."
+says it is skipping ahead, the rest of the request runs quietly as planned (the
+room jumps to its end), the status line becomes "<Device> flagged · the rest ran
+as planned", and the end card reads "It knew what mattered."
+
+On a phone the dashboard is a strip that follows the request. A what-if starts
+it again from the first tile, a device in fault stays in view while NCB talks
+about it (other changes show beside it when they fit), and the end card leaves
+the strip on the device(s) left in fault.
 
 The page's side of all this (phases, the beat bar's state, end-card buttons,
 the picker, what-ifs) lives in `js/engine/flow.js`, which has no DOM in it:
@@ -80,22 +88,20 @@ as they have.
 node test/run.mjs                 # everything
 node test/run.mjs --scene lab     # one scene (its checks, typed requests and room)
 node test/run.mjs --scene fixture # just the engine's own checks
-NCB_REQUIRE_WHATIF=1 node test/run.mjs   # also: every request must have a failPoint
 ```
 
 Runs in Node, no browser needed:
 
 - every prompt's default path, every plan Edit choice and every ask option runs
   to the end card in the prompt's `expect` state; an Edit must change what NCB
-  says or does. A request with what-ifs must run clean: no fault, no alert, no
-  Recover beat, exactly one end card (headline of at most 8 words, body of at
-  most 2 sentences). A request that still scripts its failure (no failPoint)
-  must reach plan, run, recover and end;
+  says or does. Every request must have a failPoint and run clean: no fault, no
+  alert, no Recover beat, exactly one end card (headline of at most 8 words, body
+  of at most 2 sentences);
 - what-if data: failPoints only at the top level of `steps`, every `at` and
   `genericAt` names one, specials have a `label` and an `ask`, scenarios have no
   `beat` steps, the clean steps and every scenario end with their `end` card
-  (nothing after it), `genericTitle` is text, every device of a scene with
-  what-ifs has a `ref`;
+  (nothing after it), `genericTitle` is text, every device has a `ref` (and
+  `plural`, if set, is true or false);
 - every connected device and every special of every request with what-ifs, after
   the clean run of every Edit and ask-option combination and under every option
   of the scenario's own asks, runs through the same `runWhatIf()` as the page:
@@ -110,16 +116,18 @@ Runs in Node, no browser needed:
   A step that writes device state differently when fast (`ctx.fast`: a skip, or
   the replay) needs a fallback that lands where the played run does. A
   difference in `plan.*` (the scene's bookkeeping, like a cue that pings the
-  room) only counts if a scenario starting there says something else;
+  room) only counts if a scenario starting there says something else. No tween
+  may still be moving when the played run reaches a failure point (the replay
+  lands it at once, so the scenario would start from a room nobody saw);
 - a device on the generic path is really unused: the clean run writes none of its
   state (other than status) and no chip, plan line, NCB line, status line or end
   card names it (its name or `ref`, as a whole phrase);
 - end-card headlines differ across a scene's success and scenario cards;
 - all prompts back-to-back in one room with the reset between them;
-- skips: to Recover (scripted failure) or Done (what-ifs) once the plan card is
-  up (real timers); and, on the virtual clock at normal speed, to Done during a
-  what-if's intro, its hold, or at Recover (the end card comes at once), and to
-  Recover during the intro (the scenario then plays at normal speed);
+- skips: to Done once the plan card is up (real timers); and, on the virtual
+  clock at normal speed, to Done during a what-if's intro, its hold, or at
+  Recover (the end card comes at once), and to Recover during the intro (the
+  scenario then plays at normal speed);
 - "Not this" on a plan stops the request there (nothing after the plan runs,
   no end card) and the next request runs normally;
 - device formatters, copy guardrails (scene copy, every prompt including its
@@ -130,7 +138,8 @@ Runs in Node, no browser needed:
 - every scene's 3D room builds and animates through every prompt and every
   what-if (fake canvas, `test/build.mjs`; `test/loader.mjs` maps `three` to the
   vendored copy); a room that rings (`R.ping`) or pulses (a highlighter's
-  `focus`) during a quiet replay fails;
+  `focus`) during a quiet replay fails; in the home, the soil probe knocked out
+  of its pot must lie outside the pot and above the floor;
 - the engine itself, on `test/fixtures/scene.js` (three devices, one request
   with what-ifs): player (failPoint, `until` at any depth, recorded and replayed
   choices, cards an `fn` builds, quiet plays, `faultText`), the what-if flow, the
@@ -146,7 +155,8 @@ Runs in Node, no browser needed:
   question, asks for a check or states a fact ("is the shutter open?", "tell me
   if the shutter is open", "the shutter is open") rather than a request. The
   page uses the same `interpret()` (`js/engine/match.js`), so add a case to
-  `test/routing.mjs` when you add a prompt.
+  `test/routing.mjs` when you add a prompt. A typed "what if <device> fails?"
+  must be told how to pick a failure (and "what if mum falls" must not).
 
 `test/run.mjs` can also be imported to run the checks on a scene object built or
 patched in memory: `const { sceneChecks, buildChecks, results } = await
@@ -180,7 +190,7 @@ js/engine/store.js    single device-state store (get/set/tween/subscribe)
 js/engine/player.js   runs authored steps (quiet replays, recorded choices); setup beat generator
 js/engine/whatif.js   what-ifs: the picker's list, scenario defaults, the generic scenario, runWhatIf()
 js/engine/chat.js     conversation UI: messages, chips, plan/ask/replan/end cards, the picker of failures
-js/engine/panel.js    device dashboard tiles from the store (on phones the strip follows the request)
+js/engine/panel.js    device dashboard tiles from the store (on phones the strip follows the request, a fault stays in view)
 js/engine/icons.js    line icons for the tiles
 js/engine/match.js    typed text → run / refuse / clarify (interpret)
 js/engine/renderer.js Three.js setup, effects, quality tiers, picking, ping labels, daylight
@@ -198,7 +208,8 @@ test/fixtures/        a small scene for the engine's own checks
 
 ## Adding a prompt or a scene
 
-A prompt is `{ chip, keywords, expect, steps }`. Steps are plain objects
+A prompt is `{ chip, keywords, expect, steps, whatIf }`, with at least one
+`{ failPoint }` in its steps (see below). Steps are plain objects
 (`say`, `plan`, `tween`, `set`, `fail`, `replan`, `ask`, `end`, …) documented at
 the top of `js/engine/player.js`. In `fn` steps use `ctx.tween`, `ctx.sleep`,
 `ctx.status` and `ctx.say`, so skips, quiet replays and `?speed=` work. A scene
@@ -232,7 +243,9 @@ prompts: [{
 ```
 
 - `ref`: how NCB names the device mid-sentence ("the floor lamp", "Mirror M2").
-  The picker's bubble and the generic scenario use it.
+  The picker's bubble and the generic scenario use it. `plural: true` for a
+  name that takes a plural verb ("the blinds"): "What if the blinds fail?",
+  "I've flagged them, and I'll tell you when they're back."
 - `{ failPoint: name }`: a marker at the top level of `steps`, a no-op in a
   normal run. A what-if replays the clean steps up to (not including) its `at`.
 - `whatIf[deviceId]`: the scenario when that device stops working. Every device
@@ -277,9 +290,8 @@ prompts: [{
   is true, `ctx.chat` is a silent stand-in, and status lines and labels write
   nothing.
 
-A prompt without a failPoint still works the old way (its failure scripted in
-`steps`, with a Recover beat, and no what-if button), so scenes can move over
-one at a time.
+Every prompt needs at least one failPoint: the tests fail without one. (The page
+would still run such a prompt clean, with no what-if button, rather than break.)
 
 ## Copy guardrails
 

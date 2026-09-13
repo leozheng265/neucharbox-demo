@@ -1,31 +1,33 @@
 // The request flow of a mounted scene, without the page: setup, the chips, a request and its end card, and the
-// what-ifs of a request that has them (js/engine/whatif.js). main.js wires it to the DOM (beat bar, status line,
+// what-ifs of each request (js/engine/whatif.js). main.js wires it to the DOM (beat bar, status line,
 // room, dashboard); test/run.mjs drives it with stubs (check 16e).
 //   phase    'setup' → 'chips' (the visitor picks or types a request) → 'prompt' (a request or a what-if runs) → 'end'
-//            (its end card is up: "Another request here", plus "What if something fails?" / "Try another failure" for a
-//            request with what-ifs). One request at a time: a chip, a pick or a what-if button outside its phase does
-//            nothing, except an end-card button pressed while that request's last steps still run (after its { end }):
-//            it acts as soon as they have.
+//            (its end card is up: "Another request here", plus "What if something fails?" on a request's success card
+//            or "Try another failure" on a what-if's). One request at a time: a chip, a pick or a what-if button outside
+//            its phase does nothing, except an end-card button pressed while that request's last steps still run (after
+//            its { end }): it acts as soon as they have.
 //   running  the request running, or that ran last: { prompt, whatIf } (null while the chips are up, or after a bug)
 //   quiet()  true while a what-if replays the request quietly (A2): main.js hands it to scene.build({ quiet }), and no
 //            ping, tile pop or status line comes from store writes meanwhile.
 // ui (every hook optional): alive() (false once the visitor left the scene), beats({ current, recoverHidden,
 // skippable }) (the beat bar: the current beat, whether Recover shows, the beats a skip may target), status(text,
-// bad), ping(id, text, opts), unping(id, kind), focus(id, hex), pop(id) (the dashboard tile), track(on) and rewind()
-// (the dashboard strip), resetRoom() (after the store is back at the post-setup snapshot: room.reset and
-// R.clearMarkers), clearMarkers(), error(e).
+// bad), ping(id, text, opts), unping(id, kind), focus(id, hex), pop(id) (the dashboard tile), track(on), rewind() and
+// show(ids) (the dashboard strip: follow the request, back to the first tile, bring these tiles into view), resetRoom()
+// (after the store is back at the post-setup snapshot: room.reset and R.clearMarkers), clearMarkers(), error(e).
 import { createPlayer, setupSteps } from './player.js';
 import { hasWhatIf, pickerOf, runWhatIf } from './whatif.js';
 
-// Recover shows only in a what-if run (and in a request that still scripts its failure: no failPoint yet).
+// Recover shows only in a what-if run: every request runs clean, and its failures are the visitor's pick.
 export const BEATS = [['setup', 'Setup'], ['ask', 'Ask'], ['plan', 'Plan'], ['run', 'Run'], ['recover', 'Recover'], ['end', 'Done']];
 export const FRESH_START = 'Fresh start: the room is back the way it was right after setup.';
 export const DEMO_ERROR = { alert: 'That request stopped halfway because of a bug in this demo, not a device.', title: '⚠ Demo error', end: { headline: 'The simulation hit a bug.', body: 'Nothing real was touched. Use "Another request here" to try again, or pick another scene.' } };
 export const WHATIF_LABEL = 'What if something fails?', ANOTHER_FAILURE = 'Try another failure';
+// A typed "what if the hall light stops working?" while the chips are up (match.js asksWhatIfFails): how to see it.
+export const WHATIF_HOW = `I can show you that once a request has run. Pick one below, then press "${WHATIF_LABEL}" on its end card and choose what goes wrong.`;
 export const quoted = (p) => `"${p.chip.replace(/[.!?]+$/, '')}"`; // the chip already ends in a full stop; the sentence adds its own
 
 export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: playerOpts = {} }) {
-  const u = { alive: () => true, beats() {}, status() {}, ping() {}, unping() {}, focus() {}, pop() {}, track() {}, rewind() {}, resetRoom() {}, clearMarkers() {}, error: (e) => console.error(e), ...ui };
+  const u = { alive: () => true, beats() {}, status() {}, ping() {}, unping() {}, focus() {}, pop() {}, track() {}, rewind() {}, show() {}, resetRoom() {}, clearMarkers() {}, error: (e) => console.error(e), ...ui };
   const ids = scene.deviceOrder || Object.keys(scene.devices).filter((d) => d !== 'hub' && d !== 'env');
   let phase = 'setup';
   let running = null;
@@ -58,20 +60,18 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
     if (value === 'fault') { const msg = faultMsg(state, id); faultLine = { id, text: msg }; setStatus(msg, true); u.focus(id, 0xE0563A); u.ping(id, msg, { color: '#E0563A', hex: 0xE0563A, hold: Math.max(1200, 3200 / speed), kind: 'fault' }); u.pop(id); }
   });
 
-  // The beat bar. Recover shows in a what-if run, and for a request that still scripts its failure (no failPoint);
-  // between requests, while the scene still has such a request. Skip targets: the shown beats after this one, and Done
-  // too for a request with what-ifs (a skip then runs to the end card; an ask on the way takes its primary option).
-  const recoverShown = () => (running ? running.whatIf || !hasWhatIf(running.prompt) : scene.prompts.some((p) => !hasWhatIf(p)));
+  // The beat bar. Recover shows only in a what-if run. Skip targets while a request or a what-if runs: the shown beats
+  // after this one, Done included (a skip then runs to the end card; an ask on the way takes its primary option).
   function setBeat(id) {
-    const recoverHidden = !recoverShown(), idx = BEATS.findIndex((b) => b[0] === id);
+    const recoverHidden = !running?.whatIf, idx = BEATS.findIndex((b) => b[0] === id);
     if (phase === 'prompt' && id !== 'end') u.track(true); // each beat is a new chapter for the dashboard strip too
-    const toDone = !!running && (running.whatIf || hasWhatIf(running.prompt));
-    const skippable = BEATS.filter(([b], i) => phase === 'prompt' && i > idx && !(b === 'recover' && recoverHidden) && (i < BEATS.length - 1 || toDone)).map(([b]) => b);
+    const skippable = BEATS.filter(([b], i) => phase === 'prompt' && !!running && i > idx && !(b === 'recover' && recoverHidden)).map(([b]) => b);
     u.beats({ current: id, recoverHidden, skippable });
   }
 
-  // End cards: "Another request here" always. A request with what-ifs adds "What if something fails?" to its success
-  // card, and "Try another failure" to a what-if's card: both open the picker of failures for it.
+  // End cards: "Another request here" always. A request adds "What if something fails?" to its success card, and a
+  // what-if "Try another failure" to its card: both open the picker of failures for it. (A request with no failPoint,
+  // which the tests don't allow, would get no what-if button rather than a picker with nothing to replay.)
   const endOptions = () => {
     const o = { onMore: () => another() }, p = running?.prompt;
     if (p && hasWhatIf(p)) { o.onWhatIf = () => openFailures(p); o.whatIfLabel = running.whatIf ? ANOTHER_FAILURE : WHATIF_LABEL; }
@@ -122,7 +122,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
         const others = scene.prompts.filter((p) => p !== prompt), left = others.filter((p) => !used.has(p)); // the others first, the declined one still there last
         offerChips('OK. Nothing ran, and the room is as it was. Pick another request, or type your own.', [...(left.length ? left : others), prompt]); return;
       }
-      if (hasWhatIf(prompt)) lastChoices.set(prompt, res.choices);
+      lastChoices.set(prompt, res.choices);
     } catch (e) {
       u.error(e); u.track(false);
       if (!u.alive()) return;
@@ -145,8 +145,10 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
       specials,
     }, (key) => whatIf(prompt, key));
   }
-  // A what-if: the visitor's bubble, NCB's intro, the room back to right after setup, the request replayed quietly with
-  // the visitor's recorded choices up to the failure point, then the Recover beat and the scenario.
+  // A what-if: the visitor's bubble, NCB's intro, the room back to right after setup (and the dashboard strip back to
+  // its first tile, as for a new request), the request replayed quietly with the visitor's recorded choices up to the
+  // failure point, then the Recover beat and the scenario. At its end card the strip shows the device(s) left in fault
+  // (the picked one first), not whatever the scenario changed last.
   async function whatIf(prompt, key) {
     const choices = lastChoices.get(prompt);
     if (phase !== 'end' || !choices) return; // one request at a time
@@ -156,11 +158,13 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
       await runWhatIf({ player, scene, prompt, key, choices, host: {
         alive: () => u.alive(),
         quiet: (on) => { quietNow = on; u.track(!on); }, // the dashboard follows the scenario, not the replay
-        freshRoom: () => { if (baseline) freshRoom(); dirty = true; },
+        freshRoom: () => { if (baseline) freshRoom(); dirty = true; u.rewind(); },
         status: (text) => setStatus(text),
         clearMarkers: () => u.clearMarkers(),
       } });
       u.track(false);
+      const bad = [...new Set([key, ...ids])].filter((id) => scene.devices[id] && store.state[id]?.status === 'fault');
+      if (bad.length && u.alive()) u.show(bad);
     } catch (e) {
       quietNow = false; u.error(e); u.track(false);
       if (!u.alive()) return;

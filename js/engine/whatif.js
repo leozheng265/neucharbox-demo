@@ -1,9 +1,11 @@
 // Opt-in failures ("What if something fails?"): what the picker lists, what each pick plays, and the what-if run
 // itself. Host-agnostic: main.js passes the page's side effects in `host`, test/run.mjs and test/build.mjs stubs.
 //
-// A prompt opts in with at least one TOP-LEVEL { failPoint: name } in its steps (a no-op in a normal run). Its clean
-// run is the default and ends with its { end } step; the visitor picks a failure from its success end card. Scene data:
+// Every prompt has at least one TOP-LEVEL { failPoint: name } in its steps (a no-op in a normal run; test/run.mjs
+// requires one). Its clean run is the default and ends with its { end } step; the visitor picks a failure from its
+// success end card. Scene data:
 //   devices[id].ref       how NCB names the device mid-sentence ("the floor lamp", "Mirror M2")
+//   devices[id].plural    true for a name that takes a plural verb ("the blinds"): "What if the blinds fail?", "them"
 //   prompt.genericAt      failPoint where a device the request doesn't use fails (default: the first failPoint)
 //   prompt.genericTitle   the alert title of that engine-generated failure (default '⚠ Device down'; a title starting
 //                         with 📝 shows as a calm note, js/engine/chat.js)
@@ -11,7 +13,8 @@
 //   prompt.whatIf[key]    a special (key is not a device id): { label, ask, at?, intro?, steps, alsoFaults? }
 //     at          the failPoint the replay stops before (default: the prompt's first failPoint)
 //     intro       NCB's opening line (default: "Replaying this request. This time, <ref> fails during the run." for a
-//                 device, "Replaying this request. This time: <label, first letter lower-cased>." for a special)
+//                 device, "fail" for a plural one; "Replaying this request. This time: <label, first letter lower-cased>."
+//                 for a special)
 //     ask         the visitor's bubble (default for a device: "What if <ref> fails?")
 //     label       the picker button of a special
 //     steps       the scenario, in the step DSL (js/engine/player.js), ending with its { end } card (the last step). No
@@ -21,16 +24,19 @@
 // A device with no entry gets the engine-generated scenario below (the tests check it really is unused).
 //
 // runWhatIf(): the visitor's bubble and NCB's intro; host.freshRoom() and the status "Replaying this request…"; the
-// prompt's steps again, quiet and instant, answered with the visitor's recorded choices, up to the failPoint; the
-// Recover beat and the scenario at normal speed. host.quiet(true) spans the replay (scenes read it through the
-// `quiet` flag of build(), A2); host.clearMarkers() runs right after it. If the visitor answers a plan card in the
-// scenario with "Not this", nothing more of it runs: NCB says so and the engine's own end card closes the what-if.
+// prompt's steps again, quiet and instant, answered with the visitor's recorded choices, up to the failPoint (at once,
+// so no frame shows the room right after setup), then a short hold; the Recover beat and the scenario at normal
+// speed. host.quiet(true) spans the replay (scenes read it through the `quiet` flag of build(), A2);
+// host.clearMarkers() runs right after it. If the visitor answers a plan card in the scenario with "Not this", nothing
+// more of it runs: NCB says so and the engine's own end card closes the what-if.
 
 export const REPLAYING = 'Replaying this request…';
 export const GENERIC_HEADLINE = 'It knew what mattered.';
+// The generic scenario, right before the rest of the request runs quietly: the room jumps to its end, so NCB says so.
+export const SKIP_AHEAD = 'Skipping ahead to the end of the request.';
 // "Not this" on a plan card inside a scenario: what NCB says, and the card that ends the what-if there.
-export const DECLINED_SAY = "OK, I won't run that plan. I've left everything as it is now, and I'll wait for you before changing anything else.";
-export const DECLINED_END = { headline: 'You said no, so it waited.', body: "NeuCharBox didn't run the new plan. It left the room as it was and waited for you instead of acting on its own." };
+export const DECLINED_SAY = "OK, I won't run that plan. I'll leave everything as it is and wait for you before I change anything else.";
+export const DECLINED_END = { headline: 'You said no, so it waited.', body: "NeuCharBox didn't run the new plan. It left everything as it was and waited for you instead of acting on its own." };
 export const ENGINE_HEADLINES = [GENERIC_HEADLINE, DECLINED_END.headline]; // the engine's own end cards (tests: not a scene's)
 
 export const isFailPoint = (s) => !!s && s.failPoint != null;
@@ -58,20 +64,23 @@ export function pickerOf(scene, prompt) {
   return { devices, specials };
 }
 
-// The engine-generated scenario for a device this request doesn't use: it fails at `genericAt`, NCB flags it, the
-// rest of the request runs quietly as planned, and the end card says why nothing had to change.
+// The engine-generated scenario for a device this request doesn't use: it fails at `genericAt`, NCB flags it and
+// says it skips ahead, the rest of the request runs quietly as planned (runWhatIf), the status line gives the fault's
+// red line up for a calm "flagged" one, and the end card says why nothing had to change.
 export function genericScenario(scene, id, prompt = null) {
-  const d = scene.devices[id], ref = refOf(scene, id);
+  const d = scene.devices[id], ref = refOf(scene, id), it = d.plural ? 'them' : 'it', itIs = d.plural ? "they're" : "it's";
   return {
     head: [
       { fail: id, say: `${d.name} stopped responding · ${d.faultText || 'no response'}.`, title: prompt?.genericTitle || '⚠ Device down' },
-      { say: `This request doesn't use ${ref}, so nothing in the plan changes. I've flagged it, and I'll tell you when it's back.` },
+      { say: `This request doesn't use ${ref}, so nothing in the plan changes. I've flagged ${it}, and I'll tell you when ${itIs} back.` },
       { wait: 900 },
+      { say: SKIP_AHEAD },
     ],
     tail: [
+      { status: `${d.name} flagged · the rest ran as planned` },
       { say: 'The rest of the request ran as planned.' },
       { wait: 1200 },
-      { end: { headline: GENERIC_HEADLINE, body: `${capFirst(ref)} stopped responding, but this request didn't need it. NeuCharBox kept the plan running and flagged the device instead of stopping everything.` } },
+      { end: { headline: GENERIC_HEADLINE, body: `${capFirst(ref)} stopped responding, but this request didn't need ${it}. NeuCharBox kept the plan running and flagged the device instead of stopping everything.` } },
     ],
   };
 }
@@ -83,7 +92,8 @@ export function scenarioOf(scene, prompt, key) {
   const wi = prompt.whatIf?.[key], dev = scene.devices[key] && devicesOf(scene).includes(key);
   const atOf = (a) => (a != null && pts.includes(a) ? a : pts[0]); // a misspelt `at` falls back to the first failPoint (the tests flag it)
   if (dev) {
-    const ref = refOf(scene, key), base = { key, kind: 'device', ask: wi?.ask || `What if ${ref} fails?`, intro: wi?.intro || `Replaying this request. This time, ${ref} fails during the run.` };
+    const ref = refOf(scene, key), fails = scene.devices[key].plural ? 'fail' : 'fails';
+    const base = { key, kind: 'device', ask: wi?.ask || `What if ${ref} ${fails}?`, intro: wi?.intro || `Replaying this request. This time, ${ref} ${fails} during the run.` };
     if (wi) return { ...base, authored: true, at: atOf(wi.at), steps: wi.steps || [], alsoFaults: wi.alsoFaults || [] };
     return { ...base, authored: false, at: atOf(prompt.genericAt), ...genericScenario(scene, key, prompt), alsoFaults: [] };
   }
@@ -109,13 +119,13 @@ export async function runWhatIf({ player, scene, prompt, key, choices = [], host
   await player.play([{ beat: 'run' }, { user: sc.ask }, { say: sc.intro }]);
   if (gone()) return res;
   // 2. The room right after setup, then the request again, quiet and instant, with the visitor's own answers, up to
-  //    the failure point. A short hold on each side, so "Replaying this request…" and the replayed room both read.
+  //    the failure point. The replay settles in microtasks, straight after freshRoom(), so no frame shows the room
+  //    right after setup (a daylight flash before a night-time failure); then a hold, so "Replaying this request…" and
+  //    the replayed room both read.
   h.quiet(true); h.freshRoom(); h.status(REPLAYING);
-  await player.play([{ wait: 500 }], { carry: true });
-  if (gone()) return res;
   res.replay = await player.play(prompt.steps, { quiet: true, replay: choices, until: stops, carry: true });
   if (gone()) return res;
-  await player.play([{ wait: 600 }], { carry: true });
+  await player.play([{ wait: 1100 }], { carry: true });
   if (gone()) return res;
   h.clearMarkers(); h.quiet(false);
   // 3. The failure, at normal speed. "Not this" on a plan card of the scenario stops it there (the player runs nothing
