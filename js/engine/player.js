@@ -4,8 +4,10 @@
 //   { say: text }                       NCB message
 //   { user: text }                      visitor message
 //   { status: text | (store) => text }  small progress line under the room
-//   { plan: { intro, steps: [{ text, alt: { text, apply: [steps] } }], approve } }  waits for approval
-//   { ask: { intro, options: [{ label, apply: [steps] }] } }   halts and asks (lab)
+//   { plan: { intro, steps: [{ text, alt: { text, apply: [steps] } }], approve } }  waits for approval; "Not this"
+//                                       ends the request there (play() resolves { declined: true })
+//   { ask: { intro, options: [{ label, apply: [steps], primary? }] } }   halts and asks; `primary` marks the safe
+//                                       default: the only highlighted option, and what a beat skip picks
 //   { wait: ms }
 //   { set: path, to: value, label? }
 //   { tween: path, to: number, ms, label? }
@@ -20,11 +22,12 @@
 // instant when skipping, and are released immediately by a beat skip — raw store.tween/setTimeout do not.
 // ctx.status(text) sets the status line; ctx.say(text) is a { say } step (typing delay, cancel-safe).
 
-export function createPlayer({ store, chat, headless = false, onBeat = () => {}, onStatus = () => {}, autoPlan = () => ({}), autoAsk = () => 0, endOptions = () => ({}), speed = null }) {
+export function createPlayer({ store, chat, headless = false, onBeat = () => {}, onStatus = () => {}, onPlan = () => {}, autoPlan = () => ({}), autoAsk = () => 0, endOptions = () => ({}), speed = null }) {
   let fast = headless;
   let stopAt = null;         // beat name to stop fast-forwarding at
   let currentBeat = 'setup';
   let cancelled = false;
+  let declined = false;      // the visitor answered a plan with "Not this": the rest of the request doesn't run
 
   const q = typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get('speed')) : NaN;
   const SPEED = speed || (Number.isFinite(q) && q > 0 ? Math.min(q, 6) : 1);
@@ -37,7 +40,7 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
   const ctx = { store, chat, tween, sleep, say, status: (text) => onStatus(text), get fast() { return fast; } };
 
   async function run(step) {
-    if (cancelled) return;
+    if (cancelled || declined) return;
     if (step.beat) {
       currentBeat = step.beat;
       if (stopAt && stopAt === step.beat) { fast = headless; stopAt = null; }
@@ -54,7 +57,9 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
     if (step.parallel) { const rs = await Promise.allSettled(step.parallel.map(run)); const bad = rs.find((r) => r.status === 'rejected'); if (bad) throw bad.reason; return; }
     if (step.replan) { chat.replan(step.replan); await sleep(700); return; }
     if (step.plan) {
+      if (!headless) onPlan(step.plan); // the host can say "waiting for your approval" if the scene didn't
       const choices = headless ? { approved: true, alts: autoPlan(step.plan) || {} } : await chat.plan(step.plan, { skipped: fast });
+      if (choices && choices.approved === false) { declined = true; return; }
       for (const [i, on] of Object.entries(choices.alts || {})) {
         const alt = step.plan.steps[Number(i)]?.alt;
         if (on && alt?.apply) for (const s of alt.apply) await run(s);
@@ -73,12 +78,13 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
   }
 
   // Each play() starts at normal speed: a skip (or an error during one) never carries into the next request.
-  async function play(steps) { fast = headless; stopAt = null; for (const s of steps) { if (cancelled) return; await run(s); } }
+  async function play(steps) { fast = headless; stopAt = null; declined = false; for (const s of steps) { if (cancelled || declined) break; await run(s); } return { declined }; }
 
   // Fast-forward until the named beat is reached (or the end). Interactive cards on screen resolve with the
   // visitor's current choices; in-flight sleeps and tweens finish immediately.
   function skipTo(beat) { stopAt = beat; fast = true; store.finishTweens(); releaseSleeps(); chat.resolvePending(); }
-  function cancel() { cancelled = true; fast = true; releaseSleeps(); chat.resolvePending(); }
+  // cancel (teardown): also settles in-flight store tweens, which only finish on frames that no longer come.
+  function cancel() { cancelled = true; fast = true; store.finishTweens(); releaseSleeps(); chat.resolvePending(); }
 
   return { play, run, skipTo, cancel, get beat() { return currentBeat; }, get fast() { return fast; } };
 }
@@ -100,6 +106,6 @@ export function setupSteps(scene) {
     const d = scene.devices[id];
     steps.push({ set: `${id}.status`, to: 'online', label: `Found ${d.name}` }, { wait: 1100 });
   }
-  steps.push({ say: `${ids.length} devices connected. No coding, no setup — that's it.` }, { beat: 'ask' });
+  steps.push({ say: `${ids.length} devices connected. No coding, no setup — that's it.` }, { status: `${ids.length} devices connected · waiting for your request` }, { beat: 'ask' });
   return steps;
 }

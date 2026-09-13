@@ -36,7 +36,7 @@ export async function buildChecks({ report, initialOf, stubChat }) {
       const pickIds = new Set();
       return { THREE, scene: scn, camera, controls: { autoRotate: true, target: new THREE.Vector3(), update() {} }, lights: { hemi, sun, fill }, quality: 'high',
         addPickable: (obj, id) => { if (!obj || typeof obj.traverse !== 'function') throw new Error(`addPickable("${id}") got ${obj}`); pickIds.add(id); }, pickIds,
-        onPick() {}, onFrame() {}, ping() {}, anchorOf: () => null, resetView() {}, step() {}, daylight(h) { if (!Number.isFinite(h)) throw new Error(`daylight(${h})`); } };
+        onPick() {}, onFrame() {}, ping() {}, unping() {}, clearMarkers() {}, anchorOf: () => null, resetView() {}, step() {}, daylight(h) { if (!Number.isFinite(h)) throw new Error(`daylight(${h})`); } };
     };
     const update = () => { t += 1 / 30; try { room.update(store.state, t); } catch (e) { throw new Error(`update() threw: ${e.message}`); } };
     const build = () => {
