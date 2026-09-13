@@ -435,7 +435,7 @@ export default {
         { end: { headline: 'Beam on, verified, and held.', body: 'NeuCharBox opened the shutter at the set 5.0 mW, confirmed the beam on the meter and the camera instead of trusting the driver, and kept checking while it held.' } },
       ],
       whatIf: {
-        laser: { at: 'hold', intro: 'Replaying this request. This time the shutter flag drops back into the beam during the hold.', steps: [
+        laser: { at: 'hold', intro: 'Replaying this request. This time, the shutter flag drops back into the beam during the hold.', steps: [
           { status: 'Step 4 · hold · 00:50' }, { wait: 1500 },
           { set: 'laser.stuck', to: true },     // the flag drops back into the beam; the driver still says "open" (tile stays "open · 5.0 mW set")
           { status: '01:00 · meter 0 µW, shutter still reports open' },
@@ -449,7 +449,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'It checked, and it stopped.', body: 'A device reporting "open" isn\'t the same as a beam on the meter. NeuCharBox verified against the measurement, disagreed with the device, and put the bench in a safe state instead of guessing.' } },
         ] },
-        meter: { at: 'open', intro: 'Replaying this request. This time the power meter goes silent just as the shutter opens.', steps: [
+        meter: { at: 'open', intro: 'Replaying this request. This time, the power meter goes silent just as the shutter opens.', steps: [
           { status: 'Step 2 · shutter → open' },
           { parallel: [                                                     // together: the meter never shows a reading of this beam
             { set: 'laser.shutter', to: 'open' },                           // no label: it would overwrite the red fault line
@@ -467,7 +467,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'Step 3 failed, so the shutter closed.', body: 'The plan said: verify on the meter and the camera, or close the shutter and stop. With the meter silent, Step 3 couldn\'t pass, so NeuCharBox closed the shutter instead of holding a beam nobody had verified.' } },
         ] },
-        beamcam: { at: 'hold', intro: 'Replaying this request. This time the beam camera stops sending images during the hold.', steps: [
+        beamcam: { at: 'hold', intro: 'Replaying this request. This time, the beam camera stops sending images during the hold.', steps: [
           { status: 'Step 4 · hold · 00:40' }, { wait: 1500 },
           { fail: 'beamcam', faultText: 'no image', title: '⚠ Camera down', say: '00:40 — the beam camera stopped sending images. The power meter still reads 194 µW, so the beam hasn\'t gone anywhere: the camera has lost its picture, not the beam.' },
           { say: 'You asked me to confirm the beam on the meter, and the meter still does. The camera was my second check, so I\'m holding on the meter. If it drops below 100 µW or goes quiet, I close the shutter.' },
@@ -477,6 +477,41 @@ export default {
           { replan: { intro: 'Holding, with one check fewer:', changes: ['Beam camera flagged: no images since 00:40', 'Hold continues at 5.0 mW, checked on the meter', 'If the meter drops below 100 µW or goes quiet, I close the shutter'], needsYou: 'Check the beam camera. I\'ll add it back to the checks when it sends images again.' } },
           { wait: 1200 },
           { end: { headline: 'The camera failed, not the beam.', body: 'NeuCharBox told a failed camera apart from a lost beam: the meter still read 194 µW. It kept the hold going on the measurement you asked for, and said exactly what had changed.' } },
+        ] },
+        // M1, M2 and Stage X sit in the held beam's path, so they aren't 'unused': a dead controller is checked against
+        // the beam itself (meter + camera) instead of being waved through by the engine's generic reply.
+        m1: { at: 'hold', intro: "Replaying this request. This time, Mirror M1's controller drops off during the hold.", steps: [
+          { status: 'Step 4 · hold · 00:40' }, { wait: 1500 },
+          { fail: 'm1', faultText: 'controller offline', title: '⚠ M1 offline', say: "00:40 — Mirror M1's controller stopped answering. The meter still reads 194 µW and the spot is still at (22, −4) px, so M1 is holding its angle." },
+          { say: "This request never moves M1, so the hold goes on with the same checks. If the meter or the camera loses the beam, I close the shutter." },
+          { wait: 1200 },
+          { fn: ({ say, store }) => (store.get('plan.quiet') ? null : say(`01:00 — ${fmtUW(shown(store.state))}, spot steady. M1 still offline.`)) },
+          { status: (st) => `Holding at 5.0 mW · meter ${fmtUW(shown(st.state))} · M1 flagged` },
+          { replan: { intro: 'Holding, with M1 flagged:', changes: ['Mirror M1: controller offline since 00:40; the beam shows it holding its angle', 'Beam still verified on the meter and the camera', 'Hold continues at 5.0 mW'], needsYou: "Check M1's controller before the next alignment. Until it answers, I won't run a request that moves M1." } },
+          { wait: 1200 },
+          { end: { headline: "The beam proved M1 hadn't moved.", body: "A silent controller isn't a moved mirror. NeuCharBox checked the beam on the meter and the camera, kept the hold you asked for, and flagged M1 for later." } },
+        ] },
+        m2: { at: 'hold', intro: "Replaying this request. This time, Mirror M2's controller goes silent during the hold.", steps: [
+          { status: 'Step 4 · hold · 00:45' }, { wait: 1500 },
+          { fail: 'm2', faultText: 'controller offline', title: '⚠ M2 offline', say: "00:45 — Mirror M2's controller stopped answering. Its last report was +0.120° yaw, and nothing in this request moves it." },
+          { say: "I checked the beam rather than the mount: 194 µW on the meter, spot still at (22, −4) px. M2 hasn't moved, so the hold goes on." },
+          { wait: 1200 },
+          { fn: ({ say, store }) => (store.get('plan.quiet') ? null : say(`01:00 — ${fmtUW(shown(store.state))}, spot steady. M2 still offline.`)) },
+          { status: (st) => `Holding at 5.0 mW · meter ${fmtUW(shown(st.state))} · M2 flagged` },
+          { replan: { intro: 'Holding, with M2 flagged:', changes: ['Mirror M2: controller offline since 00:45; last report +0.120° yaw', 'Meter and camera still confirm the beam', 'Hold continues at 5.0 mW'], needsYou: "Restart M2's controller before any request that tilts it. When it's back, I'll check that it still reports +0.120°." } },
+          { wait: 1200 },
+          { end: { headline: 'M2 offline, beam still verified.', body: "NeuCharBox didn't guess whether a silent mirror had moved: it checked the beam itself, kept the hold going, and flagged M2." } },
+        ] },
+        stage: { at: 'hold', intro: "Replaying this request. This time, Stage X's controller drops out during the hold.", steps: [
+          { status: 'Step 4 · hold · 00:50' }, { wait: 1500 },
+          { fail: 'stage', faultText: 'controller offline', title: '⚠ Stage X offline', say: "00:50 — Stage X's controller stopped answering. Its last report was 10.000 mm, and the meter still reads 194 µW, so the iris on it hasn't moved." },
+          { say: "This request doesn't move the stage, and the beam through the iris is unchanged, so I'm holding on the same checks." },
+          { wait: 1200 },
+          { fn: ({ say, store }) => (store.get('plan.quiet') ? null : say(`01:00 — ${fmtUW(shown(store.state))}, spot steady. Stage X still offline.`)) },
+          { status: (st) => `Holding at 5.0 mW · meter ${fmtUW(shown(st.state))} · Stage X flagged` },
+          { replan: { intro: 'Holding, with Stage X flagged:', changes: ['Stage X: controller offline since 00:50; last report 10.000 mm', 'Beam still verified: meter and camera unchanged', 'Hold continues at 5.0 mW'], needsYou: "Check Stage X's controller. When it answers, I'll confirm it still reads 10.000 mm before anything moves it." } },
+          { wait: 1200 },
+          { end: { headline: "The stage dropped off. The hold didn't.", body: 'NeuCharBox checked that the iris had stayed put by reading the beam, kept the hold going, and flagged Stage X instead of stopping the bench.' } },
         ] },
       },
     },
@@ -506,7 +541,7 @@ export default {
         { end: { headline: 'Moved exactly. Reported plainly.', body: 'NeuCharBox made the 0.050° move you asked for, confirmed it on the encoder and the beam camera, and reported the meter before and after. What the number means for your experiment is your call.' } },
       ],
       whatIf: {
-        laser: { at: 'move', intro: 'Replaying this request. This time the laser\'s safety interlock trips during the tilt.', steps: [
+        laser: { at: 'move', intro: 'Replaying this request. This time, the laser\'s safety interlock trips during the tilt.', steps: [
           P1_CUE, P1_STATUS,
           { fn: async (ctx) => {
             if (ctx.store.get('plan.stepped')) { await m2Step(ctx, 1); await m2Step(ctx, 2); ctx.store.set('laser.on', false); }       // steps 1–2 logged (173, 154 µW), then the trip
@@ -528,7 +563,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'The beam went out. So did the motion.', body: 'When the laser\'s interlock cut the beam, NeuCharBox stopped the mirror, closed the shutter, and will check the shutter on the meter once the laser is back on. It didn\'t pass off 0 µW as the result of your tilt.' } },
         ] },
-        m2: { at: 'move', intro: 'Replaying this request. This time Mirror M2 stalls partway through the move.', steps: [
+        m2: { at: 'move', intro: 'Replaying this request. This time, Mirror M2 stalls partway through the move.', steps: [
           P1_CUE, P1_STATUS,
           { fn: async (ctx) => {
             if (ctx.store.get('plan.stepped')) { await m2Step(ctx, 1); await m2Step(ctx, 2); await ctx.tween('m2.yaw', 0.143, 350); } // step 3 stalls
@@ -552,7 +587,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'Stuck at +0.143°, and it said so.', body: 'M2 stalled partway through your move. NeuCharBox measured where the mirror really stopped, reported that instead of the number you asked for, and didn\'t retry a stuck drive blind.' } },
         ] },
-        meter: { at: 'move', intro: 'Replaying this request. This time the power meter drops out during the tilt.', steps: [
+        meter: { at: 'move', intro: 'Replaying this request. This time, the power meter drops out during the tilt.', steps: [
           { fn: (ctx) => (ctx.store.get('plan.stepped') ? P1_CUE.fn(ctx) : null) }, P1_STATUS, // the single move is cued when it starts, after the fault
           { fn: async (ctx) => { if (ctx.store.get('plan.stepped')) { await m2Step(ctx, 1); await m2Step(ctx, 2); } } },   // stepped: steps 1–2 and their readings; single move: nothing has moved yet
           { fn: (ctx) => (ctx.store.get('plan.stepped') ? recue('m2', 'Mirror M2 · stopped at +0.140°').fn(ctx) : null) }, // stepped: the 5-step label goes
@@ -575,7 +610,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'Missing readings stayed missing.', body: 'The power meter went silent before your tilt was done. NeuCharBox moved M2 only as far as your plan allowed without readings, confirmed the position on the encoder and the camera, and left every missing reading blank.' } },
         ] },
-        m1: { at: 'move', intro: 'Replaying this request. This time Mirror M1 stops answering just before the move.', steps: [
+        m1: { at: 'move', intro: 'Replaying this request. This time, Mirror M1 stops answering just before the move.', steps: [
           { status: 'Shutter open · baseline 194 µW' }, { wait: 1000 },
           { fail: 'm1', faultText: 'not answering', title: '⚠ M1 not answering', say: 'Mirror M1 stopped answering, just as I was about to move M2. The meter still reads 194 µW and the spot is still at (22,\u00A0−4) px, so M1 is holding where it was.' },
           { say: 'This request doesn\'t move M1, and the plan says not to touch it. I\'ll make your move and check on the camera that the spot shifts only as far as M2\'s move explains.' },
@@ -586,7 +621,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'Mirror M1 went quiet. The result held.', body: 'A mirror this request never touches stopped answering. NeuCharBox checked on the camera that it hadn\'t moved, made your move, and gave you a reading you can still trust.' } },
         ] },
-        beamcam: { at: 'move', intro: 'Replaying this request. This time the beam camera goes dark as the move finishes.', steps: [
+        beamcam: { at: 'move', intro: 'Replaying this request. This time, the beam camera goes dark as the move finishes.', steps: [
           P1_CUE, P1_STATUS,
           // The approved move, all but its last 150 ms (the single move, or steps 1–4 and most of step 5): the camera
           // dies just before M2 settles, so it never shows where the spot ends up.
@@ -603,7 +638,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'Reported, with the gap marked.', body: 'The camera went dark as the move finished, before it could show where the spot settled. NeuCharBox still gave you the measured reading, and told you exactly which check it couldn\'t do.' } },
         ] },
-        stage: { at: 'report', intro: 'Replaying this request. This time Stage X\'s controller restarts on its own.', steps: [
+        stage: { at: 'report', intro: 'Replaying this request. This time, Stage X\'s controller restarts on its own.', steps: [
           { status: 'M2 yaw at +0.170°' },
           { set: 'stage.status', to: 'offline' }, { wait: 900 },          // the controller drops off while it restarts (tile "not connected", LED dark)
           { fail: 'stage', faultText: 'restarted · reads 0.000 mm', title: '⚠ Stage X restarted', say: 'Stage X\'s controller restarted by itself. It came back "not homed" and reads 0.000 mm, which isn\'t where the stage is.' },
@@ -673,7 +708,7 @@ export default {
         { end: { headline: 'Twenty-four steps, twenty-four readings.', body: 'NeuCharBox checked the soft limit before moving, moved Stage X in 0.100 mm steps, and logged the meter after every step. The log is complete, and nothing outside the plan moved.' } },
       ],
       whatIf: {
-        stage: { at: 'scan', intro: 'Replaying this request. This time Stage X stalls partway through the scan.', steps: [
+        stage: { at: 'scan', intro: 'Replaying this request. This time, Stage X stalls partway through the scan.', steps: [
           P2_STATUS,
           cue('stage', 'Stage X · scanning on from 11.000 mm', 1500),
           scan(11, 12),                                                     // "11.100 mm → 349 µW\n11.200 mm → 362 µW"
@@ -687,7 +722,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'It didn\'t force a stuck stage.', body: 'Stage X stalled mid-step. NeuCharBox kept the 12 good entries, used the meter to confirm where the stage had stopped, and left the stage for a person to check instead of pushing it again.' } },
         ] },
-        meter: { at: 'scan', intro: 'Replaying this request. This time the power meter goes silent partway through the scan.', steps: [
+        meter: { at: 'scan', intro: 'Replaying this request. This time, the power meter goes silent partway through the scan.', steps: [
           P2_STATUS,
           cue('stage', 'Stage X · scanning on from 11.000 mm', 1500),   // steps 11–15
           scan(11, 14),                                                     // four lines, 11.100 → 349 … 11.400 → 385 µW
@@ -715,7 +750,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'A short log, not a made-up one.', body: 'The meter went silent partway through the scan. NeuCharBox stopped logging rather than guess, closed the shutter, and kept the 14 readings it really took.' } },
         ] },
-        laser: { at: 'late', intro: 'Replaying this request. This time the laser\'s controller goes silent near the end of the scan.', steps: [
+        laser: { at: 'late', intro: 'Replaying this request. This time, the laser\'s controller goes silent near the end of the scan.', steps: [
           P2_STATUS,
           cue('stage', 'Stage X · scanning on from 12.000 mm', 1200),
           scan(21, 21),                                                     // "12.100 mm → 440 µW"
@@ -740,7 +775,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'It said what it couldn\'t do.', body: 'The laser\'s controller went silent with the beam still on. NeuCharBox stopped the scan, said plainly that it couldn\'t close the shutter, and asked a person to block the beam instead of pretending.' } },
         ] },
-        beamcam: { at: 'scan', intro: 'Replaying this request. This time the beam camera stops sending images partway through the scan.', steps: [
+        beamcam: { at: 'scan', intro: 'Replaying this request. This time, the beam camera stops sending images partway through the scan.', steps: [
           P2_STATUS,
           { set: 'stage.moving', to: false },                               // the scan pauses at 11.000 mm, after step 10, while NCB checks
           { fail: 'beamcam', faultText: 'no image', title: '⚠ No camera images', say: 'The beam camera stopped sending images at 11.000 mm. This scan logs the meter, not the camera, and the meter still reads 336 µW, the same as step 10.' },
@@ -756,7 +791,7 @@ export default {
         ] },
         // The mirrors: the scan never moves them, but they steer the beam through the iris, so a mirror that drifted
         // would put its own change into the log. M1: one repeat reading; M2: the camera spot watched at every step.
-        m1: { at: 'scan', intro: 'Replaying this request. This time Mirror M1\'s controller goes offline partway through the scan.', steps: [
+        m1: { at: 'scan', intro: 'Replaying this request. This time, Mirror M1\'s controller goes offline partway through the scan.', steps: [
           P2_STATUS,
           { set: 'stage.moving', to: false },                               // the scan pauses at 11.000 mm for the repeat reading
           { fail: 'm1', title: '⚠ M1 offline', say: 'Mirror M1\'s controller went offline at 11.000 mm. The scan doesn\'t move M1, but M1 steers the beam through the iris: if it drifted, the log would measure the mirror, not the stage.' },
@@ -771,7 +806,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'It checked the mirror, then logged on.', body: 'Mirror M1 went offline partway through the scan. It steers the beam through the iris, so NeuCharBox re-read the meter and the camera to be sure it hadn\'t moved, then finished all 24 steps.' } },
         ] },
-        m2: { at: 'scan', intro: 'Replaying this request. This time Mirror M2\'s controller goes offline partway through the scan.', steps: [
+        m2: { at: 'scan', intro: 'Replaying this request. This time, Mirror M2\'s controller goes offline partway through the scan.', steps: [
           P2_STATUS,
           { set: 'stage.moving', to: false },                               // the scan pauses at 11.000 mm while NCB checks the spot
           { fail: 'm2', title: '⚠ M2 offline', say: 'Mirror M2\'s controller went offline at 11.000 mm. M2 aims the beam into the iris, so if it drifted, the log would follow the mirror, not the stage. Right now the meter reads 336 µW, the same as step 10, and the camera spot hasn\'t moved.' },
@@ -786,7 +821,7 @@ export default {
           { end: { headline: 'The log stayed about the stage.', body: 'Mirror M2 went offline in the middle of the scan. NeuCharBox checked the camera spot after every remaining step to be sure the mirror hadn\'t moved, and finished a log that measures the stage, not the mirror.' } },
         ] },
         softLimit: { label: '12.400 mm is past the limit', ask: 'What if 12.400 mm is past the stage\'s soft limit?', at: 'limit',
-          intro: 'Replaying this request. This time Stage X\'s soft limit is set at 12.000 mm, short of 12.400.', steps: [
+          intro: 'Replaying this request. This time, Stage X\'s soft limit is set at 12.000 mm, short of 12.400.', steps: [
           { set: 'stage.limit', to: 12, label: 'Stage X soft limit: 12.000 mm on this run' },       // tile: "limit 12.0 mm"
           { fn: ({ say, store }) => say(`Soft limit ${store.get('stage.limit').toFixed(3)} mm, so 12.400 is past it. As the plan says, I'll step to the limit, stop there and ask.`) },
           cue('stage', 'Stage X · 10.000 → 12.000 mm', 6000), { set: 'stage.moving', to: true, label: 'Stage X → 12.000 mm in 0.100 mm steps' },
@@ -852,7 +887,7 @@ export default {
         { end: { headline: 'Walked to the peak, by the rules.', body: 'NeuCharBox stepped M2, read the meter after every step, stopped when the gains ran out and went back to the best position: 367 µW, up from 194. The 20% stop rule was checked on every step, even though it never had to fire.' } },
       ],
       whatIf: {
-        beamcam: { at: 'walk', intro: 'Replaying this request. This time the beam camera\'s image freezes as the walk starts.', steps: [
+        beamcam: { at: 'walk', intro: 'Replaying this request. This time, the beam camera\'s image freezes as the walk starts.', steps: [
           { fn: ({ store }) => store.set('beamcam.frozen', { ...spotPx(store.state), p: shown(store.state) }) },  // last live frame: (22, −4) px
           cue('m2', 'Mirror M2 · yaw in −0.020° steps', 2000), { status: 'M2 yaw · stepping −0.020° at a time' },
           walkStep(1), walkStep(2),
@@ -866,7 +901,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'A frozen picture didn\'t fool it.', body: 'The camera kept sending the same frame while the mirror moved. NeuCharBox trusted the meter, which was changing, over the image, which wasn\'t, and finished the walk on the measurement it could still trust.' } },
         ] },
-        laser: { at: 'step3', intro: 'Replaying this request. This time the laser\'s output sags partway through the walk.', steps: [
+        laser: { at: 'step3', intro: 'Replaying this request. This time, the laser\'s output sags partway through the walk.', steps: [
           { status: 'M2 yaw at +0.080° · settling' },
           { tween: 'laser.out', to: 0.8, ms: 2000 },                         // the laser dims; meter 276 → 221 µW, M2 still
           { fail: 'laser', faultText: 'overheating · output low', title: '⚠ Laser output falling', say: 'The meter fell from 276 to 221 µW in 2 s while M2 stood still at +0.080°, and the camera shows the spot where it was. Then the laser reported a temperature fault.' },
@@ -877,7 +912,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'It didn\'t blame the mirror.', body: 'The power fell while the mirror stood still, so NeuCharBox traced it to the laser, not the alignment. It halted the loop, closed the shutter, and kept the best position it had actually measured.' } },
         ] },
-        stage: { at: 'step3', intro: 'Replaying this request. This time Stage X stops answering partway through the walk.', steps: [
+        stage: { at: 'step3', intro: 'Replaying this request. This time, Stage X stops answering partway through the walk.', steps: [
           { status: 'M2 yaw · stepping −0.020° at a time' }, { wait: 1000 },
           { fail: 'stage', faultText: 'not answering', title: '⚠ Stage X silent', say: 'Stage X\'s controller stopped answering. This walk doesn\'t move the stage, but the iris it carries sits in the beam: if the stage moved, every reading from here would be off.' },
           { say: 'So before the next step, a repeat reading at the same M2 position.' },
@@ -890,7 +925,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'It checked the silent part first.', body: 'Stage X went quiet in the middle of the walk. NeuCharBox took a repeat reading to be sure the iris hadn\'t moved, then finished the walk to 367 µW.' } },
         ] },
-        m2: { at: 'step4', intro: 'Replaying this request. This time Mirror M2\'s drive starts slipping partway through the walk.', steps: [
+        m2: { at: 'step4', intro: 'Replaying this request. This time, Mirror M2\'s drive starts slipping partway through the walk.', steps: [
           cue('m2', 'Mirror M2 · yaw +0.060° → +0.040°', 900), { status: 'M2 yaw → +0.040° · step 4' },
           { set: 'm2.reported', to: 0.04 }, { wait: 700 },          // tile: "yaw +0.040°"; the mirror, spot and meter don't move
           { fail: 'm2', faultText: 'drive slipping', title: '⚠ M2 didn\'t move', say: 'Step 4: M2\'s controller counted the step to +0.040°, but nothing moved. The camera spot is still at (11,\u00A0−4) px and the meter still reads 313 µW, exactly as at step 3. Most likely its drive is slipping.' },
@@ -912,7 +947,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'The mount said it moved. It hadn\'t.', body: 'M2 reported a step the mirror never made. NeuCharBox believed the camera and the meter over the mount\'s own report, and stopped walking a mirror it couldn\'t trust.' } },
         ] },
-        meter: { at: 'step4', intro: 'Replaying this request. This time the power meter goes silent partway through the walk.', steps: [
+        meter: { at: 'step4', intro: 'Replaying this request. This time, the power meter goes silent partway through the walk.', steps: [
           cue('m2', 'Mirror M2 · yaw +0.060° → +0.040°', 900), { status: 'M2 yaw → +0.040° · step 4' },
           { parallel: [                                                     // the meter dies as step 4 starts: it never reads +0.040°
             { fail: 'meter', faultText: 'no reading', title: '⚠ Feedback lost', say: 'The power meter went silent as M2 made step 4. The last reading it sent was 313 µW, at step 3.' },
@@ -926,7 +961,7 @@ export default {
           { wait: 1200 },
           { end: { headline: 'No feedback, no next step.', body: 'The walk\'s only feedback went silent mid-step. NeuCharBox stopped the loop there, closed the shutter, and kept track of which position it had measured and which it hadn\'t.' } },
         ] },
-        m1: { at: 'step5', intro: 'Replaying this request. This time Mirror M1 moves on its own partway through the walk.', steps: [
+        m1: { at: 'step5', intro: 'Replaying this request. This time, Mirror M1 moves on its own partway through the walk.', steps: [
           { status: 'M2 yaw at +0.040° · settling' }, { wait: 800 },
           { set: 'm1.reported', to: 0 },                                     // M1's controller has gone quiet: its tile keeps the last report, yaw +0.000°
           { tween: 'm1.yaw', to: 0.03, ms: 700 },                            // M1 tilts; camera (7, −4) → (13, −4) px; meter 342 → 295 µW
@@ -940,7 +975,7 @@ export default {
           { end: { headline: 'It noticed a mirror move by itself.', body: 'Mirror M1 moved on its own in the middle of a walk it wasn\'t part of. NeuCharBox caught it on the camera and the meter, closed the shutter, and set aside readings that no longer described the bench.' } },
         ] },
         disturbance: { label: 'Something crosses the beam', ask: 'What if something crosses the beam mid-walk?', at: 'step6',
-          intro: 'Replaying this request. This time something crosses the beam at step 6.', steps: [
+          intro: 'Replaying this request. This time, something crosses the beam at step 6.', steps: [
           { status: 'M2 yaw → +0.000° · step 6' },
           cue('m2', 'Mirror M2 · yaw +0.020° → +0.000°', 900),
           // Halfway through the move something takes 45% out of the last leg (not before: the log has just quoted step 5).

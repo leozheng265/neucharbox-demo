@@ -334,7 +334,7 @@ export default {
       genericAt: 'waking',
       genericTitle: '📝 Noted, not urgent',
       whatIf: {
-        mat: { at: 'night', intro: 'Replaying this request. This time the bed sensor goes quiet in the night.', steps: [
+        mat: { at: 'night', intro: 'Replaying this request. This time, the bed sensor goes quiet in the night.', steps: [
           { status: 'Tuesday 03:40' }, { tween: 'env.hour', to: 27.67, ms: 1200 },
           { status: 'Tuesday 04:10 · bed sensor check-in due' }, { tween: 'env.hour', to: 28.17, ms: 1200 },
           { fail: 'mat', title: '📝 Logged, not sent at 4 am', faultText: 'silent since 03:40', say: '04:10 — the bed sensor missed its check-in. The last thing it sent, at 03:40, was weight on the bed. Its silence doesn\'t tell me she\'s asleep, or that she isn\'t.' },
@@ -352,7 +352,7 @@ export default {
           HOLD,
           { end: { headline: 'No bed sensor, and no guessing.', body: 'The bed sensor went silent at 03:40, and NeuCharBox read that as neither asleep nor awake. You got what her door, the hallway and the kettle showed, with the missing sensor named.' } },
         ] },
-        door: { at: 'waking', intro: 'Replaying this request. This time the bedroom door sensor gets its reading wrong.', steps: [
+        door: { at: 'waking', intro: 'Replaying this request. This time, the bedroom door sensor gets its reading wrong.', steps: [
           { status: 'Tuesday 07:10' }, { tween: 'env.hour', to: 31.17, ms: 900 },
           { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { wait: 900 },
           { set: 'door.leaf', to: 0 }, { tween: 'door.leaf', to: 1, ms: 1200 },   // the door opens; its sensor still reports "closed"
@@ -369,7 +369,7 @@ export default {
           HOLD,
           { end: { headline: 'Two sensors agreed. The door didn\'t.', body: 'The bedroom door sensor said "closed" while the hallway saw movement just outside it. NeuCharBox went with the two sensors that agreed, sent your "Mum\'s up" on time, and stopped counting the one that disagreed.' } },
         ] },
-        motion: { at: 'watch', intro: 'Replaying this request. This time the hallway motion sensor sends a tamper alert and goes quiet before she\'s up.', steps: [
+        motion: { at: 'watch', intro: 'Replaying this request. This time, the hallway motion sensor sends a tamper alert and goes quiet before she\'s up.', steps: [
           { status: 'Tuesday 06:40' }, { tween: 'env.hour', to: 30.67, ms: 1500 },
           { fail: 'motion', title: '📝 Hallway sensor down · logged', faultText: 'tamper alert · silent', say: '06:40 — the hallway motion sensor sent a tamper alert and has said nothing since. That usually means it has come off its mount. From now on it tells me nothing about the hallway: not movement, and not "no movement".' },
           { wait: 1500 },
@@ -388,7 +388,7 @@ export default {
           // door or the hallway), and not "one sensor down", which the re-plan card's "one sensor short" just said
           { end: { headline: 'The door covered for the hallway.', body: 'The hallway sensor sent a tamper alert and went quiet before she woke. NeuCharBox ran your rule on the bed and the door, which it already allowed, and told you which sensor was missing.' } },
         ] },
-        kettle: { at: 'kettle', intro: 'Replaying this request. This time the kettle plug drops off the network just as she makes her tea.', steps: [
+        kettle: { at: 'kettle', intro: 'Replaying this request. This time, the kettle plug drops off the network just as she makes her tea.', steps: [
           { status: 'Tuesday 07:12 · Mum\'s up at 07:11' }, { tween: 'env.hour', to: 31.2, ms: 1000 },
           { set: 'kettle.steam', to: true },   // she's boiling the kettle; the plug can't report it
           { fail: 'kettle', title: '📝 Kettle plug offline', faultText: 'off the network', say: '07:12 — the kettle plug dropped off the network. Its last report, at 07:11, was "off, 0 W". From now on I can\'t see the kettle, on or off.' },
@@ -400,7 +400,7 @@ export default {
           HOLD,
           { end: { headline: 'The kettle went quiet. Nothing was assumed.', body: 'The kettle plug dropped off the network as she made her tea. NeuCharBox kept the "Mum\'s up" it had already confirmed, and didn\'t count a silent plug as a kettle on or off.' } },
         ] },
-        sleepIn: { label: 'She isn\'t up by 09:30', ask: 'What if she isn\'t up by 09:30?', at: 'waking', intro: 'Replaying this request. This time she sleeps in.', steps: [
+        sleepIn: { label: 'She isn\'t up by 09:30', ask: 'What if she isn\'t up by 09:30?', at: 'waking', intro: 'Replaying this request. This time, she sleeps in.', steps: [
           { status: 'Tuesday 08:20' }, { tween: 'env.hour', to: 32.33, ms: 1500 },
           { status: 'Tuesday 09:30' }, { tween: 'env.hour', to: 33.5, ms: 1500 },
           { fn: async ({ chat, sleep }) => { chat.alert('09:30 and she\'s not up yet. The bed sensor still shows weight, her door is closed, and the hallway sensor hasn\'t seen movement all night. All four sensors are checking in, so this isn\'t a sensor gone quiet.', '⏰ Not up yet'); await sleep(600); } },
@@ -457,7 +457,7 @@ export default {
       genericAt: 'back',
       genericTitle: '📝 Noted, not urgent',
       whatIf: {
-        mat: { at: 'up', intro: 'Replaying this request. This time the bed sensor has gone quiet before she gets up.', steps: [
+        mat: { at: 'up', intro: 'Replaying this request. This time, the bed sensor has gone quiet before she gets up.', steps: [
           { status: 'Tuesday 02:40' }, { wait: 1200 },
           { tween: 'door.open', to: 1, ms: 1000, label: 'Bedroom door → open' }, { set: 'motion.active', to: true, label: 'Hallway → movement' }, { set: 'motion.last', to: '02:41' },
           // her door and the hallway are all that's left to go on: the lights come on at once, then NCB says why so late.
@@ -478,7 +478,7 @@ export default {
           HOLD,
           { end: { headline: 'Lights at her door, not her bed.', body: 'The bed sensor had gone silent, so the lights came on at her door instead of at her bed. NeuCharBox said so, and left a soft light on rather than guess she was back in bed.' } },
         ] },
-        night: { at: 'up', intro: 'Replaying this request. This time the night light doesn\'t answer when she gets up.', steps: [
+        night: { at: 'up', intro: 'Replaying this request. This time, the night light doesn\'t answer when she gets up.', steps: [
           { status: 'Tuesday 02:40' }, { wait: 1000 },
           { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' },
           { status: 'Night light: sending "on" at 20%…' }, { wait: 900 },
@@ -499,7 +499,7 @@ export default {
           // short enough for one line on a phone (the old headline broke after "Only")
           { end: { headline: 'Only the hall light answered.', body: 'The night light didn\'t answer when she got up, so the hall light was the only light she had, at your limit. NeuCharBox said her first steps were dark instead of pretending the hall light covered them.' } },
         ] },
-        door: { at: 'door', intro: 'Replaying this request. This time the bedroom door sensor starts flickering as she goes through.', steps: [
+        door: { at: 'door', intro: 'Replaying this request. This time, the bedroom door sensor starts flickering as she goes through.', steps: [
           { status: 'Tuesday 02:41' }, { wait: 600 },
           { set: 'door.leaf', to: 0 }, { parallel: [{ tween: 'door.leaf', to: 1, ms: 1000 }, FLICKER] },   // the door opens once; its sensor chatters
           { set: 'motion.active', to: true }, { set: 'motion.last', to: '02:41' },
@@ -514,7 +514,7 @@ export default {
           HOLD,
           { end: { headline: 'A flickering door, calmly ignored.', body: 'The door sensor started flicking between open and closed as she went through. NeuCharBox recognised a loose magnet, kept the lights on the bed sensor as planned, and left the door out of everything.' } },
         ] },
-        motion: { at: 'back', intro: 'Replaying this request. This time the hallway motion sensor goes quiet once she\'s back in bed.', steps: [
+        motion: { at: 'back', intro: 'Replaying this request. This time, the hallway motion sensor goes quiet once she\'s back in bed.', steps: [
           { status: 'Tuesday 02:50 · hallway sensor check-in due' }, { tween: 'env.hour', to: 26.83, ms: 1000 },
           { fail: 'motion', title: '📝 Hallway sensor quiet', faultText: 'missed check-in', say: '02:50 — the hallway motion sensor missed its check-in. It last checked in at 02:20 and saw her at 02:41. Most likely its battery is flat.' },
           { wait: 1500 },
@@ -526,7 +526,7 @@ export default {
           HOLD,
           { end: { headline: 'Built on the bed, not the hallway.', body: 'The hallway sensor went quiet after she went back to bed. The lights never depended on it, so NeuCharBox turned them off on time and flagged the sensor for the morning.' } },
         ] },
-        hall: { at: 'later', intro: 'Replaying this request. This time the hall light doesn\'t answer when she gets up again, an hour later.', steps: [
+        hall: { at: 'later', intro: 'Replaying this request. This time, the hall light doesn\'t answer when she gets up again, an hour later.', steps: [
           { status: 'Tuesday 03:55' }, { tween: 'env.hour', to: 27.92, ms: 1500 },
           { set: 'mat.pressed', to: false, label: 'Bed sensor → out of bed' }, { set: 'night.on', to: true }, { tween: 'night.brightness', to: 0.2, ms: 700, label: 'Night light → 20%' },
           { wait: 500 }, { status: 'Hall light: sending "on"…' }, { wait: 900 },
@@ -600,7 +600,7 @@ export default {
       genericAt: 'overrun',
       genericTitle: '📝 Noted, not urgent',
       whatIf: {
-        kettle: { at: 'switchOff', intro: 'Replaying this request. This time the kettle plug says "off" but doesn\'t switch off.', steps: [
+        kettle: { at: 'switchOff', intro: 'Replaying this request. This time, the kettle plug says "off" but doesn\'t switch off.', steps: [
           { status: (st) => `Tuesday ${offAt(st)} · kettle on ${st.get('plan.warnFirst') ? 15 : 10} min` }, { wait: 800 },
           { status: 'Kettle plug: sending "off"…' }, { wait: 900 },
           { fn: ({ chat, store }) => chat.alert(`${offAt(store)} — the plug reports "off", but it\'s still drawing 1,850 W. The relay hasn\'t opened.`, '⚠ The kettle is NOT off') },
@@ -615,7 +615,7 @@ export default {
           HOLD,
           { end: { headline: '"Off" wasn\'t off. It said so.', body: 'The plug claimed success, but the power draw said otherwise. NeuCharBox reported the measurement, not the claim, and handed you a phone call instead of a false all-clear.' } },
         ] },
-        mat: { at: 'morning', intro: 'Replaying this request. This time the bed sensor disagrees with the others in the morning.', steps: [
+        mat: { at: 'morning', intro: 'Replaying this request. This time, the bed sensor disagrees with the others in the morning.', steps: [
           { status: 'Tuesday 07:12' }, { wait: 800 },
           { set: 'motion.last', to: '07:10' }, { tween: 'door.open', to: 1, ms: 700, label: 'Bedroom door → open' },
           ...P2_BOIL_ON,
@@ -632,7 +632,7 @@ export default {
           HOLD,
           { end: { headline: 'The sensors disagreed. It didn\'t pick one.', body: 'The bed sensor said "in bed" while her door, the hallway and the kettle said someone was up. NeuCharBox flagged the disagreement, kept watching the kettle on its meter, and asked you what it couldn\'t know.' } },
         ] },
-        door: { at: 'overrun', intro: 'Replaying this request. This time the bedroom door sensor goes quiet while the kettle is on.', steps: [
+        door: { at: 'overrun', intro: 'Replaying this request. This time, the bedroom door sensor goes quiet while the kettle is on.', steps: [
           { status: 'Tuesday 18:04 · kettle on 2 min' }, { parallel: [{ tween: 'kettle.minutes', to: 2, ms: 1000 }, { tween: 'env.hour', to: 42.07, ms: 1000 }] },
           { fail: 'door', title: '📝 Door sensor · not urgent', faultText: 'missed check-in', say: '18:04 — the bedroom door sensor missed its check-in. Most likely its battery is flat.' },
           { wait: 1500 },
@@ -647,7 +647,7 @@ export default {
           HOLD,
           { end: { headline: 'One message, one subject.', body: 'The door sensor went quiet while the kettle was on. NeuCharBox kept every kettle message about the kettle, and sent the sensor news on its own, marked not urgent.' } },
         ] },
-        motion: { at: 'overrun', intro: 'Replaying this request. This time the hallway motion sensor goes quiet while the kettle is on.', steps: [
+        motion: { at: 'overrun', intro: 'Replaying this request. This time, the hallway motion sensor goes quiet while the kettle is on.', steps: [
           { status: 'Tuesday 18:05 · kettle on 3 min' }, { parallel: [{ tween: 'kettle.minutes', to: 3, ms: 1200 }, { tween: 'env.hour', to: 42.08, ms: 1200 }] },
           { fail: 'motion', title: '📝 Lost the hallway sensor', faultText: 'offline since 18:05', say: '18:05 — the hallway motion sensor missed its check-in. The last thing it reported was movement at 17:58.' },
           { wait: 1500 },
