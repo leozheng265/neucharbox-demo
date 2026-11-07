@@ -17,5 +17,34 @@ export function controlChecks({ report, scenes }) {
   eq(controlFor({ control: { kind: 'switch', field: 'open' } }, { open: 0.7 }), { kind: 'switch', field: 'open', on: true }, 'switch override');
   eq(controlFor({ control: (s) => ({ kind: 'switch', field: 'muted', on: !s.muted }) }, { muted: true }), { kind: 'switch', field: 'muted', on: false }, 'function override');
   report('engine · card controls follow the device state', p);
-  // Task 2 adds the per-scene table below this line.
+  const WANT = {
+    home:      { lamp: 'bar:brightness', blinds: 'bar:closed', soil: '—', pump: 'switch:running', camera: 'switch:armed', thermostat: 'bar:target' },
+    lab:       { laser: 'switch:shutter', beamcam: '—', m1: '—', m2: '—', meter: '—', stage: '—' },
+    elder:     { mat: 'switch:pressed', door: 'switch:open', motion: 'switch:active', kettle: 'switch:on', night: 'bar:brightness', hall: 'bar:brightness' },
+    warehouse: { c1: 'bar:speed', c2: 'bar:speed', c3: 'bar:speed', scanner: 'switch:armed', gate: '—', agvA: '—', agvB: '—', dock: '—' },
+    creator:   { keylight: 'bar:brightness', cam: 'switch:on', mic: 'switch:muted', capture: '—', overlay: '—', onair: 'switch:on', strip: 'bar:brightness' },
+  };
+  const VALUES = {
+    home: [['thermostat', { target: 19, current: 19 }, 'value', 0.5]],
+    warehouse: [['c1', { running: true, speed: 0.5 }, 'value', 1], ['c1', { running: true, speed: 0.2 }, 'value', 0.4]],
+    elder: [['door', { open: 0.3 }, 'on', false], ['door', { open: 0.8 }, 'on', true]],
+    lab: [['laser', { shutter: 'open' }, 'on', true], ['laser', { shutter: 'closed' }, 'on', false]],
+    creator: [['mic', { muted: false }, 'on', true], ['mic', { muted: true }, 'on', false]],
+  };
+  for (const [id, want] of Object.entries(WANT)) {
+    const q = [], sc = scenes[id], devs = sc.devices;
+    const name = (c) => (c ? `${c.kind}:${c.field}` : '—');
+    for (const d of sc.deviceOrder) {
+      if (!(d in want)) { q.push(`${d} is in the scene but not in the table`); continue; }
+      const got = name(controlFor(devs[d], devs[d].initial));
+      if (got !== want[d]) q.push(`${id} ${d}: got ${got}, want ${want[d]}`);
+    }
+    for (const d of Object.keys(want)) if (!sc.deviceOrder.includes(d)) q.push(`${d} is in the table but not in the scene`);
+    for (const [d, slice, key, w] of VALUES[id] || []) {
+      const c = controlFor(devs[d], slice);
+      if (!c || c[key] !== w) q.push(`${id} ${d} ${JSON.stringify(slice)}: got ${c && c[key]}, want ${w}`);
+    }
+    p.push(...q);
+    report(`${id} · each device card shows the right control`, q);
+  }
 }

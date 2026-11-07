@@ -44,7 +44,7 @@ export default {
   devices: {
     keylight: { icon: 'keylight', name: 'Key light', ref: 'the key light', initial: { on: false, brightness: 0, kelvin: 5600 }, format: (s) => (s.brightness > 0.02 ? `${Math.round(s.brightness * 100)}% · ${Math.round(s.kelvin / 100) * 100}K` : 'off'), active: (s) => s.brightness > 0.02, faultText: 'not responding' }, // kelvin to 100 K: it fades in the wrap-up
     cam:      { icon: 'camera', name: 'Main camera', ref: 'the main camera', initial: { on: false, signal: false }, format: (s) => (s.on ? (s.signal ? 'on · signal' : 'on · no signal') : 'off'), faultText: 'on, but no picture' },
-    mic:      { icon: 'mic', name: 'Mic', ref: 'the mic', initial: { muted: true, level: -90 }, format: (s) => (s.muted ? 'muted' : `live · ${Math.round(s.level)} dB`.replace('-', '−')), faultText: 'no input' },
+    mic:      { icon: 'mic', name: 'Mic', ref: 'the mic', initial: { muted: true, level: -90 }, format: (s) => (s.muted ? 'muted' : `live · ${Math.round(s.level)} dB`.replace('-', '−')), faultText: 'no input', control: (s) => ({ kind: 'switch', field: 'muted', on: !s.muted }) }, // on = live, so the switch reads opposite to the muted flag
     capture:  { icon: 'capture', name: 'Capture card', ref: 'the capture card', initial: { input: 'HDMI 1', signal: false }, format: (s) => `${s.input} · ${s.signal ? 'signal' : 'no signal'}`, active: (s) => s.signal, faultText: 'signal with camera off' },
     // tag: a note in the monitor's margin (never on the stream); caption: a bar ON the stream's picture
     overlay:  { icon: 'display', name: 'Overlay', ref: 'the overlay app', initial: { scene: 'idle', tag: '', caption: '' },

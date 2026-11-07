@@ -74,7 +74,7 @@ export default {
   deviceOrder: ['mat', 'door', 'motion', 'kettle', 'night', 'hall'],
   devices: {
     mat:    { icon: 'bed', name: 'Bed sensor', ref: 'the bed sensor', initial: { pressed: true }, format: (s) => (s.pressed ? 'in bed' : 'out of bed'), faultText: 'no signal' },
-    door:   { icon: 'door', name: 'Bedroom door', ref: 'the bedroom door sensor', initial: { open: 0 }, format: (s) => (s.open > 0.5 ? 'open' : 'closed'), faultText: 'no signal' },
+    door:   { icon: 'door', name: 'Bedroom door', ref: 'the bedroom door sensor', initial: { open: 0 }, format: (s) => (s.open > 0.5 ? 'open' : 'closed'), faultText: 'no signal', control: (s) => ({ kind: 'switch', field: 'open', on: s.open > 0.5 }) }, // a contact sensor reads open/closed, not a level; > 0.5 matches its format text (the declarative switch form would read 0.3 as open)
     motion: { icon: 'motion', name: 'Hallway motion', ref: 'the hallway motion sensor', initial: { active: false, last: '—' }, format: (s) => (s.active ? 'movement now' : `last ${s.last}`), faultText: 'offline' },
     kettle: { icon: 'kettle', name: 'Kettle plug', ref: 'the kettle plug', initial: { on: false, watts: 0, minutes: 0 }, format: (s) => (s.on ? `on · ${Math.round(s.watts).toLocaleString('en-GB')} W · ${s.minutes.toFixed(0)} min` : 'off'), faultText: 'off the network' },
     night:  { icon: 'bulb', name: 'Night light', ref: 'the night light', initial: { on: false, brightness: 0 }, active: (s) => s.brightness > 0.02, format: (s) => (s.brightness > 0.02 ? `on · ${Math.round(s.brightness * 100)}%` : 'off'), faultText: 'off the network' },

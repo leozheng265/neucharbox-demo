@@ -103,7 +103,7 @@ export default {
   // so the tilt and walk results show M2 + meter, the stage log meter + Stage X, and the shutter fault the laser.
   deviceOrder: ['laser', 'beamcam', 'm1', 'm2', 'meter', 'stage'],
   devices: {
-    laser:  { icon: 'laser', name: 'Laser & shutter', ref: 'the laser', initial: { on: true, shutter: 'closed', mW: 5, stuck: false, out: 1 }, format: (s) => `${s.shutter} · ${s.mW.toFixed(1)} mW set`, faultText: 'not answering', active: (s) => s.shutter === 'open' },
+    laser:  { icon: 'laser', name: 'Laser & shutter', ref: 'the laser', initial: { on: true, shutter: 'closed', mW: 5, stuck: false, out: 1 }, format: (s) => `${s.shutter} · ${s.mW.toFixed(1)} mW set`, faultText: 'not answering', active: (s) => s.shutter === 'open', control: (s) => ({ kind: 'switch', field: 'shutter', on: s.shutter === 'open' }) }, // the laser stays on; the shutter is what changes
     m1:     { icon: 'mirror', name: 'Mirror M1', ref: 'Mirror M1', initial: { yaw: 0.0, pitch: 0.0 }, format: angles, faultText: 'controller offline' },
     m2:     { icon: 'mirror', name: 'Mirror M2', ref: 'Mirror M2', initial: { yaw: 0.12, pitch: -0.02 }, format: angles, faultText: 'controller offline' },
     stage:  { icon: 'stage', name: 'Stage X', ref: 'Stage X', initial: { x: 10.0, limit: 13.0, moving: false }, format: (s) => `${s.x.toFixed(3)} mm · ${s.moving ? 'moving' : s.x >= s.limit - 0.0005 ? 'at limit' : `limit ${s.limit.toFixed(1)} mm`}`, faultText: 'controller offline' },
