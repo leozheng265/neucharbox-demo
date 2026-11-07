@@ -840,6 +840,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   // 8. typed-request routing
   if (scenes.length) { const { routingChecks } = await import('./routing.mjs'); routingChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
+  if (scenes.length) { const { controlChecks } = await import('./controls.mjs'); controlChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
   // 7. room builds (and every what-if through update())
   await buildChecks({ scenes: [...scenes.map(({ scene }) => scene), ...(fixture ? [fixture] : [])] });
 
