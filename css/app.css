@@ -218,7 +218,8 @@ button { font: inherit; color: inherit; }
    of the log, over the end of the story, until the visitor scrolls on. Where the card fits, nothing moves. (Desktop's
    log is tall enough, and its history never gets a row of buttons riding over its own text.) */
 @media (max-width: 959px) {
-  .card.end:has(.live-go) .row, .card.end.live .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
+  .card.end.live .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
+  .card.end:has(.live-go) .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
 }
 .card.access .intro { margin-bottom: 6px; }
 .card.access .anote { margin: 0 0 8px; color: var(--ink-2); font-size: 13.5px; }

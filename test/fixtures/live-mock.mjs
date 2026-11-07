@@ -137,7 +137,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     if (kind === 'done') {
       out = { usage: { promptTokens: 1200, completionTokens: 180, calls: run?.calls ?? 0 }, remainingToday: cfg.remaining, ...data };
       sess.active = null; sess.pending = null;
-      if (run && !run.whatif && (data.outcome === 'ok' || data.outcome === 'failed')) sess.last = run; 
+      if (run && !run.whatif && (data.outcome === 'ok' || data.outcome === 'failed') && run.steps.length) sess.last = run; // the latest replayable request (contract): a declined, cannot_do, expired or limit one never replaces it
     }
     if (kind === 'cannot_do' || kind === 'declined') sess.pending = null;
     const seq = sess.events.length + 1, ev = { seq, kind, data: { ...out, rid } };

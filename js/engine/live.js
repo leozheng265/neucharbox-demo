@@ -87,6 +87,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // answer in flight, and a typed change waiting for its decline's `done`.
   let rid = null, lastRid = null, holding = null, card = null, replanCard = null, replanSteps = [], checklist = null;
   let waiting = null, answer = null, pendingText = null, reading = null, planningOn = false, ranStep = false, exitOnDone = false;
+  const labels = new Map();   // callId → the call's label, for the status line when its result comes
   let planned = false;        // a checklist exists (an approved plan, or a what-if's): only then is there something to replay
   let ended = null;           // the end card on screen: closed by the next end card, a lost code or a fresh room
   let remainingToday = null;
@@ -155,7 +156,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (k === 'expired' || k === 'declined') { if (answer) answer.over = true; answer = null; } else answer?.apply();
     if (reading) { const id = reading; reading = null; mark(id, null); } // a running read's `call` marks it WORKING again
     switch (k) {
-      case 'planning': phase = 'planning'; planningOn = true; view.planning(true); beat('plan'); break;
+      case 'planning': phase = 'planning'; if (!planningOn) { planningOn = true; view.planning(true); } beat('plan'); break;
       case 'reading':
         if (!isDevice(d.device)) break;
         mark(d.device, 'busy'); reading = d.device; panel.reveal([d.device]); // a read changes no value: reveal shows its card
@@ -188,7 +189,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       case 'call':
         checklist?.call({ callId: d.callId, step: d.step ?? null, label: str(d.label) }); // a null step: a row of its own (view)
         if (isDevice(d.device)) { mark(d.device, 'busy'); panel.reveal([d.device]); }
-        if (typeof d.label === 'string') ui.status(d.label);
+        if (typeof d.label === 'string') { ui.status(d.label); if (typeof d.callId === 'string') labels.set(d.callId, d.label); }
         break;
       case 'state':
         if (!writable(d.path)) break;
@@ -197,7 +198,11 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         break;
       case 'result':
         checklist?.result({ callId: d.callId, outcome: d.outcome, text: str(d.text), ok: okOf(d) });
-        if (isDevice(d.device)) mark(d.device, d.outcome === 'confirmed' || d.outcome === 'made_safe' ? 'just' : null);
+        { // the line keeps the call's label with its outcome (red when it failed)
+          const lab = labels.get(d.callId); labels.delete(d.callId);
+          if (lab != null) ui.status(`${lab} · ${str(d.text)}`, !okOf(d));
+        }
+        if (isDevice(d.device)) mark(d.device, okOf(d) && (d.outcome === 'confirmed' || d.outcome === 'made_safe') ? 'just' : null);
         break;
       case 'fault': // the server's text first: the card and flow.js's status line read it once the status turns 'fault'
         if (!isDevice(d.device)) break;
@@ -289,7 +294,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   // ---- requests ----
   // A new request or what-if: nothing of the last one stays live.
-  function begin() { card = replanCard = checklist = waiting = null; replanSteps = []; reading = null; ranStep = false; exitOnDone = false; planningOn = false; planned = false; }
+  function begin() { labels.clear(); card = replanCard = checklist = waiting = null; replanSteps = []; reading = null; ranStep = false; exitOnDone = false; planningOn = false; planned = false; }
   // The POST that starts a request (requests, …/whatif). Until it answers, events with an unknown rid are held (the server
   // starts before it answers); then those of its requestId run in order and the rest are dropped, or all of them when it
   // fails. Resolves false when the visit moved on meanwhile.
@@ -318,7 +323,9 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (phase === 'awaiting') return respond(waiting, 'decline', t); // a typed change: decline quietly, then plan this
     if (phase !== 'idle') return;                                   // one request at a time
     begin(); phase = 'busy'; isWhatIf = false;
+    view.closeChips(); // an old "Try:" or cannot_do chip can't start a second request
     view.input(false); view.user(t); ui.status(LIVE_COPY.planning); ui.track(true);
+    planningOn = true; view.planning(true); // "Planning…" at once (spec 3.3), not when the server's event arrives
     for (let retried = false; ; retried = true) {
       try { await start(() => api.request(sessionId, t)); return; } catch (e) {
         if (gone()) return;
@@ -327,7 +334,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         if (k === 'code_limit') return limited(LIVE_COPY.limitCode);
         if (k === 'global_limit' || k === 'budget') return limited(LIVE_COPY.limitGlobal, k === 'budget');
         if (k === 'live_off') return limited(LIVE_COPY.offline, true); // switched off, or no NeuChar key: not a limit
-        if (k === 'no_session' && !retried) { if ((await newSession({ notice: LIVE_COPY.timedOut })) && !gone()) continue; return; }
+        if (k === 'no_session' && !retried) { if ((await newSession({ notice: LIVE_COPY.timedOut })) && !gone()) { planningOn = true; view.planning(true); continue; } return; }
+        if (planningOn) { planningOn = false; view.planning(false); }
         view.ncb(k === 'too_long' ? LIVE_COPY.tooLong : LIVE_COPY.error);
         return backToIdle();
       }
@@ -415,7 +423,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       if (!s || typeof s.sessionId !== 'string' || !isObj(s.state)) throw new LiveError(200, 'bad_response');
     } catch (e) { if (!gone()) failed(e); return false; }
     if (gone()) return false;
-    if (planningOn) view.planning(false);
+    if (planningOn) { planningOn = false; view.planning(false); }
     waiting?.close(); // a card left from the expired session takes no answers (its marks go with applyRoom below)
     checklist?.done(); closeEnd(); // and its run is over: no step left running, no end card left to press
     forget();
@@ -514,6 +522,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   function exit(heading) {
     if (!active) return;
     release();
+    view.closeChips();
     stream?.close(); stream = null;
     accessHandle?.close(); accessHandle = null;
     active = false; phase = 'off'; sessionId = null; forget();
