@@ -823,16 +823,29 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const d = await mid(), n0 = d.log.length; d.live.close(); eq(d.log.length, n0, 'close() stays silent');
   });
 
-  await check('end card · closed by the next request, a 401 or a fresh room (no button left that does nothing)', async () => {
+  await check('end card · closed when the next end card shows, by a 401 or a fresh room (no button left that does nothing)', async () => {
     // Found in the browser check (Task 8): after a 401 the access panel came back under a live end card whose buttons
-    // still looked live but did nothing; the same after a fresh room (its what-if) or while the next request ran.
+    // still looked live but did nothing; the same after a fresh room (its what-if).
     const closes = (t) => count(t, 'end', 'close');
     const a = await harness({ entered: true }); await movie(a); eq(closes(a), 0, 'open after done');
-    await toPlan(a, MOVIE); eq(closes(a), 1, 'the next request closes it'); a.live.close();
+    await toPlan(a, MOVIE); eq(closes(a), 0, 'still open while the next plan waits');
+    await a.card.approve(); await waitFor(() => count(a, 'view', 'endCard') === 2);
+    eq(closes(a), 1, 'closed when the next end card shows');
+    ok(a.order('end', 'close') < a.log.findLastIndex((e) => e[0] === 'view' && e[1] === 'endCard'), 'closed before the new card mounts'); a.live.close();
     const b = await harness({ entered: true }); await movie(b); b.mock.set({ code: 'NCB-OTHR-CODE' }); b.mock.drop(b.live.sessionId);
     await waitFor(() => accessCount(b) === 2); eq(closes(b), 1, 'a 401 closes it'); b.live.close();
     const c = await harness({ entered: true }); await movie(c); const csid = c.live.sessionId; c.mock.expire(csid);
     await waitFor(() => c.live.sessionId !== csid && c.live.phase === 'idle'); eq(closes(c), 1, 'a fresh room closes it'); c.live.close();
+  });
+
+  await check('end card · a declined next plan leaves the last end card working (its Reset room still resets)', async () => {
+    // A decline (or cannot_do, or a failed POST) shows no new end card: the last one keeps Reset room and the what-if.
+    const t = await harness({ entered: true }); await movie(t); const [, acts] = t.find('view', 'endCard');
+    await toPlan(t, MOVIE); await t.card.decline(); await waitFor(() => t.live.phase === 'idle'); await settle();
+    ok(t.has('view', 'ncb', LIVE_COPY.declined)); eq(count(t, 'view', 'endCard'), 1, 'no new end card'); eq(count(t, 'end', 'close'), 0, 'not closed');
+    acts.onReset(); await waitFor(() => postsTo(t.mock, /\/reset$/).length === 1 && t.has('view', 'ncb', FRESH_START));
+    eq(postsTo(t.mock, /\/reset$/)[0].path, `sessions/${t.live.sessionId}/reset`);
+    t.live.close();
   });
 
   await check('end card · done{failed} before any plan → no what-if; after a plan ran → what-if on that rid', async () => {

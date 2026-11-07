@@ -133,7 +133,8 @@ async function mountScene(meta, gen) {
     status: setStatus,
     beats: setBeats,
     // The guided end cards gain the live button while live mode is available (a /health that said yes).
-    endExtras: () => (live?.available ? { onLive: () => { chat.closeEnds(); live.open(); }, liveLabel: LIVE_COPY.button } : {}),
+    // A guided picker of failures left open goes too: a pick from it would run a scripted what-if while live is on.
+    endExtras: () => (live?.available ? { onLive: () => { chat.closeEnds(); chat.closeFailures(); live.open(); }, liveLabel: LIVE_COPY.button } : {}),
     // Discovery and fault effects: the pulse on a faulted device is red, like its ring, and its fault label goes as soon
     // as it is back online (a visitor confirming a stopped cart).
     ping: (id, text, opts) => R.ping(id, text, opts),

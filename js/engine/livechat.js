@@ -156,8 +156,15 @@ export function createLiveView({ chat, scene }) {
       if (first) first.focus({ preventScroll: true });
     };
     mount(node);
-    // The next request, a lost code or a fresh room ends what this card's buttons act on: none is left to press.
-    return { close() { if (node.contains(document.activeElement)) log()?.focus({ preventScroll: true }); buttons.forEach((x) => (x.disabled = true)); } };
+    // The next end card, a lost code or a fresh room ends what this card's buttons act on: none is left to press, and
+    // nothing in the what-if picker it opened.
+    return {
+      close() {
+        if (node.contains(document.activeElement)) log()?.focus({ preventScroll: true });
+        buttons.forEach((x) => (x.disabled = true));
+        chat.closeFailures();
+      },
+    };
   }
 
   // ---- access: invite code, application, or offline ----

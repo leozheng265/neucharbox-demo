@@ -174,11 +174,15 @@ try {
   const end2h = view.endCard({ remainingToday: 6, whatIfLabel: LIVE_COPY.whatIf, whatIf: true }, { onAnother: noop, onWhatIf: noop, onReset: noop });
   const end2 = $$('.card.end.live').at(-1);
   ok(end2 !== end && $$('button', end2).every((b) => !b.disabled), 'a new end card is live');
-  end2h.close(); ok($$('button', end2).every((b) => b.disabled), 'close() leaves no button to press (the next request, a lost code, a fresh room)');
+  view.failures([{ key: 'lamp', icon: 'lamp', name: 'Floor lamp' }], noop); const pick2 = $$('.card.failures').at(-1); // its what-if picker, open
+  end2h.close();
+  ok($$('button', end2).every((b) => b.disabled), 'close() leaves no button to press (the next end card, a lost code, a fresh room)');
+  ok(pick2.classList.contains('done') && $$('.pick', pick2).every((b) => b.disabled), 'close() also closes the what-if picker it opened');
 
   hr('12 failures picker');
   view.failures([{ key: 'lamp', icon: 'lamp', name: 'Floor lamp' }, { key: 'pump', icon: 'pump', name: 'Water pump' }], () => {});
-  ok($$('.card.failures .pick').length === 2 && $('.card.failures .intro').textContent === LIVE_COPY.whatIfHeading, 'failures picker');
+  const pick3 = $$('.card.failures').at(-1);
+  ok($$('.pick', pick3).length === 2 && $('.intro', pick3).textContent === LIVE_COPY.whatIfHeading, 'failures picker');
 
   hr('lost');
   view.lost(() => {});
@@ -206,13 +210,15 @@ try {
     v2.input(false);
     c2.end({ headline: 'Watered by your rule, checked by the soil.', body: 'NeuCharBox watered the way you approved, kept the afternoon sun off the pot, and counted a watering only when the sensor saw the water arrive.' }, { onWhatIf() {}, whatIfLabel: 'What if something fails?', onMore() {}, onLive() {}, liveLabel: LIVE_COPY.button });
     await wait(40);
+    // the end cards' sticky row is a phone rule (≤ 959 px, css/app.css): on a wider window these two checks don't apply
+    const phone = matchMedia('(max-width: 959px)').matches;
     const e2 = $$('.card.end', box).at(-1);
     ok(e2.offsetHeight > log2.clientHeight, 'the guided end card is taller than the log');
-    ok(e2.getBoundingClientRect().top >= log2.getBoundingClientRect().top && inLog($$('.row', e2).at(-1)), 'guided end card with the live button: shown from its top, its buttons in view');
+    ok(!phone || (e2.getBoundingClientRect().top >= log2.getBoundingClientRect().top && inLog($$('.row', e2).at(-1))), 'guided end card with the live button: shown from its top, its buttons in view');
     v2.input(true);
     v2.endCard({ remainingToday: 3, whatIfLabel: LIVE_COPY.anotherFailure, whatIf: true }, { onAnother: noop, onWhatIf: noop, onReset: noop });
     await wait(40);
-    ok(inLog($('.row', $$('.card.end.live', box).at(-1))), 'live end card: its buttons in view');
+    ok(!phone || inLog($('.row', $$('.card.end.live', box).at(-1))), 'live end card: its buttons in view');
     window.requestAnimationFrame = raf;
   }
 

@@ -88,7 +88,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   let rid = null, lastRid = null, holding = null, card = null, replanCard = null, replanSteps = [], checklist = null;
   let waiting = null, answer = null, pendingText = null, reading = null, planningOn = false, ranStep = false, exitOnDone = false;
   let planned = false;        // a checklist exists (an approved plan, or a what-if's): only then is there something to replay
-  let ended = null;           // the end card on screen: closed by the next request, a lost code or a fresh room
+  let ended = null;           // the end card on screen: closed by the next end card, a lost code or a fresh room
   let remainingToday = null;
   const busy = new Set();     // the ids live.js marked 'busy': done clears only these, so a JUST SET runs its full 2 s
   const devices = devicesOf(scene), n = devices.length;
@@ -233,6 +233,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (out === 'ok' || out === 'failed' || out === 'limit') {
       const replayable = planned && out !== 'limit'; // a what-if replays the steps that ran: none ran, nothing to replay
       if (replayable && !isWhatIf) lastRid = rid;     // a what-if never becomes the latest finished request (contract)
+      closeEnd(); // the last end card, which stays usable until this one shows (a decline or cannot_do shows none)
       ended = view.endCard({ remainingToday, whatIfLabel: isWhatIf ? LIVE_COPY.anotherFailure : LIVE_COPY.whatIf, whatIf: replayable }, endActions()) ?? null;
       beat('end'); ui.status(LIVE_COPY.statusDone(remainingToday));
     } else { beat('ask'); ui.status(LIVE_COPY.statusWaiting(n)); }
@@ -316,7 +317,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (t.length > 400) { view.ncb(LIVE_COPY.tooLong); return; } // UTF-16 units, as the server counts
     if (phase === 'awaiting') return respond(waiting, 'decline', t); // a typed change: decline quietly, then plan this
     if (phase !== 'idle') return;                                   // one request at a time
-    begin(); closeEnd(); phase = 'busy'; isWhatIf = false;
+    begin(); phase = 'busy'; isWhatIf = false;
     view.input(false); view.user(t); ui.status(LIVE_COPY.planning); ui.track(true);
     for (let retried = false; ; retried = true) {
       try { await start(() => api.request(sessionId, t)); return; } catch (e) {

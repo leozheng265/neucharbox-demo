@@ -213,10 +213,13 @@ button { font: inherit; color: inherit; }
 .card.live-plan.declined .btn.decline.chosen { opacity: 1; background: #FDECE8; color: #B5412A; border-color: #F3C4B8; }
 .card.end.live .left { margin: 0 0 10px; font-size: 13.5px; }
 .card.end.live .btn.reset { background: #fff; }
-/* An end card taller than the chat log is shown from its top (chat.js). With the live button it needs one more line of
-   buttons, which a small phone (360 x 640) can't fit under the story: the buttons then stay in view at the foot of the
-   log, over the end of the story, until the visitor scrolls on. Where the card fits, nothing moves. */
-.card.end:has(.live-go) .row, .card.end.live .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
+/* Phones: an end card taller than the chat log is shown from its top (chat.js). With the live button it needs one more
+   line of buttons, which a small phone (360 x 640) can't fit under the story: the buttons then stay in view at the foot
+   of the log, over the end of the story, until the visitor scrolls on. Where the card fits, nothing moves. (Desktop's
+   log is tall enough, and its history never gets a row of buttons riding over its own text.) */
+@media (max-width: 959px) {
+  .card.end:has(.live-go) .row, .card.end.live .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
+}
 .card.access .intro { margin-bottom: 6px; }
 .card.access .anote { margin: 0 0 8px; color: var(--ink-2); font-size: 13.5px; }
 .card.access form.code { display: flex; gap: 8px; margin: 6px 0 8px; }
