@@ -104,8 +104,8 @@ button { font: inherit; color: inherit; }
 .ent.bad .bar > i, .ent.bad .sw.on { background: var(--red); }
 .ent .badge { display: none; align-self: flex-start; margin-left: auto; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
 .ent.marked-just .badge, .ent.marked-busy .badge { display: inline-block; }
-.ent.marked-just .badge { background: #E7F7F0; color: #1E8F55; }
-.ent.marked-busy .badge { background: #DCEFFF; color: #1E7FD8; }
+.ent.marked-just .badge { background: #E7F7F0; color: #17744A; }
+.ent.marked-busy .badge { background: #DCEFFF; color: #1667B3; }
 .ent.marked-just { border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.22); }
 .ent.marked-busy { border-color: #93c5fd; }
 .ent.bad .badge { display: none; }
