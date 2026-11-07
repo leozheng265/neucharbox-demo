@@ -88,6 +88,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   let rid = null, lastRid = null, holding = null, card = null, replanCard = null, replanSteps = [], checklist = null;
   let waiting = null, answer = null, pendingText = null, reading = null, planningOn = false, ranStep = false, exitOnDone = false;
   let planned = false;        // a checklist exists (an approved plan, or a what-if's): only then is there something to replay
+  let ended = null;           // the end card on screen: closed by the next request, a lost code or a fresh room
   let remainingToday = null;
   const busy = new Set();     // the ids live.js marked 'busy': done clears only these, so a JUST SET runs its full 2 s
   const devices = devicesOf(scene), n = devices.length;
@@ -232,7 +233,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (out === 'ok' || out === 'failed' || out === 'limit') {
       const replayable = planned && out !== 'limit'; // a what-if replays the steps that ran: none ran, nothing to replay
       if (replayable && !isWhatIf) lastRid = rid;     // a what-if never becomes the latest finished request (contract)
-      view.endCard({ remainingToday, whatIfLabel: isWhatIf ? LIVE_COPY.anotherFailure : LIVE_COPY.whatIf, whatIf: replayable }, endActions());
+      ended = view.endCard({ remainingToday, whatIfLabel: isWhatIf ? LIVE_COPY.anotherFailure : LIVE_COPY.whatIf, whatIf: replayable }, endActions()) ?? null;
       beat('end'); ui.status(LIVE_COPY.statusDone(remainingToday));
     } else { beat('ask'); ui.status(LIVE_COPY.statusWaiting(n)); }
     if (remainingToday === 0 && !isWhatIf) view.ncb(LIVE_COPY.lastOne); // a what-if spends no request
@@ -306,6 +307,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     return true;
   }
   const backToIdle = () => { phase = 'idle'; ui.track(false); view.input(true); ui.status(LIVE_COPY.statusWaiting(n)); };
+  const closeEnd = () => { ended?.close?.(); ended = null; };
   const limited = (line, off = false) => { if (off) available = false; view.ncb(line); exit(); };
 
   async function submit(text) {
@@ -314,7 +316,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (t.length > 400) { view.ncb(LIVE_COPY.tooLong); return; } // UTF-16 units, as the server counts
     if (phase === 'awaiting') return respond(waiting, 'decline', t); // a typed change: decline quietly, then plan this
     if (phase !== 'idle') return;                                   // one request at a time
-    begin(); phase = 'busy'; isWhatIf = false;
+    begin(); closeEnd(); phase = 'busy'; isWhatIf = false;
     view.input(false); view.user(t); ui.status(LIVE_COPY.planning); ui.track(true);
     for (let retried = false; ; retried = true) {
       try { await start(() => api.request(sessionId, t)); return; } catch (e) {
@@ -394,6 +396,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     for (const id of [...busy]) mark(id, null);
     if (planningOn) { planningOn = false; view.planning(false); }
     waiting?.close(); waiting = null;
+    checklist?.done(); closeEnd(); // no step left running, no end card left to press
     ui.track(false);
   }
   // Forget the request on screen (a new session, a lost code, exit, close): late events and answers find nothing.
@@ -413,6 +416,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (gone()) return false;
     if (planningOn) view.planning(false);
     waiting?.close(); // a card left from the expired session takes no answers (its marks go with applyRoom below)
+    checklist?.done(); closeEnd(); // and its run is over: no step left running, no end card left to press
     forget();
     sessionId = s.sessionId;
     suggestions = Array.isArray(s.suggestions) ? s.suggestions.filter((t) => typeof t === 'string') : [];
