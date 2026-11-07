@@ -27,7 +27,7 @@ export const WHATIF_HOW = `I can show you that once a request has run. Pick one 
 export const quoted = (p) => `"${p.chip.replace(/[.!?]+$/, '')}"`; // the chip already ends in a full stop; the sentence adds its own
 
 export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: playerOpts = {} }) {
-  const u = { alive: () => true, beats() {}, status() {}, ping() {}, unping() {}, focus() {}, pop() {}, track() {}, rewind() {}, show() {}, resetRoom() {}, clearMarkers() {}, error: (e) => console.error(e), ...ui };
+  const u = { alive: () => true, beats() {}, status() {}, ping() {}, unping() {}, focus() {}, pop() {}, track() {}, rewind() {}, show() {}, resetRoom() {}, clearMarkers() {}, endExtras: () => ({}), error: (e) => console.error(e), ...ui };
   const ids = scene.deviceOrder || Object.keys(scene.devices).filter((d) => d !== 'hub' && d !== 'env');
   let phase = 'setup';
   let running = null;
@@ -73,7 +73,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
   // what-if "Try another failure" to its card: both open the picker of failures for it. (A request with no failPoint,
   // which the tests don't allow, would get no what-if button rather than a picker with nothing to replay.)
   const endOptions = () => {
-    const o = { onMore: () => another() }, p = running?.prompt;
+    const o = { onMore: () => another(), ...u.endExtras(running) }, p = running?.prompt;
     if (p && hasWhatIf(p)) { o.onWhatIf = () => openFailures(p); o.whatIfLabel = running.whatIf ? ANOTHER_FAILURE : WHATIF_LABEL; }
     return o;
   };
@@ -180,6 +180,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
     quiet: () => quietNow,
     skipTo: (beat) => player.skipTo(beat),
     cancel: () => player.cancel(),
+    get baseline() { return baseline; },
     get phase() { return phase; }, get running() { return running; }, get status() { return statusText; },
   };
 }

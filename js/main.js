@@ -6,6 +6,9 @@ import { icon } from './engine/icons.js';
 import { createFlow, BEATS, quoted, WHATIF_HOW } from './engine/flow.js';
 import { SCENES } from './scenes/index.js';
 import { SOCIAL, socialLinks } from './engine/social.js';
+import { createLive, LIVE_COPY } from './engine/live.js';
+import { createLiveView } from './engine/livechat.js';
+import { liveApiBase } from './live-config.js';
 
 // Picker thumbnails: the hub and a few of the devices each room connects (line icons, same as the dashboard tiles).
 const THUMB_ICONS = { home: ['lamp', 'blinds', 'moisture', 'camera', 'thermostat'], lab: ['laser', 'mirror', 'stage', 'meter', 'beamcam'], elder: ['bed', 'door', 'motion', 'kettle', 'bulb'], warehouse: ['conveyor', 'scanner', 'gate', 'cart', 'dock'], creator: ['keylight', 'camera', 'mic', 'capture', 'sign'] };
@@ -55,7 +58,7 @@ async function mountScene(meta, gen) {
   const store = createStore(initial);
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots); no watchdog
   const R = createRenderer(document.getElementById('room'), { camera: scene.camera, ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let flow = null;
+  let flow = null, live = null;
   try {
   const M = partsMod.materials(); const P = partsMod.parts(R.scene, M);
   const sv = Number(new URLSearchParams(location.search).get('speed')); const speed = Number.isFinite(sv) && sv > 0 ? Math.min(sv, 6) : 1; // ?speed= review mode (≤ 6), also for room-side motion
@@ -90,6 +93,7 @@ async function mountScene(meta, gen) {
     vague: () => "I'm not sure which request that is, and I won't guess. This demo runs a few scripted requests in this room: pick one below, or say it another way.",
   };
   const chat = createChat(document.getElementById('chat'), { onPromptText: (text) => {
+    if (live?.active) { live.submit(text); return; }
     if (flow.phase !== 'chips') return;
     const r = interpret(text, scene.prompts);
     // "What if the hall light stops working?": a failure is picked from a request's end card, so say how, with the
@@ -112,20 +116,24 @@ async function mountScene(meta, gen) {
     chat.chips([...named, ...flow.remaining().filter((p) => !named.includes(p))], (p) => flow.runPrompt(p, p.chip, false));
   } });
 
+  // The status dot turns red while the line reports a fault; the next status write clears it.
+  const setStatus = (text, bad) => { statusEl.textContent = text; statusEl.classList.toggle('bad', !!bad); };
+  const setBeats = ({ current, recoverHidden, skippable }) => {
+    const idx = BEATS.findIndex((b) => b[0] === current);
+    beatBtns.forEach((b, i) => {
+      if (b.dataset.beat === 'recover') b.hidden = recoverHidden;
+      b.classList.toggle('done', i < idx); b.classList.toggle('now', i === idx);
+      if (i === idx) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+      b.disabled = !skippable.includes(b.dataset.beat);
+    });
+  };
   // The request flow (js/engine/flow.js): phases, the beat bar's state, end cards, what-ifs. The page side of it here.
   flow = createFlow({ scene, store, chat, speed, ui: {
     alive: () => gen === mountGen,
-    // The status dot turns red while the line reports a fault; the next status write clears it.
-    status: (text, bad) => { statusEl.textContent = text; statusEl.classList.toggle('bad', !!bad); },
-    beats({ current, recoverHidden, skippable }) {
-      const idx = BEATS.findIndex((b) => b[0] === current);
-      beatBtns.forEach((b, i) => {
-        if (b.dataset.beat === 'recover') b.hidden = recoverHidden;
-        b.classList.toggle('done', i < idx); b.classList.toggle('now', i === idx);
-        if (i === idx) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
-        b.disabled = !skippable.includes(b.dataset.beat);
-      });
-    },
+    status: setStatus,
+    beats: setBeats,
+    // The guided end cards gain the live button while live mode is available (a /health that said yes).
+    endExtras: () => (live?.available ? { onLive: () => { chat.closeEnds(); live.open(); }, liveLabel: LIVE_COPY.button } : {}),
     // Discovery and fault effects: the pulse on a faulted device is red, like its ring, and its fault label goes as soon
     // as it is back online (a visitor confirming a stopped cart).
     ping: (id, text, opts) => R.ping(id, text, opts),
@@ -138,15 +146,22 @@ async function mountScene(meta, gen) {
     resetRoom: () => { room.reset?.(); R.clearMarkers(); }, // markers (rings, fault labels) are not state: drop them too
     clearMarkers: () => R.clearMarkers(),
   } });
+  const base = liveApiBase();
+  live = base ? createLive({ scene, store, panel, base, view: createLiveView({ chat, scene }), ui: {
+    alive: () => gen === mountGen, status: setStatus, beats: setBeats, track: (on) => panel.track(on), rewind: () => panel.rewind(),
+    resetRoom: () => { room.reset?.(); R.clearMarkers(); }, baseline: () => flow.baseline,
+    offerGuided: (h) => { chat.closeEnds(); chat.closeFailures(); if (flow.baseline) { store.restore(flow.baseline); room.reset?.(); R.clearMarkers(); } flow.offerChips(h); },
+  } }) : null;
   beatBtns.forEach((b) => (b.onclick = () => flow.skipTo(b.dataset.beat)));
 
-  current = { scene, teardown() { flow?.cancel(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
+  current = { scene, teardown() { live?.close(); flow?.cancel(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   // QA hooks (visual harness): the host's phase, the quiet-replay flag and the recorded choices.
-  window.__ncb = { store, panel, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
+  window.__ncb = { live, store, panel, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
+  live?.probe(); // fired and forgotten: it never rejects, and the scripted setup must not wait for /health
   await flow.start();
   } catch (e) {
     if (gen === mountGen) current = null;
-    flow?.cancel(); R.dispose();
+    live?.close(); flow?.cancel(); R.dispose();
     throw e;
   }
 }

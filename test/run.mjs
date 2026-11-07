@@ -710,7 +710,7 @@ async function engineChecks(fixture) {
   // 16e. the page's request flow (js/engine/flow.js), without a DOM
   {
     const problems = [];
-    const mk = (scene = fixture, { autoPlan = () => ({}), autoAsk = () => 0, onEnd = null, alive = () => true } = {}) => {
+    const mk = (scene = fixture, { autoPlan = () => ({}), autoAsk = () => 0, onEnd = null, alive = () => true, endExtras = null } = {}) => {
       const log = [], ev = [], ends = [], pickers = [], chips = [], beats = [], noise = [];
       const chat = { ...stubChat(log), closeEnds: () => ev.push('closeEnds'), closeFailures: () => ev.push('closeFailures'),
         end: (spec, opts = {}) => { log.push(['end', spec.headline, spec.body]); ends.push({ spec, opts }); onEnd?.(opts); },
@@ -722,7 +722,7 @@ async function engineChecks(fixture) {
         ping: (id, text) => { ev.push(`ping:${id}:${text}`); if (t.flow.quiet()) noise.push(`ping ${text}`); },
         pop: (id) => { ev.push(`pop:${id}`); if (t.flow.quiet()) noise.push(`pop ${id}`); },
         focus: (id) => { if (t.flow.quiet()) noise.push(`focus ${id}`); }, unping: (id, k) => ev.push(`unping:${id}:${k}`),
-        rewind: () => ev.push('rewind'), show: (ids) => ev.push(`show:${ids.join(',')}`),
+        rewind: () => ev.push('rewind'), show: (ids) => ev.push(`show:${ids.join(',')}`), ...(endExtras ? { endExtras } : {}),
       } });
       return t;
     };
@@ -795,6 +795,24 @@ async function engineChecks(fixture) {
       const orig = g.flow.player.play; g.flow.player.play = (steps, o) => { if (o?.quiet) here = false; return orig(steps, o); }; // the visitor leaves as the replay starts
       await g.pickers[0].onPick('lamp');
       if (g.ends.length !== 1 || g.flow.quiet() || g.beats.some((x) => x.current === 'recover')) problems.push(`leaving mid-what-if: ${g.ends.length} end cards, quiet ${g.flow.quiet()}`);
+    }
+    // 16g. the two inert hooks live mode needs: ui.endExtras (extra end-card options) and flow.baseline
+    {
+      const problems16g = [];
+      const extras = () => ({ onLive: () => {}, liveLabel: 'x' });
+      const x = mk(fixture, { endExtras: extras }); await x.flow.start();
+      const snap = JSON.stringify(x.store.snapshot());
+      if (!x.flow.baseline || JSON.stringify(x.flow.baseline) !== snap) problems16g.push('flow.baseline is not the post-setup snapshot');
+      await x.chips[0].onPick(x.chips[0].list[0]);
+      const ok = x.ends[0]?.opts;
+      if (!ok || typeof ok.onLive !== 'function' || ok.liveLabel !== 'x') problems16g.push('the success card lacks onLive/liveLabel');
+      x.ends[0]?.opts.onWhatIf?.(); await x.pickers[0]?.onPick(Object.keys(fixture.devices).find((d) => d !== 'hub' && d !== 'env'));
+      const w = x.ends[x.ends.length - 1]?.opts;
+      if (x.ends.length < 2 || typeof w?.onLive !== 'function') problems16g.push('the what-if card lacks onLive');
+      const plain = mk(fixture); await plain.flow.start(); await plain.chips[0].onPick(plain.chips[0].list[0]);
+      const keys = Object.keys(plain.ends[0]?.opts || {}).sort().join(',');
+      if (keys !== 'onMore,onWhatIf,whatIfLabel') problems16g.push(`without endExtras the end-card keys are ${keys}`);
+      report('engine · flow: endExtras and baseline', problems16g);
     }
     report('engine · the page\'s request flow: phases, beat bar, end-card buttons, picker, "Not this", quiet, faults', problems);
   }
