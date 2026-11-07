@@ -3,17 +3,20 @@
 Date: 2026-09-10. Status: approved by Leo (build without further approval).
 Updated 2026-09-13: failures are opt-in. Every request runs clean by default; the
 visitor picks what fails from its end card (see "Visitor flow" and "What-ifs").
+Updated 2026-11-07: the crowdfunding campaign is over, so its call to action is
+gone. The header and every end card link NeuCharBox's YouTube, LinkedIn and X
+accounts instead (`js/engine/social.js`).
 
 ## Purpose
 
-An interactive, browser-based simulation that lets Kickstarter visitors go
+An interactive, browser-based simulation that lets visitors go
 through the NeuCharBox workflow themselves: plug in the hub, discover devices,
 tell it what they want (or give it exact instructions), approve a plan, watch it
 run in a 3D room and in a control panel at the same time, and then, if they
 choose, make any connected device fail and see how it handles that. Audience:
-Kickstarter visitors during the live campaign
-(ends ≈ 2026-10-01). Mobile-first, works cold from a link, ~3 minutes per scene,
-ends on a "Back on Kickstarter" CTA.
+people who find NeuCharBox through its videos and posts. Mobile-first, works
+cold from a link, ~3 minutes per scene, ends on a "Follow NeuCharBox" line
+(YouTube, LinkedIn, X).
 
 ## Decisions taken
 
@@ -40,7 +43,8 @@ ends on a "Back on Kickstarter" CTA.
    (Setup · Ask · Plan · Run · Done) lets the visitor skip ahead.
 5. **Done.** The request finishes as asked: nothing fails unless the visitor
    asks for it. A success end card: "What if something fails?", "Another
-   request here", "Try another scene", "Back on Kickstarter".
+   request here", "Try another scene", then "Follow NeuCharBox" (YouTube,
+   LinkedIn, X).
 6. **What if something fails? (opt-in).** A picker lists every connected device
    (icon and name; one the request doesn't use says "not in this request"), then,
    under "Or", the request's other what-ifs (a soft limit, a disturbance on the
@@ -87,7 +91,7 @@ ends on a "Back on Kickstarter" CTA.
   highlight with room picking.
 - `chat.js` — NCB messages, user messages, chips, plan/ask/re-plan cards, end
   card, the picker of failures, text input (on phones the bar only shows while
-  there is something to type, so an end card and its four buttons fit).
+  there is something to type, so an end card, its buttons and its follow line fit).
 - `player.js` — runs a scene's step list: `say`, `user`, `plan` (waits for
   approve), `ask`, `set`/`tween` with duration and label, `wait`, `fail`,
   `replan`, `failPoint`, `end`. Supports skip-to-beat, quiet replays with the
