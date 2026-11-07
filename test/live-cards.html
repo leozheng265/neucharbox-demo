@@ -207,14 +207,25 @@ try {
     await wait(40);
     v2.input(true); p2.enable(); await wait(40);
     ok(inLog($('.row', $$('.card.live-plan', box).at(-1))), 'input bar back: the waiting plan keeps its buttons in view');
+    // a plan taller than the log (code put it at its top: not the visitor scrolling): Approve still comes into view
+    {
+      v2.input(false);
+      const pT = v2.planCard({ kind: 'plan', steps }, { onApprove: noop, onDecline: noop });
+      await wait(60);
+      v2.input(true); pT.enable(); await wait(60);
+      ok(inLog($('.approve', $$('.card.live-plan', box).at(-1))), 'tall plan, input bar back: Approve is within the log');
+      pT.close();
+    }
     // a visitor who scrolled up on purpose keeps their place when a plan waits for Approve
     v2.input(false);
     const p3 = v2.planCard({ kind: 'plan', steps }, { onApprove: noop, onDecline: noop });
     await wait(40);
-    log2.scrollTop = 0; await wait(40);
+    log2.dispatchEvent(new Event('scroll')); // lets the log's listener see where it is now (a hidden tab sends no scroll events)
+    log2.style.scrollBehavior = 'auto'; // an instant scroll: a smooth one doesn't run in a hidden tab
+    log2.dispatchEvent(new WheelEvent('wheel', { deltaY: -200 })); log2.scrollTop = 0; log2.dispatchEvent(new Event('scroll')); await wait(60); // as the visitor would: intent, then the scroll (the event by hand: a hidden tab sends none)
     const keptTop = log2.scrollTop;
     v2.input(true); p3.enable(); await wait(60);
-    ok(log2.scrollHeight > log2.clientHeight && log2.scrollTop === keptTop, 'enable() after the visitor scrolled up leaves scrollTop unchanged');
+    ok(log2.scrollHeight > log2.clientHeight && log2.scrollTop === keptTop, 'enable() after the visitor scrolled up leaves scrollTop unchanged ');
     p3.close();
     v2.input(false);
     c2.end({ headline: 'Watered by your rule, checked by the soil.', body: 'NeuCharBox watered the way you approved, kept the afternoon sun off the pot, and counted a watering only when the sensor saw the water arrive.' }, { onWhatIf() {}, whatIfLabel: 'What if something fails?', onMore() {}, onLive() {}, liveLabel: LIVE_COPY.button });

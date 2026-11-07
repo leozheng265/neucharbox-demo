@@ -41,13 +41,20 @@ export function createChat(root, { onPromptText } = {}) {
   // `pinned` it holds while a smooth scroll is still on its way down. A log that only got shorter (it clamps, still at
   // its end) doesn't count as scrolling up.
   let toEnd = true, lastTop = 0;
+  // upByVisitor: the visitor scrolled the log up (a wheel, touch, key or scrollbar press came just before the scroll),
+  // as opposed to this code placing a tall card at its top. Reset when code sends the log to its end or adds a card,
+  // and when the visitor comes back to the end.
+  let upByVisitor = false, intent = false, intentTimer = 0;
+  const wantScroll = () => { intent = true; clearTimeout(intentTimer); intentTimer = setTimeout(() => { intent = false; }, 600); };
+  ['wheel', 'touchstart', 'touchmove', 'mousedown', 'keydown'].forEach((t) => log.addEventListener(t, wantScroll, { passive: true }));
   log.addEventListener('scroll', () => {
     const fromEnd = log.scrollHeight - log.scrollTop - log.clientHeight;
     pinned = fromEnd < 48;
-    if (log.scrollTop < lastTop && fromEnd > 2) toEnd = false;
+    if (log.scrollTop < lastTop && fromEnd > 2) { toEnd = false; if (intent) upByVisitor = true; }
+    if (fromEnd < 8) upByVisitor = false;
     lastTop = log.scrollTop;
   }, { passive: true });
-  const scrollDown = (force = false) => requestAnimationFrame(() => { if (force || pinned) { log.scrollTop = log.scrollHeight; pinned = true; toEnd = true; } });
+  const scrollDown = (force = false) => requestAnimationFrame(() => { if (force || pinned) { log.scrollTop = log.scrollHeight; pinned = true; toEnd = true; upByVisitor = false; } });
   // A card taller than the log is shown from its top, so a plan is read from item 1 rather than from its button; a
   // list of chips that doesn't fit below the message that introduces it is shown from that message. A re-plan card
   // follows like a message: what it ends with, "Needs you", stays in view on a phone, and its first lines are a scroll up.
@@ -56,8 +63,8 @@ export function createChat(root, { onPromptText } = {}) {
     if (typingEl) { typingEl.remove(); typingEl = null; }
     log.appendChild(node);
     requestAnimationFrame(() => {
-      if (from && from.isConnected && topIn(node) + node.offsetHeight - topIn(from) > log.clientHeight - 16) { log.scrollTop = topIn(from) - 8; pinned = false; toEnd = false; }
-      else { log.scrollTop = log.scrollHeight; pinned = true; toEnd = true; }
+      if (from && from.isConnected && topIn(node) + node.offsetHeight - topIn(from) > log.clientHeight - 16) { log.scrollTop = topIn(from) - 8; pinned = false; toEnd = false; upByVisitor = false; }
+      else { log.scrollTop = log.scrollHeight; pinned = true; toEnd = true; upByVisitor = false; }
     });
     return node;
   };
@@ -82,8 +89,8 @@ export function createChat(root, { onPromptText } = {}) {
   const PLACEHOLDER = 'Or type what you want…';
   return {
     enableInput(on) { setInput(on); },
-    // Read-only: the log is at its end (or on its way there) and the visitor hasn't scrolled up since: the keepEnd rule.
-    atEnd() { return pinned || toEnd; },
+    // Read-only: the visitor scrolled the log up on purpose (and hasn't come back to its end or added a card since).
+    userScrolledUp() { return upByVisitor; },
     // Live mode hooks (js/engine/livechat.js): the log's own helpers, so live cards scroll and escape like the rest.
     mount(node, opts) { return push(node, opts); },
     esc,
