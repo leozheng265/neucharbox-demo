@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Live cards QA</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+  /* every card state, one after another; the page scrolls, not the log */
+  body { height: auto; overflow-y: auto; }
+  .qa { max-width: 440px; margin: 0 auto; }
+  .qa .chat { height: auto; }
+  .qa .chat-log { overflow: visible; flex: none; }
+  #qaResult { font: 12px/1.4 monospace; padding: 8px 14px; background: #fff; border-bottom: 1px solid var(--line); }
+  #qaResult.bad { color: var(--red); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="qaResult">running…</div>
+<div class="qa"><div class="chat" id="chat"></div></div>
+<script type="module">
+import { createChat } from '../js/engine/chat.js';
+import { createLiveView } from '../js/engine/livechat.js';
+import { LIVE_COPY } from '../js/engine/live.js';
+import home from '../js/scenes/home.js';
+
+const problems = [];
+const ok = (cond, what) => { if (!cond) problems.push(what); };
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const hr = (label) => { const d = document.createElement('div'); d.textContent = label; d.style.cssText = 'font:11px monospace;color:#8AA3A0;align-self:stretch'; $('#chatLog').appendChild(d); };
+
+try {
+  const chat = createChat($('#chat'), { onPromptText: () => {} });
+  const view = createLiveView({ chat, scene: home });
+  const n = home.deviceOrder ? home.deviceOrder.length : Object.keys(home.devices).length - 2;
+
+  hr('1 guided end card');
+  chat.end({ headline: 'Done', body: 'The guided request ran.' }, { onWhatIf() {}, whatIfLabel: 'What if something fails?', onLive() { window.__liveCalled = true; }, liveLabel: LIVE_COPY.button });
+  const go = $('.card.end .live-go');
+  ok(go && go.textContent === LIVE_COPY.button, 'live-go label');
+  ok($('.card.end .row').firstElementChild === go, 'live-go first in the row');
+  go.click(); ok(go.disabled && window.__liveCalled, 'live-go disables and calls onLive');
+
+  hr('2 access: code (with a note), offline');
+  const acc = view.access({ mode: 'code', note: LIVE_COPY.savedCodeGone }, { onCode: async (c) => (c === 'GOOD' ? null : LIVE_COPY.badCode), onApply: async () => LIVE_COPY.applied, onBack() {} });
+  const card = $('.card.access:not(.offline)');
+  ok($('.intro', card).textContent === LIVE_COPY.accessIntro, 'access intro');
+  ok($('.anote', card).textContent === LIVE_COPY.savedCodeGone, 'access note');
+  ok($('form.code input[name=code]', card) && $('form.code button.go', card), 'code form');
+  ok($('form.apply', card).hidden, 'apply form hidden at first');
+  $('.apply-open', card).click();
+  ok(!$('form.apply', card).hidden, 'Apply for access reveals the form');
+  ok($('form.apply [name=interest]', card).value === 'home', 'interest defaults to home');
+  const hp = $('form.apply input[name=website]', card);
+  ok(hp.tabIndex === -1 && hp.closest('[aria-hidden=true]') && getComputedStyle(hp.closest('.hp')).left === '-9999px', 'honeypot off-screen');
+  ok($('form.apply .use', card).textContent === LIVE_COPY.applyEmailUse, 'email sentence');
+  ok($('button.back', card).textContent === LIVE_COPY.back, 'back button');
+  for (const el of $$('input, select, textarea', card)) ok(parseFloat(getComputedStyle(el).fontSize) >= 16, `16px: ${el.name}`);
+  card.querySelector('form.code input').value = 'nope'; card.querySelector('form.code').requestSubmit();
+  await wait(30);
+  ok($('.err', card).textContent === LIVE_COPY.badCode && !$('.err', card).hidden, 'bad code shows in .err');
+  view.access({ mode: 'offline' }, { onCode: async () => null, onApply: async () => null, onBack() {} });
+  const off = $('.card.access.offline');
+  ok($('.intro', off).textContent === LIVE_COPY.offline && $$('.social-link', off).length === 3 && $('.back', off), 'offline card');
+
+  hr('3 live intro, chips, input in live mode');
+  view.live(true);
+  view.ncb(LIVE_COPY.intro(n));
+  view.chips(['Movie night, but keep an eye on the plant', 'Away for the weekend'], () => {}, LIVE_COPY.tryHeading);
+  view.input(false);
+  const form = $('#chatForm'), input = $('#chatText');
+  ok(form.classList.contains('live') && input.maxLength === 400 && input.placeholder === LIVE_COPY.placeholder(n), 'live input: badge class, cap, placeholder');
+  ok(getComputedStyle(form, '::before').content.includes(innerWidth <= 520 ? 'LIVE' : 'LIVE AI'), 'badge text');
+  ok(input.disabled, 'input off while badge on');
+
+  hr('4 planning with a reading');
+  view.planning(true); view.reading('the soil sensor');
+  ok($('.msg.planning .ptxt').textContent === LIVE_COPY.reading('the soil sensor'), 'planning reading');
+
+  hr('5 plan card, waiting');
+  const steps = [{ id: 's1', text: 'Dim the floor lamp to 20%', devices: ['lamp'] }, { id: 's2', text: 'Close the blinds fully', devices: ['blinds'] }, { id: 's3', text: 'Read the soil sensor; water only if under 30%', devices: ['soil'] }];
+  const noop = () => {};
+  const waiting = view.planCard({ kind: 'plan', steps }, { onApprove: noop, onDecline: noop });
+  const wnode = $$('.card.live-plan').at(-1);
+  ok($('.intro', wnode).textContent === LIVE_COPY.planIntro, 'plan intro');
+  ok($('.approve', wnode).disabled && $('.decline', wnode).disabled, 'buttons disabled before enable()');
+  ok($$('li.lstep', wnode).length === 3, 'plan steps');
+  waiting.enable(); ok(!$('.approve', wnode).disabled && !$('.decline', wnode).disabled, 'enable()');
+  waiting.busy(); ok($('.approve', wnode).disabled, 'busy()');
+
+  hr('6 the checklist mid-run');
+  const cl = (() => {
+    const c = view.planCard({ kind: 'plan', steps }, { onApprove: noop, onDecline: noop });
+    return { c, list: c.toChecklist({}) };
+  })();
+  const run = cl.list, rnode = $$('.card.live-plan').at(-1);
+  ok($('.intro .ttl', rnode).textContent === LIVE_COPY.checklistTitle && $('.intro .live-badge', rnode).textContent === 'LIVE AI', 'checklist title + badge');
+  ok(!$('.row', rnode), 'buttons gone');
+  run.step('s1', 'running'); run.call({ callId: 'c1', step: 's1', label: 'Floor lamp → 20%' });
+  run.result({ callId: 'c1', outcome: 'confirmed', text: 'confirmed', ok: true }); run.step('s1', 'done');
+  run.step('s2', 'running'); run.call({ callId: 'c2', step: 's2', label: 'Blinds → closed' });
+  ok($('.lstep[data-id=s1]', rnode).dataset.status === 'done' && $('.lstep[data-id=s1] .glyph', rnode).textContent === '✓', 'done step');
+  ok($('.lstep[data-id=s2] .glyph', rnode).textContent === '●', 'running step');
+  ok($('.lstep[data-id=s1] .call', rnode).textContent === 'Floor lamp → 20% · confirmed', 'result pill');
+  ok($('.lstep[data-id=s2] .call', rnode).textContent === 'Blinds → closed · …', 'pending pill');
+  ok($('.lstep[data-id=s3] .glyph', rnode).textContent === '○', 'not started');
+
+  hr('7 re-plan, merged, declined');
+  const rp = view.planCard({ kind: 'replan', steps: [{ id: 's3', text: 'Leave the pump off if the soil is over 30%', devices: ['pump'] }, { id: 's4', text: 'Tell you what the soil reads', devices: ['soil'] }], reason: 'the soil sensor is not answering.' }, { onApprove: noop, onDecline: noop });
+  const rpnode = $$('.card.live-plan.replan').at(-1);
+  ok($('.intro', rpnode).textContent === LIVE_COPY.replanIntro('the soil sensor is not answering.'), 'replan intro');
+  rp.enable(); rp.close();
+  run.mergeSteps([{ id: 's3', text: 'Leave the pump off if the soil is over 30%', devices: ['pump'] }, { id: 's4', text: 'Tell you what the soil reads', devices: ['soil'] }]);
+  ok($('.lstep[data-id=s3] .txt', rnode).textContent.startsWith('Leave the pump') && $('.lstep[data-id=s3] .glyph', rnode).textContent === '○', 'mergeSteps replaces text in place');
+  ok($('.lstep[data-id=s1] .call', rnode) && $$('.lstep', rnode).length === 4 && $('.lstep[data-id=s4]', rnode).dataset.status === 'pending', 'mergeSteps keeps pills and appends');
+  const rp2 = view.planCard({ kind: 'replan', steps: [{ id: 's5', text: 'Water the plant for 10 s', devices: ['pump'] }], reason: 'it is dry' }, { onApprove: noop, onDecline: noop });
+  rp2.enable(); rp2.declined();
+  const rp2node = $$('.card.live-plan.replan').at(-1);
+  ok(rp2node.classList.contains('declined') && $('.decline', rp2node).classList.contains('chosen') && $('.approve', rp2node).disabled && $('.decline', rp2node).disabled, 'declined()');
+
+  hr('8 weekend timeline, 8 rows');
+  const wk = view.checklist([{ id: 'w1', text: 'Floor lamp on at 18:00, off at 07:10', devices: ['lamp'] }, { id: 'w2', text: 'Arm the door camera', devices: ['camera'] }], { replay: false });
+  const wknode = $$('.card.live-plan').at(-1);
+  wk.step('w1', 'done'); wk.step('w2', 'running');
+  const rows = [['Fri 18:00', 'Floor lamp → 35%', true, 'action'], ['Fri 22:30', 'Floor lamp → off', true, 'action'], ['Sat 07:10', 'Floor lamp → off', true, 'action'], ['Sat 12:00', 'Blinds → 40% closed', true, 'action'], ['Sat 19:20', 'Sent you: someone at the door', true, 'notify'], ['Sat 21:00', 'Door camera: no answer', false, 'fault'], ['Sun 09:00', 'Blinds → open', false, 'action'], ['Sun 18:00', 'Floor lamp → 35%', true, 'action']];
+  for (const [at, text, okk, kind] of rows) wk.timeline({ at, text, ok: okk, kind });
+  const trows = $$('.trow', wknode);
+  ok(trows.length === 8, 'timeline rows');
+  ok(trows[0].textContent === 'Fri 18:00 · Floor lamp → 35% ✓' && trows[4].textContent === 'Sat 19:20 · 📩 Sent you: someone at the door' && trows[5].textContent === 'Sat 21:00 · Door camera: no answer' && trows[6].textContent.endsWith('✕'), 'timeline row text');
+  const tl = $('.ltimeline', wknode);
+  ok(parseFloat(getComputedStyle(tl).maxHeight) > 0 && getComputedStyle(tl).overflowY === 'auto', 'timeline capped and scrolls');
+  ok(tl.scrollTop === tl.scrollHeight - tl.clientHeight, 'timeline follows from the bottom');
+
+  hr('9 failed pill, stepless rows');
+  wk.call({ callId: 'f1', step: 'w2', label: 'Door camera → arm' }); wk.result({ callId: 'f1', outcome: 'failed', text: 'no answer', ok: false });
+  wk.call({ callId: 'l1', step: null, label: 'Water pump → off' }); wk.result({ callId: 'l1', outcome: 'made_safe', text: 'made safe', ok: true });
+  wk.call({ callId: 'l2', step: null, label: 'Soil sensor → reading' }); wk.result({ callId: 'l2', outcome: 'confirmed', text: '35%', ok: true });
+  ok($('.call.bad', wknode)?.textContent === 'Door camera → arm · no answer', 'failed pill');
+  const loose = $$('ul.lloose > li.call.loose', wknode);
+  ok(loose.length === 2 && loose[0].textContent === 'Water pump → off · made safe' && loose[1].textContent === 'Soil sensor → reading · 35%', 'stepless rows');
+  ok(!loose[0].closest('.lstep') && $('ol.lsteps', wknode).nextElementSibling === $('ul.lloose', wknode) && $('ul.lloose', wknode).nextElementSibling === tl, 'rows sit between steps and timeline');
+  wk.done(); ok(wknode.classList.contains('done'), 'done()');
+
+  hr('10 streaming, then summary');
+  view.sayDelta('I dimmed the lamp'); view.sayDelta(' and closed the blinds.');
+  ok($$('.live-say').length === 1 && $('.live-say').textContent === 'I dimmed the lamp and closed the blinds.', 'deltas build one bubble');
+  view.summary('All done: lamp at 20%, blinds closed. <b>not html</b>');
+  ok($$('.live-say').length === 1 && $('.live-say').textContent.startsWith('All done') && !$('.live-say b'), 'summary replaces, as text');
+
+  hr('11 live end card');
+  const pressed = [];
+  view.endCard({ remainingToday: 7, whatIfLabel: LIVE_COPY.whatIf, whatIf: true }, { onAnother: () => pressed.push('another'), onWhatIf: () => pressed.push('whatif'), onReset: () => pressed.push('reset') });
+  const end = $('.card.end.live');
+  ok($('.left', end).textContent === LIVE_COPY.left(7), 'left line');
+  ok($$('.btn', end).map((b) => b.textContent.trim()).join('|') === [LIVE_COPY.another, LIVE_COPY.whatIf, LIVE_COPY.reset, LIVE_COPY.otherScene].join('|'), 'end card buttons');
+  ok($('.follow', end) && $$('.follow .social-link', end).length === 3, 'follow line');
+  $('.reset', end).click();
+  ok(pressed.join() === 'reset' && $$('button', end).every((b) => b.disabled), 'one answer per card');
+
+  hr('12 failures picker');
+  view.failures([{ key: 'lamp', icon: 'lamp', name: 'Floor lamp' }, { key: 'pump', icon: 'pump', name: 'Water pump' }], () => {});
+  ok($$('.card.failures .pick').length === 2 && $('.card.failures .intro').textContent === LIVE_COPY.whatIfHeading, 'failures picker');
+
+  hr('lost');
+  view.lost(() => {});
+  ok($$('.msg.ncb').some((m) => m.textContent === LIVE_COPY.lost) && $$('.card.action button').some((b) => b.textContent === LIVE_COPY.reconnect), 'lost + reconnect');
+
+  // text, never HTML
+  view.ncb('<img src=x onerror="window.__xss=1">'); view.user('<i>me</i>');
+  const wk2 = view.checklist([{ id: 'x', text: '<u>step</u>', devices: [] }]); wk2.call({ callId: 'x1', step: 'x', label: '<b>pill</b>' }); wk2.timeline({ at: '<i>t</i>', text: '<s>row</s>', ok: true, kind: 'action' });
+  ok(!window.__xss && !$('.lstep u') && !$('.call b') && !$('.trow s') && !$('.msg.me i'), 'visitor/model text is never HTML');
+
+  // leaving live
+  view.live(false);
+  ok(!form.classList.contains('live') && !input.hasAttribute('maxlength') && input.placeholder === 'Or type what you want…', 'live(false) restores');
+  view.live(true);
+  ok(document.documentElement.scrollWidth <= innerWidth, `no horizontal page scroll (${document.documentElement.scrollWidth} > ${innerWidth})`);
+  view.planning(false); ok(!$('.msg.planning'), 'planning(false) removes the bubble');
+  view.planning(true); // leave one on screen for the eye
+  acc.close(); ok($('.card.access').classList.contains('done'), 'access close()');
+} catch (e) {
+  problems.push(`threw: ${e.stack || e}`);
+}
+const out = $('#qaResult');
+window.__qa = { problems };
+out.textContent = problems.length ? `FAIL (${problems.length})\n${problems.join('\n')}` : 'OK: all card checks passed';
+out.className = problems.length ? 'bad' : '';
+</script>
+</body>
+</html>
