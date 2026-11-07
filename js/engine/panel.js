@@ -2,6 +2,7 @@
 // Tone: offline (grey, dimmed) · idle (grey icon) · on (amber) · busy (blue) · bad (red).
 // On phones it is a horizontal strip, on desktop a two-column grid; either way only the panel scrolls, never the page.
 import { icon } from './icons.js';
+import { controlFor } from './controls.js';
 
 const looksActive = (s) => !!(s.on || s.running || s.armed || s.active || s.pressed || s.moving || s.state === 'moving' || (s.open > 0.5) || (s.brightness > 0.02) || s.shutter === 'open' || s.light === 'green' || s.scene === 'live' || s.scene === 'recording' || (s.muted === false));
 const now = () => performance.now();
@@ -18,7 +19,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     const d = scene.devices[id];
     const card = document.createElement('button');
     card.className = 'ent offline'; card.dataset.id = id; card.type = 'button';
-    card.innerHTML = `<span class="ico">${icon(d.icon)}</span><span class="txt"><b>${d.name}</b><span class="val"></span></span>`;
+    card.innerHTML = `<span class="ico">${icon(d.icon)}</span><span class="txt"><b>${d.name}</b><span class="val"></span><span class="ctl" hidden></span></span><span class="badge"></span>`;
     card.onclick = () => { select(id); onSelect && onSelect(id); };
     root.appendChild(card); cards[id] = card;
   }
@@ -121,6 +122,24 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     if (queue.length) timer = setTimeout(flush, DWELL);
   }
 
+  // The card's control row: a slim bar or a switch, shown in every status; hidden when the device has none.
+  function setControl(c, ctl) {
+    const el = c.querySelector('.ctl'); el.hidden = !ctl;
+    if (!ctl) { el.textContent = ''; el._kind = null; return; }
+    if (el._kind !== ctl.kind) { el._kind = ctl.kind; el.innerHTML = ctl.kind === 'bar' ? '<span class="bar"><i></i></span>' : '<span class="sw"></span>'; }
+    if (ctl.kind === 'bar') el.querySelector('i').style.width = `${Math.round(ctl.value * 100)}%`;
+    else el.querySelector('.sw').classList.toggle('on', ctl.on);
+  }
+  const markTimers = {};
+  // mark(id, 'just' | 'busy' | null): the JUST SET (clears itself after 2 s) and WORKING badges.
+  function mark(id, kind) {
+    const c = cards[id]; if (!c) return;
+    clearTimeout(markTimers[id]); delete markTimers[id];
+    c.classList.toggle('marked-just', kind === 'just'); c.classList.toggle('marked-busy', kind === 'busy');
+    c.querySelector('.badge').textContent = kind === 'just' ? 'JUST SET' : kind === 'busy' ? 'WORKING' : '';
+    if (kind === 'just') markTimers[id] = setTimeout(() => mark(id, null), 2000);
+  }
+
   function render(state) {
     for (const id of ids) {
       const s = state[id], d = scene.devices[id], c = cards[id];
@@ -128,6 +147,8 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
       // A fault shows the scenario's note for it (fail.faultText → <id>.faultNote, rewritten later if the scene says so;
       // every store write re-renders), else the device's default fault text.
       const v = s.status === 'offline' ? 'not connected' : s.status === 'fault' ? (s.faultNote || d.faultText || 'unavailable') : d.format(s, state);
+      const ctl = controlFor(d, s, state), ck = ctl ? `${ctl.kind}|${ctl.kind === 'switch' ? ctl.on : Math.round(ctl.value * 100) / 100}` : '';
+      if (c._ck !== ck) { c._ck = ck; setControl(c, ctl); } // a moving tween updates the bar; the change-tracking key below ignores it
       if (c._tone === tone && c._v === v) continue;
       if (c._tone !== tone) { c._tone = tone; for (const t of ['offline', 'bad', 'busy', 'on', 'idle']) c.classList.toggle(t, t === tone); }
       if (c._v !== v) { c._v = v; c.querySelector('.val').textContent = v; c.title = `${d.name}: ${v}`; } // title: the full value if the tile cuts it
@@ -155,5 +176,5 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   // dropped, so the strip ends on what failed. No pop: nothing new happened to them.
   function show(list) { queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; reveal(list); }
   store.subscribe(render); render(store.state);
-  return { select, render, pop, reveal, rewind, track, show };
+  return { select, render, pop, reveal, rewind, track, show, mark };
 }
