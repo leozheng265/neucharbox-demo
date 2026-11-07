@@ -24,7 +24,14 @@ export function createChat(root, { onPromptText } = {}) {
   // Input and send button are on or off together; switching off drops any half-typed text, so it can't be sent
   // (or reappear) later. If one of them had keyboard focus, focus stays in the conversation (not back to the page top).
   // The form carries .off while they are: on a phone the bar then gives its height to the conversation (css/app.css).
-  const setInput = (on) => { if (!on && form.contains(document.activeElement)) log.focus({ preventScroll: true }); input.disabled = !on; send.disabled = !on; form.classList.toggle('off', !on); if (!on) input.value = ''; };
+  // Coming back, it takes that height from the log: a log at its end stays at its end (a live plan that waits for
+  // Approve with the bar on keeps its buttons in view).
+  const setInput = (on) => {
+    if (!on && form.contains(document.activeElement)) log.focus({ preventScroll: true });
+    const keepEnd = on && form.classList.contains('off') && (pinned || log.scrollHeight - log.scrollTop - log.clientHeight < 2);
+    input.disabled = !on; send.disabled = !on; form.classList.toggle('off', !on); if (!on) input.value = '';
+    if (keepEnd) log.scrollTop = log.scrollHeight;
+  };
 
   const el = (html) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstElementChild; };
   // Follow new messages only while the visitor is at (or near) the bottom: reading a tall plan and pressing Edit must

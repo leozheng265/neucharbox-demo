@@ -13,6 +13,10 @@
   .qa .chat-log { overflow: visible; flex: none; }
   #qaResult { font: 12px/1.4 monospace; padding: 8px 14px; background: #fff; border-bottom: 1px solid var(--line); }
   #qaResult.bad { color: var(--red); white-space: pre-wrap; }
+  /* section 13: a log of a 360 x 640 phone's height, which scrolls itself, with the phone's input-bar rule at any width */
+  .qa .qa-short { height: 234px; margin-top: 12px; border: 1px dashed var(--line-2); }
+  .qa .qa-short .chat-log { overflow-y: auto; flex: 1; scroll-behavior: auto; }
+  .qa .qa-short .chat-input.off { display: none; }
 </style>
 </head>
 <body>
@@ -56,6 +60,8 @@ try {
   ok($('form.apply [name=interest]', card).value === 'home', 'interest defaults to home');
   const hp = $('form.apply input[name=website]', card);
   ok(hp.tabIndex === -1 && hp.closest('[aria-hidden=true]') && getComputedStyle(hp.closest('.hp')).left === '-9999px', 'honeypot off-screen');
+  card.style.animation = 'none'; // its entry animation's transform would place the honeypot by itself
+  ok(hp.closest('.hp').offsetParent === card, 'honeypot placed inside its card (not the page, which would then scroll)');
   ok($('form.apply .use', card).textContent === LIVE_COPY.applyEmailUse && $('form.apply [name=email]', card).getAttribute('aria-describedby') === $('form.apply .use', card).id, 'email sentence tied to the email field');
   ok($('button.back', card).textContent === LIVE_COPY.back, 'back button');
   for (const el of $$('input, select, textarea', card)) ok(parseFloat(getComputedStyle(el).fontSize) >= 16, `16px: ${el.name}`);
@@ -165,6 +171,10 @@ try {
   ok($('.follow', end) && $$('.follow .social-link', end).length === 3, 'follow line');
   $('.reset', end).click();
   ok(pressed.join() === 'reset' && $$('button', end).every((b) => b.disabled), 'one answer per card');
+  const end2h = view.endCard({ remainingToday: 6, whatIfLabel: LIVE_COPY.whatIf, whatIf: true }, { onAnother: noop, onWhatIf: noop, onReset: noop });
+  const end2 = $$('.card.end.live').at(-1);
+  ok(end2 !== end && $$('button', end2).every((b) => !b.disabled), 'a new end card is live');
+  end2h.close(); ok($$('button', end2).every((b) => b.disabled), 'close() leaves no button to press (the next request, a lost code, a fresh room)');
 
   hr('12 failures picker');
   view.failures([{ key: 'lamp', icon: 'lamp', name: 'Floor lamp' }, { key: 'pump', icon: 'pump', name: 'Water pump' }], () => {});
@@ -173,6 +183,38 @@ try {
   hr('lost');
   view.lost(() => {});
   ok($$('.msg.ncb').some((m) => m.textContent === LIVE_COPY.lost) && $$('.card.action button').some((b) => b.textContent === LIVE_COPY.reconnect), 'lost + reconnect');
+
+  // Positioned from the page instead of their card, the screen-reader words escape the chat log's scroll box and make
+  // the whole page scroll (the honeypot's check is in section 2).
+  rnode.style.animation = 'none'; // its entry animation's transform would place them by itself
+  ok($('.lstep .sr', rnode).offsetParent === rnode, '.sr is placed inside its card');
+
+  hr('13 a phone-sized log (234 px): the input bar coming back, end cards taller than the log');
+  {
+    // Frames on a timer, so the log's scrolling (requestAnimationFrame in chat.js) also runs in a hidden tab.
+    const raf = window.requestAnimationFrame; window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+    const box = document.createElement('div'); box.className = 'chat qa-short';
+    $('.qa').appendChild(box);
+    const c2 = createChat(box, { onPromptText: () => {} }), v2 = createLiveView({ chat: c2, scene: home });
+    const log2 = $('.chat-log', box), inLog = (el) => el.getBoundingClientRect().bottom <= log2.getBoundingClientRect().bottom + 0.5;
+    for (let i = 1; i <= 8; i++) c2.ncb(`Line ${i} of what came before.`);
+    // a plan arrives with the bar off; it comes back while the plan waits for Approve (a typed change re-plans)
+    const p2 = v2.planCard({ kind: 'plan', steps: steps.slice(0, 1) }, { onApprove: noop, onDecline: noop });
+    await wait(40);
+    v2.input(true); p2.enable(); await wait(40);
+    ok(inLog($('.row', $$('.card.live-plan', box).at(-1))), 'input bar back: the waiting plan keeps its buttons in view');
+    v2.input(false);
+    c2.end({ headline: 'Watered by your rule, checked by the soil.', body: 'NeuCharBox watered the way you approved, kept the afternoon sun off the pot, and counted a watering only when the sensor saw the water arrive.' }, { onWhatIf() {}, whatIfLabel: 'What if something fails?', onMore() {}, onLive() {}, liveLabel: LIVE_COPY.button });
+    await wait(40);
+    const e2 = $$('.card.end', box).at(-1);
+    ok(e2.offsetHeight > log2.clientHeight, 'the guided end card is taller than the log');
+    ok(e2.getBoundingClientRect().top >= log2.getBoundingClientRect().top && inLog($$('.row', e2).at(-1)), 'guided end card with the live button: shown from its top, its buttons in view');
+    v2.input(true);
+    v2.endCard({ remainingToday: 3, whatIfLabel: LIVE_COPY.anotherFailure, whatIf: true }, { onAnother: noop, onWhatIf: noop, onReset: noop });
+    await wait(40);
+    ok(inLog($('.row', $$('.card.end.live', box).at(-1))), 'live end card: its buttons in view');
+    window.requestAnimationFrame = raf;
+  }
 
   // text, never HTML
   view.ncb('<img src=x onerror="window.__xss=1">'); view.user('<i>me</i>');

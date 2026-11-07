@@ -49,7 +49,8 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       h.checklist = c; return c;
     };
     h.view = {
-      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'endCard', 'failures', 'lost', 'input', 'live'].map((m) => [m, rec('view').bind(null, m)])),
+      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'failures', 'lost', 'input', 'live'].map((m) => [m, rec('view').bind(null, m)])),
+      endCard(...a) { log.push(['view', 'endCard', ...a]); return { close: () => log.push(['end', 'close']) }; },
       planCard(spec, { onApprove, onDecline }) {
         log.push(['view', 'planCard', spec]);
         const card = { enabled: false, approve: onApprove, decline: onDecline };
@@ -807,6 +808,31 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     await waitFor(() => w.live.sessionId !== wsid && w.live.phase === 'idle'); ok(w.has('card', 'close', 'plan'), 'old card closed'); eq(w.card.enabled, false); w.live.close();
     // close() stays silent
     const v = await harness({ entered: true }); await toPlan(v, MOVIE); const n0 = v.log.length; v.live.close(); eq(v.log.length, n0, 'close is silent');
+  });
+
+  await check('abandoned run · a fresh session, a 401 or exit mid-run closes the checklist (no step left running)', async () => {
+    // Found in the browser check (Task 8): after a lost stream, Reconnect found the session gone and opened a fresh room,
+    // but the old checklist stayed open, its running step still pulsing as if the run went on.
+    const mid = async () => { const t = await harness({ mock: movieMock(...OPEN_RUN), entered: true }); await toPlan(t, MOVIE); await t.card.approve(); await waitFor(() => t.checklist?.steps.s1 === 'running'); return t; };
+    const closed = (t) => t.log.some((e) => e[0] === 'checklist' && e[1] === 'done');
+    const a = await mid(), asid = a.live.sessionId; a.mock.expire(asid);
+    await waitFor(() => a.live.sessionId !== asid && a.live.phase === 'idle'); ok(closed(a), 'fresh session: checklist closed'); a.live.close();
+    const b = await mid(), bsid = b.live.sessionId; b.mock.set({ code: 'NCB-OTHR-CODE' }); b.mock.drop(bsid);
+    await waitFor(() => accessCount(b) === 2); ok(closed(b), '401: checklist closed'); b.live.close();
+    const c = await mid(); c.live.exit(); ok(closed(c), 'exit: checklist closed');
+    const d = await mid(), n0 = d.log.length; d.live.close(); eq(d.log.length, n0, 'close() stays silent');
+  });
+
+  await check('end card · closed by the next request, a 401 or a fresh room (no button left that does nothing)', async () => {
+    // Found in the browser check (Task 8): after a 401 the access panel came back under a live end card whose buttons
+    // still looked live but did nothing; the same after a fresh room (its what-if) or while the next request ran.
+    const closes = (t) => count(t, 'end', 'close');
+    const a = await harness({ entered: true }); await movie(a); eq(closes(a), 0, 'open after done');
+    await toPlan(a, MOVIE); eq(closes(a), 1, 'the next request closes it'); a.live.close();
+    const b = await harness({ entered: true }); await movie(b); b.mock.set({ code: 'NCB-OTHR-CODE' }); b.mock.drop(b.live.sessionId);
+    await waitFor(() => accessCount(b) === 2); eq(closes(b), 1, 'a 401 closes it'); b.live.close();
+    const c = await harness({ entered: true }); await movie(c); const csid = c.live.sessionId; c.mock.expire(csid);
+    await waitFor(() => c.live.sessionId !== csid && c.live.phase === 'idle'); eq(closes(c), 1, 'a fresh room closes it'); c.live.close();
   });
 
   await check('end card · done{failed} before any plan → no what-if; after a plan ran → what-if on that rid', async () => {
