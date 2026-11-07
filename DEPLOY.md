@@ -11,9 +11,9 @@ Node、无数据库、无环境变量、无外部请求（3D 库已内置在 `ve
 
 ## Requirements · 要求
 
-1. **Serve over HTTPS.** WebGL and the Kickstarter link both expect it.
+1. **Serve over HTTPS.** Browsers expect it for WebGL and for a link people share.
    必须使用 HTTPS。
-2. **Host outside mainland China.** Visitors are Kickstarter backers, mostly in
+2. **Host outside mainland China.** Visitors are mostly in
    North America and Europe; a mainland server is slow for them and needs an ICP
    filing. Good options: Alibaba Cloud OSS + CDN in Hong Kong or Singapore,
    Cloudflare Pages, Vercel, Netlify, GitHub Pages.

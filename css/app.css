@@ -22,7 +22,20 @@ button { font: inherit; color: inherit; }
 .btn.primary { background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); border-color: transparent; color: #12222A; }
 .btn.small { padding: 5px 10px; font-size: 13px; }
 .btn:disabled { opacity: .5; cursor: default; }
-.ks-short { display: none; }
+/* NeuCharBox's accounts (js/engine/social.js): icons in the header, named pills in an end card's "Follow NeuCharBox" line */
+.top .social { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.top .social-label { margin-right: 4px; font-size: 13px; color: var(--ink-3); }
+.top .social-link { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--ink-2); transition: background .15s, color .15s; }
+.top .social-link svg { width: 18px; height: 18px; }
+.top .social-link:hover { background: #EEF6F5; }
+.top .social-link.youtube:hover { color: #FF0033; } .top .social-link.linkedin:hover { color: #0A66C2; } .top .social-link.x:hover { color: #000; }
+.social-link:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 1px; }
+.card.end .follow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-2); }
+.card.end .follow > span { margin-right: 2px; }
+.card.end .follow .social-link { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 8px; border: 1px solid var(--line-2); border-radius: 999px; background: #fff; color: var(--ink); font-weight: 600; text-decoration: none; }
+.card.end .follow .social-link:hover { border-color: var(--accent-a); }
+.card.end .follow .social-link svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.card.end .follow .youtube svg { color: #FF0033; } .card.end .follow .linkedin svg { color: #0A66C2; } .card.end .follow .x svg { color: #000; }
 
 /* ---------- picker ---------- */
 .picker { max-width: 1100px; margin: 0 auto; padding: 28px 18px 60px; }
@@ -212,9 +225,10 @@ button { font: inherit; color: inherit; }
   .top .brand { display: none; }
   .top .btn.secondary { padding: 5px 9px; font-size: 12.5px; }
   .top .btn.primary { padding: 5px 10px; font-size: 12.5px; }
-  .top .ks-long { display: none; } .top .ks-short { display: inline; }
+  .top .social-label { display: none; }
+  .app:not(.picker-mode) .top .social { display: none; } /* room for the scene's name; every end card has the links */
   .top .scene-name::before { content: none; }
-  .top .spacer { display: none; } .top .spacer + .btn { margin-left: auto; } /* one gap less: "Home, away for a week" fits at 360 px */
+  .top .spacer { display: none; } .top .spacer + .btn, .top .spacer + .social { margin-left: auto; } /* one gap less: "Home, away for a week" fits at 360 px */
   .app.picker-mode .top .brand { display: block; }
   .app.picker-mode .top .scene-name::before { content: '/'; }
   .scene-card .thumb { aspect-ratio: 16/6; }
@@ -222,21 +236,25 @@ button { font: inherit; color: inherit; }
   .beats button { font-size: 10.5px; letter-spacing: .03em; }
   .beats button:not(:disabled):not(.now)::after { content: ''; }
   .beats button:not(:disabled):not(.now) { text-decoration: underline dotted; text-underline-offset: 3px; }
-  .card.end { padding: 11px 12px; } /* a little tighter on a phone, so the headline, the story and all four buttons fit */
+  .card.end { padding: 11px 12px; } /* a little tighter on a phone, so the headline, the story, the buttons and the follow line fit */
   .card.end h3 { font-size: 17px; line-height: 1.3; margin-bottom: 4px; }
   .card.end p { margin-bottom: 10px; }
   .card.end .row { gap: 6px; }
   .card.end .row .btn { padding: 7px 12px; }
+  .card.end .follow { margin-top: 10px; padding-top: 8px; }
+  .card.end .follow .long { display: none; } /* "Follow" and the three links on one line */
   .card.failures .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .card.failures .tiles.special { grid-template-columns: minmax(0, 1fr); }
   .pick { gap: 7px; padding: 6px 8px 6px 6px; }
   .pick .ico { width: 30px; height: 30px; } .pick .ico svg { width: 18px; height: 18px; }
 }
 
-/* the narrowest phones (360 px): smaller end-card type, so its last two buttons share a row */
+/* the narrowest phones (360 px): smaller end-card type, so its last two buttons share a row and the follow line stays one line */
 @media (max-width: 380px) {
   .card.end { padding: 10px 11px; }
   .card.end h3 { font-size: 16.5px; }
   .card.end p { font-size: 14px; line-height: 1.4; }
   .card.end .row .btn { font-size: 13px; padding: 7px 10px; }
+  .card.end .follow { gap: 5px; font-size: 12.5px; }
+  .card.end .follow .social-link { padding: 4px 8px 4px 7px; }
 }

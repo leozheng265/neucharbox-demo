@@ -2,6 +2,7 @@
 // Every interactive card owns its resolver. A beat skip (resolvePending) settles each open card with the
 // visitor's current choices, marks it done and disables its buttons, so a stale card can't answer a later one.
 import { icon } from './icons.js';
+import { socialLinks } from './social.js';
 
 export function createChat(root, { onPromptText } = {}) {
   root.innerHTML = `
@@ -139,7 +140,7 @@ export function createChat(root, { onPromptText } = {}) {
     // keyboard (Enter or Space), focus moves to that picker's first choice; a mouse or touch press leaves focus alone.
     end(spec, { onMore, onWhatIf, whatIfLabel } = {}) {
       setInput(false);
-      const node = push(el(`<div class="card end"><h3>${esc(spec.headline)}</h3><p>${esc(spec.body)}</p><div class="row">${onWhatIf ? `<button class="btn whatif" type="button">${icon('whatif')}<span>${esc(whatIfLabel || 'What if something fails?')}</span></button>` : ''}${onMore ? '<button class="btn more" type="button">Another request here</button>' : ''}<a class="btn" href="#">Try another scene</a><a class="btn primary" href="${spec.cta || 'https://www.kickstarter.com/projects/neucharbox/neucharbox-ai-operating-system-for-the-physical-world?ref=demo'}" target="_blank" rel="noopener">Back on Kickstarter</a></div></div>`));
+      const node = push(el(`<div class="card end"><h3>${esc(spec.headline)}</h3><p>${esc(spec.body)}</p><div class="row">${onWhatIf ? `<button class="btn whatif" type="button">${icon('whatif')}<span>${esc(whatIfLabel || 'What if something fails?')}</span></button>` : ''}${onMore ? '<button class="btn more" type="button">Another request here</button>' : ''}<a class="btn" href="#">Try another scene</a></div><div class="follow"><span>Follow<span class="long"> NeuCharBox</span></span>${socialLinks({ labels: true })}</div></div>`));
       if (onMore) { const b = node.querySelector('.more'); b.onclick = () => { b.disabled = true; onMore(); }; }
       if (onWhatIf) {
         const b = node.querySelector('.whatif');

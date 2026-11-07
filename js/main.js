@@ -5,8 +5,8 @@ import { interpret, asksWhatIfFails } from './engine/match.js';
 import { icon } from './engine/icons.js';
 import { createFlow, BEATS, quoted, WHATIF_HOW } from './engine/flow.js';
 import { SCENES } from './scenes/index.js';
+import { SOCIAL, socialLinks } from './engine/social.js';
 
-const KS = 'https://www.kickstarter.com/projects/neucharbox/neucharbox-ai-operating-system-for-the-physical-world?ref=demo';
 // Picker thumbnails: the hub and a few of the devices each room connects (line icons, same as the dashboard tiles).
 const THUMB_ICONS = { home: ['lamp', 'blinds', 'moisture', 'camera', 'thermostat'], lab: ['laser', 'mirror', 'stage', 'meter', 'beamcam'], elder: ['bed', 'door', 'motion', 'kettle', 'bulb'], warehouse: ['conveyor', 'scanner', 'gate', 'cart', 'dock'], creator: ['keylight', 'camera', 'mic', 'capture', 'sign'] };
 const app = document.getElementById('app');
@@ -15,14 +15,14 @@ let mountGen = 0;   // bumped on every route; an in-flight mount that sees a new
 
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-const ksButton = (cls = 'btn primary small') => `<a class="${cls}" href="${KS}" target="_blank" rel="noopener">Back <span class="ks-long">on Kickstarter</span><span class="ks-short">it</span></a>`;
+const follow = () => `<nav class="social" aria-label="Follow NeuCharBox"><span class="social-label">Follow</span>${socialLinks()}</nav>`;
 // A thumbnail gradient is dark when its first colour is (lab, creator): the index number and icons then go light.
 const darkThumb = (g) => { const m = /#([0-9a-f]{6})/i.exec(g || ''); if (!m) return false; const n = parseInt(m[1], 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 110; };
 
 function renderPicker() {
   app.classList.remove('failed'); app.classList.add('picker-mode');
   app.innerHTML = `
-    <header class="top"><div class="logo"></div><div class="brand">NeuCharBox</div><div class="scene-name">Live demo</div><div class="spacer"></div>${ksButton()}</header>
+    <header class="top"><div class="logo"></div><div class="brand">NeuCharBox</div><div class="scene-name">Live demo</div><div class="spacer"></div>${follow()}</header>
     <main class="picker">
       <h1>Try NeuCharBox before it ships.</h1>
       <p class="lede">Pick a place. Plug in the hub, connect what's there, say what you want — or give exact instructions — approve the plan, and watch it run. Then make something fail, and see what it does.</p>
@@ -36,7 +36,7 @@ function renderPicker() {
 async function mountScene(meta, gen) {
   app.classList.remove('picker-mode', 'failed');
   app.innerHTML = `
-    <header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(meta.title)}</div><div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a>${ksButton()}</header>
+    <header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(meta.title)}</div><div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a>${follow()}</header>
     <nav class="beats" id="beats" aria-label="Demo steps">${BEATS.map(([id, label]) => `<button data-beat="${id}" disabled${id === 'recover' ? ' hidden' : ''}>${label}</button>`).join('')}</nav>
     <div class="stage">
       <div class="room"><canvas id="room"></canvas><div class="hint">${coarse ? 'drag · pinch · tap a device' : 'drag to orbit · scroll to zoom · right-drag to pan · tap a device'}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button></div>
@@ -171,7 +171,7 @@ function showLoadFailure(e) {
   if (!chatEl) return;
   chatEl.innerHTML = `<div class="chat-log"><div class="card end fail" role="alert"><h3>${T[1]}</h3>
     <p>${T[2]}</p>
-    <div class="row"><button class="btn retry" type="button">Try again</button>${kind === 'browser' ? '' : '<a class="btn" href="#">Other scenes</a>'}<a class="btn primary" href="${KS}" target="_blank" rel="noopener">Watch the video on Kickstarter</a></div></div></div>`;
+    <div class="row"><button class="btn retry" type="button">Try again</button>${kind === 'browser' ? '' : '<a class="btn" href="#">Other scenes</a>'}<a class="btn primary" href="${SOCIAL[0].url}" target="_blank" rel="noopener">Watch NeuCharBox on YouTube</a></div></div></div>`;
   chatEl.querySelector('.retry').onclick = () => location.reload();
 }
 

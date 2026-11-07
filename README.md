@@ -1,6 +1,6 @@
 # NeuCharBox live demo
 
-Interactive, scripted simulation of NeuCharBox for Kickstarter visitors: five
+Interactive, scripted simulation of NeuCharBox for anyone who wants to try it: five
 3D scenes (home, laser lab, elder care, warehouse, creator desk), each walking
 through plug in → discover devices → ask → plan → approve → run → done. Every
 request finishes as asked; the visitor can then pick something to fail and
@@ -56,8 +56,8 @@ a success end card. Failures are the visitor's choice:
    runs: NCB says it will leave everything as it is, and the engine's end card ("You
    said no, so it waited.") closes the what-if with the same buttons.
 5. The scenario end card has **Try another failure** (the picker again, same
-   request, same choices), **Another request here**, **Try another scene** and
-   the Kickstarter button.
+   request, same choices), **Another request here** and **Try another scene**,
+   and the same "Follow NeuCharBox" line as every end card.
 
 The beat bar shows Recover only during a what-if. A beat skip goes to any later
 beat, Done included (it runs to the end card; an ask card on the way takes its
@@ -176,7 +176,14 @@ China, with a CNAME for `demo.neucharbox.com`. Any of these works in minutes:
 - **Alibaba Cloud OSS + CDN (Hong Kong or Singapore):** upload the folder as a
   static website, enable HTTPS.
 
-The Kickstarter CTA links carry `?ref=demo`.
+## Social links
+
+NeuCharBox's official accounts (YouTube, LinkedIn, X) live in one place,
+`js/engine/social.js`: the header shows them as icons (on a phone, on the scene
+picker only, so a scene's name fits), and every end card closes with a "Follow
+NeuCharBox" line of named links. The load-failure card and the no-JavaScript /
+old-browser text in `index.html` point to the YouTube channel. Change an account
+there and in `index.html`.
 
 ## Structure
 
@@ -191,6 +198,7 @@ js/engine/store.js    single device-state store (get/set/tween/subscribe)
 js/engine/player.js   runs authored steps (quiet replays, recorded choices); setup beat generator
 js/engine/whatif.js   what-ifs: the picker's list, scenario defaults, the generic scenario, runWhatIf()
 js/engine/chat.js     conversation UI: messages, chips, plan/ask/replan/end cards, the picker of failures
+js/engine/social.js   NeuCharBox's official accounts: header icons, the end cards' follow line
 js/engine/panel.js    device dashboard tiles from the store (on phones the strip follows the request, a fault stays in view)
 js/engine/icons.js    line icons for the tiles
 js/engine/match.js    typed text → run / refuse / clarify (interpret)
