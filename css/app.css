@@ -175,6 +175,65 @@ button { font: inherit; color: inherit; }
 .card.halt { border-color: var(--amber); }
 .card.replan { border-color: var(--green); }
 .card.replan .needs { margin: 6px 0 0; color: var(--ink); background: #FFF7E8; border: 1px solid #F3DDB0; padding: 8px 10px; border-radius: 8px; }
+/* live mode: the LIVE AI badge, the plan / checklist card, the access card, the live end card */
+.live-badge, .chat-input.live::before { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; line-height: 1.5; padding: 1px 7px; border-radius: 999px; background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); color: #12222A; }
+.live-badge { display: inline-block; vertical-align: 1px; }
+.chat-input.live::before { content: 'LIVE AI'; align-self: center; flex: 0 0 auto; }
+.msg.planning { display: flex; align-items: center; gap: 9px; color: var(--ink-2); }
+.msg.planning .dots { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.msg.planning .dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-a); animation: lpulse 1.4s ease-in-out infinite; }
+.msg.planning .dots span:nth-child(2) { animation-delay: .2s; } .msg.planning .dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes lpulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+.msg.live-say { border-color: var(--line-2); }
+.card.live-plan .intro { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.card .lsteps { list-style: none; margin: 0 0 10px; padding: 0; }
+.lstep { display: grid; grid-template-columns: 1.5em minmax(0, 1fr); column-gap: 6px; margin: 6px 0; }
+.lstep .glyph { font-weight: 700; color: var(--ink-3); text-align: center; }
+.lstep .calls { grid-column: 2; }
+.lstep .calls:empty { display: none; }
+.lstep[data-status="running"] .glyph { color: #1E7FD8; animation: lpulse 1.4s ease-in-out infinite; }
+.lstep[data-status="done"] .glyph { color: #1E8F55; }
+.lstep[data-status="failed"] .glyph { color: var(--red); }
+.lstep[data-status="skipped"] .txt { color: var(--ink-3); }
+.card.live-plan.done .lstep .glyph { animation: none; }
+.live-plan .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.live-plan .call { display: inline-block; max-width: 100%; margin: 3px 4px 0 0; padding: 1px 7px; font-size: 11.5px; line-height: 1.45; color: var(--ink-2); background: #EEF6F5; border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
+.live-plan .call.bad { color: #B5412A; background: #FDECE8; border-color: #F3C4B8; }
+.card .lloose { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.card .lloose li.call { margin: 0; }
+.ltimeline { margin-top: 8px; padding: 6px 9px; max-height: 11.5em; overflow-y: auto; font-size: 12.5px; line-height: 1.4; background: #F7FBFA; border: 1px solid var(--line); border-radius: 8px; }
+.ltimeline .trow { padding: 2px 0; color: var(--ink-2); }
+.ltimeline .trow[data-kind="fault"], .ltimeline .trow[data-ok="false"] { color: var(--red); }
+.card.live-plan.done .btn.approve { background: #F1F5F4; color: var(--ink-3); }
+.card.live-plan.declined ol { color: var(--ink-3); text-decoration: line-through; text-decoration-color: rgba(92,122,120,.45); }
+.card.live-plan.declined .btn.approve { background: #F1F5F4; color: var(--ink-3); }
+.card.live-plan.declined .btn.decline.chosen { opacity: 1; background: #FDECE8; color: #B5412A; border-color: #F3C4B8; }
+.card.end.live .left { margin: 0 0 10px; font-size: 13.5px; }
+.card.end.live .btn.reset { background: #fff; }
+.card.access .intro { margin-bottom: 6px; }
+.card.access .anote { margin: 0 0 8px; color: var(--ink-2); font-size: 13.5px; }
+.card.access form.code { display: flex; gap: 8px; margin: 6px 0 8px; }
+.card.access input, .card.access select, .card.access textarea { width: 100%; min-width: 0; padding: 8px 11px; font: inherit; font-size: 16px; color: var(--ink); background: #fff; border: 1px solid var(--line-2); border-radius: 10px; outline: none; }
+.card.access input:focus, .card.access select:focus, .card.access textarea:focus { border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.2); }
+.card.access form.code input { flex: 1; height: 42px; text-transform: uppercase; letter-spacing: .08em; }
+.card.access form.code .btn { flex: 0 0 auto; }
+.card.access .lnk { display: inline-block; margin: 2px 12px 0 0; padding: 2px 0; border: 0; background: none; color: var(--ink-2); font-size: 13.5px; text-decoration: underline; cursor: pointer; }
+.card.access .lnk[hidden] { display: none; }
+.card.access form.apply { display: grid; gap: 8px; margin: 8px 0; }
+.card.access form.apply[hidden] { display: none; }
+.card.access .fld { display: grid; gap: 3px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.card.access .hp { position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+.card.access .use { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.card.access .applied { margin: 8px 0; font-weight: 600; color: #1E8F55; }
+.card.access .err { margin: 4px 0 8px; padding: 6px 10px; font-size: 13.5px; color: #B5412A; background: #FDECE8; border: 1px solid #F3C4B8; border-radius: 8px; }
+.card.access .err[hidden] { display: none; }
+.card.access.done { opacity: .55; pointer-events: none; }
+.card.access .follow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; font-size: 13px; color: var(--ink-2); }
+.card.access .follow .social-link { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 8px; border: 1px solid var(--line-2); border-radius: 999px; background: #fff; color: var(--ink); font-weight: 600; text-decoration: none; }
+.card.access .follow .social-link:hover { border-color: var(--accent-a); }
+.card.access .follow .social-link svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.card.access .follow .youtube svg { color: #FF0033; } .card.access .follow .linkedin svg { color: #0A66C2; } .card.access .follow .x svg { color: #000; }
+@media (prefers-reduced-motion: reduce) { .msg.planning .dots span, .lstep[data-status="running"] .glyph { animation: none; opacity: 1; } }
 .card.end { background: linear-gradient(180deg, #fff, #EEFBF9); text-align: left; }
 .card.end h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -0.01em; text-wrap: balance; } /* no one-word last line on a phone */
 .card.end p { margin: 0 0 12px; color: var(--ink-2); }
@@ -270,6 +329,12 @@ button { font: inherit; color: inherit; }
   .card.end .follow .long { display: none; } /* "Follow" and the three links on one line */
   .card.failures .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .card.failures .tiles.special { grid-template-columns: minmax(0, 1fr); }
+  .chat-input.live::before { content: 'LIVE'; }
+  .card.end.live .row { gap: 5px; }
+  .card.end.live .row .btn { padding: 6px 10px; font-size: 13px; }
+  .card.end.live .left { margin-bottom: 8px; font-size: 13px; }
+  .live-plan .call { white-space: normal; }
+  .ltimeline { font-size: 12px; }
   .pick { gap: 7px; padding: 6px 8px 6px 6px; }
   .pick .ico { width: 30px; height: 30px; } .pick .ico svg { width: 18px; height: 18px; }
 }

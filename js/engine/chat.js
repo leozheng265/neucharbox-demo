@@ -63,8 +63,19 @@ export function createChat(root, { onPromptText } = {}) {
     });
   }
 
+  const PLACEHOLDER = 'Or type what you want…';
   return {
     enableInput(on) { setInput(on); },
+    // Live mode hooks (js/engine/livechat.js): the log's own helpers, so live cards scroll and escape like the rest.
+    mount(node, opts) { return push(node, opts); },
+    esc,
+    // The LIVE AI badge (CSS, .chat-input.live::before), the live placeholder and the length cap. It leaves the
+    // input's on/off alone (enableInput does that).
+    live(on, { placeholder, max = 400 } = {}) {
+      form.classList.toggle('live', !!on);
+      if (on) { input.maxLength = max; input.placeholder = placeholder || PLACEHOLDER; }
+      else { input.removeAttribute('maxlength'); input.placeholder = PLACEHOLDER; }
+    },
     typing(on) { if (on) { if (!typingEl) typingEl = push(el('<div class="msg ncb typing" aria-hidden="true"><span></span><span></span><span></span></div>')); } else if (typingEl) { typingEl.remove(); typingEl = null; } },
     ncb(text) { push(el(`<div class="msg ncb">${esc(text)}</div>`)); },
     user(text) { push(el(`<div class="msg me">${esc(text)}</div>`)); },
@@ -138,9 +149,10 @@ export function createChat(root, { onPromptText } = {}) {
     // (optional) adds the what-if button first, labelled `whatIfLabel` ("What if something fails?" on a success card,
     // "Try another failure" on a what-if's): the host opens the picker of failures (failures() below). Pressed from the
     // keyboard (Enter or Space), focus moves to that picker's first choice; a mouse or touch press leaves focus alone.
-    end(spec, { onMore, onWhatIf, whatIfLabel } = {}) {
+    end(spec, { onMore, onWhatIf, whatIfLabel, onLive, liveLabel } = {}) {
       setInput(false);
-      const node = push(el(`<div class="card end"><h3>${esc(spec.headline)}</h3><p>${esc(spec.body)}</p><div class="row">${onWhatIf ? `<button class="btn whatif" type="button">${icon('whatif')}<span>${esc(whatIfLabel || 'What if something fails?')}</span></button>` : ''}${onMore ? '<button class="btn more" type="button">Another request here</button>' : ''}<a class="btn" href="#">Try another scene</a></div><div class="follow"><span>Follow<span class="long"> NeuCharBox</span></span>${socialLinks({ labels: true })}</div></div>`));
+      const node = push(el(`<div class="card end"><h3>${esc(spec.headline)}</h3><p>${esc(spec.body)}</p><div class="row">${onLive ? `<button class="btn primary live-go" type="button">${esc(liveLabel)}</button>` : ''}${onWhatIf ? `<button class="btn whatif" type="button">${icon('whatif')}<span>${esc(whatIfLabel || 'What if something fails?')}</span></button>` : ''}${onMore ? '<button class="btn more" type="button">Another request here</button>' : ''}<a class="btn" href="#">Try another scene</a></div><div class="follow"><span>Follow<span class="long"> NeuCharBox</span></span>${socialLinks({ labels: true })}</div></div>`));
+      if (onLive) { const b = node.querySelector('.live-go'); b.onclick = () => { b.disabled = true; onLive(); }; }
       if (onMore) { const b = node.querySelector('.more'); b.onclick = () => { b.disabled = true; onMore(); }; }
       if (onWhatIf) {
         const b = node.querySelector('.whatif');
