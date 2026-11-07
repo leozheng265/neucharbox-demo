@@ -71,6 +71,8 @@ const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' ? v : '');
 const FIELD = /^[A-Za-z_$][\w$]*$/, NOT_FIELDS = new Set(['__proto__', 'constructor', 'prototype']);
 const STEP_STATUS = ['running', 'done', 'failed', 'skipped'];
+// A result's or timeline row's ok: a missing one is never read as success when the outcome says it failed.
+const okOf = (d) => d.ok === true || (d.ok == null && d.outcome !== 'failed');
 // Steps as the contract sends them ({ id, text, devices }); anything else is dropped.
 const stepsOf = (list) => (Array.isArray(list) ? list : []).filter((s) => isObj(s) && typeof s.id === 'string')
   .map((s) => ({ id: s.id, text: str(s.text), devices: Array.isArray(s.devices) ? s.devices.filter((d) => typeof d === 'string') : [] }));
@@ -85,6 +87,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // answer in flight, and a typed change waiting for its decline's `done`.
   let rid = null, lastRid = null, holding = null, card = null, replanCard = null, replanSteps = [], checklist = null;
   let waiting = null, answer = null, pendingText = null, reading = null, planningOn = false, ranStep = false, exitOnDone = false;
+  let planned = false;        // a checklist exists (an approved plan, or a what-if's): only then is there something to replay
   let remainingToday = null;
   const busy = new Set();     // the ids live.js marked 'busy': done clears only these, so a JUST SET runs its full 2 s
   const devices = devicesOf(scene), n = devices.length;
@@ -160,7 +163,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       case 'plan': {
         const steps = stepsOf(d.steps);
         planningOn = false; view.planning(false);
-        if (isWhatIf) { checklist = view.checklist(steps, { replay: true }); phase = 'running'; } // a replay asks nothing
+        if (isWhatIf) { checklist = view.checklist(steps, { replay: true }); planned = true; phase = 'running'; } // a replay asks nothing
         else card = planCard({ kind: 'plan', steps });
         break;
       }
@@ -188,10 +191,11 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         break;
       case 'state':
         if (!writable(d.path)) break;
-        if (finite(d.value) && finite(d.ms) && d.ms > 0) store.tween(d.path, d.value, d.ms); else store.set(d.path, d.value);
+        // a number always goes through tween (0 ms: a jump that also drops a running tween, which a plain set would lose to)
+        if (finite(d.value)) store.tween(d.path, d.value, finite(d.ms) && d.ms > 0 ? d.ms : 0); else store.set(d.path, d.value);
         break;
       case 'result':
-        checklist?.result({ callId: d.callId, outcome: d.outcome, text: str(d.text), ok: d.ok !== false });
+        checklist?.result({ callId: d.callId, outcome: d.outcome, text: str(d.text), ok: okOf(d) });
         if (isDevice(d.device)) mark(d.device, d.outcome === 'confirmed' || d.outcome === 'made_safe' ? 'just' : null);
         break;
       case 'fault': // the server's text first: the card and flow.js's status line read it once the status turns 'fault'
@@ -200,7 +204,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         if (isWhatIf) beat('recover');
         break;
       case 'clock': setClock(d); break;
-      case 'timeline': checklist?.timeline({ at: str(d.at), text: str(d.text), ok: d.ok !== false, kind: d.kind }); break;
+      case 'timeline': checklist?.timeline({ at: str(d.at), text: str(d.text), ok: okOf(d), kind: d.kind }); break;
       case 'replan': // its ids are final (contract): approving merges them into the checklist
         replanSteps = stepsOf(d.steps);
         replanCard = planCard({ kind: 'replan', steps: replanSteps, reason: str(d.reason) });
@@ -221,15 +225,17 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     ui.track(false); checklist?.done();
     if (planningOn) { planningOn = false; view.planning(false); }
     if (finite(d.remainingToday)) remainingToday = d.remainingToday;
+    waiting?.close(); // a card still waiting (the request ended under it) takes no more answers
     card = replanCard = checklist = waiting = null;
     if (exitOnDone) { exitOnDone = false; return exit(); } // the kill switch tripped mid-run
     const out = d.outcome;
     if (out === 'ok' || out === 'failed' || out === 'limit') {
-      if (out !== 'limit' && !isWhatIf) lastRid = rid; // a what-if never becomes the latest finished request (contract)
-      view.endCard({ remainingToday, whatIfLabel: isWhatIf ? LIVE_COPY.anotherFailure : LIVE_COPY.whatIf, whatIf: out !== 'limit' }, endActions());
+      const replayable = planned && out !== 'limit'; // a what-if replays the steps that ran: none ran, nothing to replay
+      if (replayable && !isWhatIf) lastRid = rid;     // a what-if never becomes the latest finished request (contract)
+      view.endCard({ remainingToday, whatIfLabel: isWhatIf ? LIVE_COPY.anotherFailure : LIVE_COPY.whatIf, whatIf: replayable }, endActions());
       beat('end'); ui.status(LIVE_COPY.statusDone(remainingToday));
     } else { beat('ask'); ui.status(LIVE_COPY.statusWaiting(n)); }
-    if (remainingToday === 0) view.ncb(LIVE_COPY.lastOne);
+    if (remainingToday === 0 && !isWhatIf) view.ncb(LIVE_COPY.lastOne); // a what-if spends no request
     phase = 'idle'; view.input(true);
     if (pendingText) { const t = pendingText; pendingText = null; submit(t); }
   }
@@ -260,7 +266,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       if (a.over) return;
       a.over = true; if (answer === a) answer = null; waiting = null;
       if (action === 'approve') {
-        if (replan) { c.close(); checklist?.mergeSteps(steps); } else checklist = c.toChecklist();
+        if (replan) { c.close(); checklist?.mergeSteps(steps); } else { checklist = c.toChecklist(); planned = true; }
+        ui.status(LIVE_COPY.checklistTitle); // no longer "Waiting for your approval"; the first call takes it from here
       } else if (replan) c.declined(); // no event comes for it (contract): the demo marks the card, the run carries on
       else return;                     // a plan's decline: its `declined` and `done` follow
       phase = 'running'; view.input(false);
@@ -280,7 +287,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   // ---- requests ----
   // A new request or what-if: nothing of the last one stays live.
-  function begin() { card = replanCard = checklist = waiting = null; replanSteps = []; reading = null; ranStep = false; exitOnDone = false; planningOn = false; }
+  function begin() { card = replanCard = checklist = waiting = null; replanSteps = []; reading = null; ranStep = false; exitOnDone = false; planningOn = false; planned = false; }
   // The POST that starts a request (requests, …/whatif). Until it answers, events with an unknown rid are held (the server
   // starts before it answers); then those of its requestId run in order and the rest are dropped, or all of them when it
   // fails. Resolves false when the visit moved on meanwhile.
@@ -380,6 +387,15 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   }
 
   // ---- sessions ----
+  // A run abandoned without its `done` (a lost code, exit): take down what it left on screen. Not on close(), which is
+  // silent, and nothing once the page is gone.
+  function release() {
+    if (dead()) return;
+    for (const id of [...busy]) mark(id, null);
+    if (planningOn) { planningOn = false; view.planning(false); }
+    waiting?.close(); waiting = null;
+    ui.track(false);
+  }
   // Forget the request on screen (a new session, a lost code, exit, close): late events and answers find nothing.
   function forget() {
     if (answer) answer.over = true;
@@ -396,6 +412,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     } catch (e) { if (!gone()) failed(e); return false; }
     if (gone()) return false;
     if (planningOn) view.planning(false);
+    waiting?.close(); // a card left from the expired session takes no answers (its marks go with applyRoom below)
     forget();
     sessionId = s.sessionId;
     suggestions = Array.isArray(s.suggestions) ? s.suggestions.filter((t) => typeof t === 'string') : [];
@@ -423,6 +440,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   }
   // The code stopped working: forget it (and the session it opened) and ask again.
   function unauthorized() {
+    release();
     codes.clear(); code = null;
     stream?.close(); stream = null; sessionId = null; forget();
     view.input(false);
@@ -490,6 +508,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   function exit(heading) {
     if (!active) return;
+    release();
     stream?.close(); stream = null;
     accessHandle?.close(); accessHandle = null;
     active = false; phase = 'off'; sessionId = null; forget();
