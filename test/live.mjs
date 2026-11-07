@@ -8,6 +8,7 @@ import home from '../js/scenes/home.js';
 import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
 import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
 import { createSseParser, openEventStream } from '../js/engine/sse.js';
+import { createLive, codeStore, normalizeCode, LIVE_COPY } from '../js/engine/live.js';
 
 export { MOCK_CODE };
 const BASE = 'http://mock/live/api/';
@@ -29,12 +30,12 @@ export async function liveChecks({ report, initialOf, guardHits }) {
   }
 
   // The stub view / panel / ui the controller (js/engine/live.js) is written against, logging into one array.
-  function harness({ mock = createMockLive(), storage, entered = false } = {}) {
+  async function harness({ mock = createMockLive(), storage, entered = false } = {}) {
     const log = [], store = createStore(postSetup(home)); stores.add(store);
     const rec = (source) => (method, ...args) => { log.push([source, method, ...args]); };
     const h = { mock, store, log, codes: null, card: null, checklist: null, lastAccess: null, live: null };
     const mem = (() => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; })();
-    h.codes = storage ?? mem;
+    h.codes = codeStore(storage ?? mem);
     const checklist = () => {
       const c = { steps: {}, texts: {}, pills: {}, loose: [] };
       c.mergeSteps = (steps) => { log.push(['checklist', 'mergeSteps', steps]); for (const s of steps) { c.texts[s.id] = s.text; c.steps[s.id] ??= 'pending'; } };
@@ -70,7 +71,8 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     h.has = (source, method, ...args) => log.some((e) => e[0] === source && e[1] === method && args.every((a, i) => JSON.stringify(e[2 + i]) === JSON.stringify(a)));
     h.order = (source, method, ...args) => log.findIndex((e) => e[0] === source && e[1] === method && args.every((a, i) => JSON.stringify(e[2 + i]) === JSON.stringify(a)));
     h.until = async (source, method) => { for (let i = 0; i < 4000 && !log.some((e) => e[0] === source && e[1] === method); i++) await new Promise((r) => setTimeout(r, 10)); return h.find(source, method); };
-    if (entered) throw new Error('harness({ entered: true }) needs the live controller (Task 4)');
+    h.live = createLive({ scene: home, store, view: h.view, panel: h.panel, ui: h.ui, base: 'http://mock', fetch: mock.fetch, codes: h.codes });
+    if (entered) { await h.live.open(); if (h.lastAccess) await h.lastAccess.code(MOCK_CODE); }
     return h;
   }
 
@@ -338,5 +340,140 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       const es = openEventStream({ api: apiOf(createMockLive()), sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
       await sleep(120000); eq(f.log.length, 1, 'one GET in 120 s'); ok(!f.log[0].signal.aborted, 'never aborted'); eq(w.statuses, ['open']);
       es.close(); clearInterval(iv); }
+  });
+
+  // ---- Task 4: controller part 1 (access, session, room) ----
+  const waitFor = async (f) => { for (let i = 0; i < 4000 && !f(); i++) await sleep(25); ok(f(), 'timed out waiting'); };
+  const posts = (m) => m.calls.filter((c) => c.method === 'POST' && c.path === 'sessions');
+  const eventGets = (m) => m.calls.filter((c) => c.path.endsWith('/events'));
+  const accessCount = (t) => t.log.filter((e) => e[0] === 'view' && e[1] === 'access').length;
+
+  await check('copy · LIVE_COPY passes the guardrails', () => {
+    const hits = [];
+    for (const [k, v] of Object.entries(LIVE_COPY)) {
+      const outs = typeof v === 'function' ? [6, 'the soil sensor', 'x', null, 1, 0].flatMap((a) => [v(a), v(a, true), v(a, false)]) : [v];
+      for (const o of outs) { ok(typeof o === 'string', `${k} is text`); for (const g of guardHits(o)) hits.push(`${k}: ${g}`); }
+    }
+    eq(hits, []);
+    eq(LIVE_COPY.replanIntro('the soil reads 28%.'), 'I need to change the plan: the soil reads 28%.');
+    eq([LIVE_COPY.left(1), LIVE_COPY.left(5), LIVE_COPY.statusDone(null), LIVE_COPY.statusDone(1), LIVE_COPY.whatIfAsk('the lamp', false), LIVE_COPY.whatIfAsk('the lamps', true)],
+      ['1 live request left today', '5 live requests left today', 'Done', 'Done · 1 live request left today', 'What if the lamp fails?', 'What if the lamps fail?']);
+    eq(normalizeCode(' ncb-test case '), 'NCB-TESTCASE');
+  });
+
+  await check('access · no code → panel; good code → session, room and intro', async () => {
+    const t = await harness(); await t.live.open();
+    eq(t.find('view', 'access')[0], { mode: 'code' }); eq(t.live.phase, 'access'); eq(t.live.active, true);
+    eq(await t.lastAccess.code(' ncb-test-case '), null);
+    eq(t.codes.get(), MOCK_CODE); eq(t.live.phase, 'idle'); eq(t.live.active, true); ok(t.has('view', 'live', true)); ok(t.has('access', 'close'), 'panel closed');
+    eq(t.find('view', 'chips')[0].length >= 2, true); eq(t.find('view', 'chips')[2], 'Try:');
+    ok(t.find('view', 'ncb')[0].startsWith('Live AI is on. Type what you want these 6 devices'));
+    eq(t.store.get('lamp.status'), 'online'); eq(t.find('ui', 'beats')[0], { current: 'ask', recoverHidden: true, skippable: [] });
+    eq(t.find('ui', 'status')[0], 'Live AI · 6 devices · waiting for your request'); ok(t.has('view', 'input', true));
+    ok(!JSON.stringify(t.mock.calls.map((c) => [c.path, c.query])).includes(MOCK_CODE), 'code never in a url');
+    t.live.close();
+  });
+
+  await check('access · bad code → badCode, nothing stored', async () => {
+    const t = await harness(); await t.live.open();
+    eq(await t.lastAccess.code('NCB-NOPE-NOPE'), LIVE_COPY.badCode);
+    eq(t.codes.get(), null); eq(posts(t.mock).length, 0); eq(t.live.phase, 'access');
+    t.mock.set({ remaining: 0 }); eq(await t.lastAccess.code(MOCK_CODE), LIVE_COPY.noneLeft); eq(t.codes.get(), null, 'none left: not stored');
+    t.mock.set({ remaining: 5, mode: 'down' }); eq(await t.lastAccess.code(MOCK_CODE), LIVE_COPY.offline);
+    t.mock.set({ mode: 'json' });
+    eq(await t.lastAccess.apply({ email: 'a@b.c', interest: 'home', wouldTry: 'x', website: '' }), LIVE_COPY.applied);
+    eq(t.mock.calls.at(-1).body.scene, 'home');
+    t.mock.set({ mode: 'down' }); eq(await t.lastAccess.apply({ email: 'a@b.c' }), LIVE_COPY.offline);
+    t.live.close();
+  });
+
+  await check('access · stored code → straight in; stored code now 401 → cleared, panel says savedCodeGone', async () => {
+    const a = await harness(); a.codes.set(MOCK_CODE); await a.live.open();
+    eq(a.live.phase, 'idle'); eq(accessCount(a), 0, 'no panel'); ok(a.has('view', 'live', true)); a.live.close();
+    const b = await harness(); b.codes.set('NCB-OTHR-CODE'); await b.live.open();
+    eq(b.codes.get(), null); eq(b.find('view', 'access')[0], { mode: 'code', note: LIVE_COPY.savedCodeGone }); eq(posts(b.mock).length, 0);
+    const c = await harness({ mock: createMockLive({ remaining: 0 }) }); c.codes.set(MOCK_CODE); await c.live.open();
+    eq(c.find('view', 'access')[0], { mode: 'code', note: LIVE_COPY.noneLeft }); eq(c.codes.get(), MOCK_CODE, 'a code with none left is kept');
+    const d = await harness(); d.codes.set(MOCK_CODE); await d.live.open(); d.live.close();
+    const e = await harness(); e.codes.set(MOCK_CODE); e.mock.set({ mode: 'down' }); await e.live.open();
+    eq(e.find('view', 'access')[0], { mode: 'offline' }); eq(e.codes.get(), MOCK_CODE, 'offline keeps the code');
+  });
+
+  await check('access · offline (health html / down / liveEnabled false) → offline panel, live stays inactive', async () => {
+    for (const opts of [{ mode: 'html' }, { mode: 'down' }, { liveEnabled: false }, { scenes: ['lab'] }]) {
+      const t = await harness({ mock: createMockLive(opts) });
+      eq(await t.live.probe(), false, JSON.stringify(opts)); eq(t.live.available, false);
+      await t.live.open(); eq(t.find('view', 'access')[0], { mode: 'offline' }, JSON.stringify(opts)); eq(posts(t.mock).length, 0);
+      t.lastAccess.back(); ok(t.has('ui', 'offerGuided'), 'offered guided'); eq(t.live.active, false); eq(t.live.phase, 'off'); ok(t.has('access', 'close'));
+    }
+    const ok1 = await harness(); eq(await ok1.live.probe(), true); eq(ok1.live.available, true);
+  });
+
+  await check('storage throws → code works for the visit', async () => {
+    const t = await harness({ storage: { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } } });
+    await t.live.open(); eq(await t.lastAccess.code(MOCK_CODE), null); eq(t.live.phase, 'idle'); eq(t.codes.get(), null);
+    eq(posts(t.mock).length, 1); t.live.close();
+    // the property read itself throws (Safari, site data blocked): no storage passed, localStorage getter throws
+    const real = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', { get() { throw new Error('blocked'); }, configurable: true });
+    try { const c = codeStore(); eq(c.get(), null); c.set('x'); c.clear(); } finally { if (real) Object.defineProperty(globalThis, 'localStorage', real); else delete globalThis.localStorage; }
+  });
+
+  await check('401 mid-session → access panel', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId; eq(t.live.phase, 'idle'); eq(accessCount(t), 1);
+    t.mock.set({ code: 'NCB-OTHR-CODE' }); t.mock.drop(sid);
+    await waitFor(() => accessCount(t) === 2);
+    eq(t.codes.get(), null); eq(t.find('view', 'access')[0], { mode: 'code', note: LIVE_COPY.savedCodeGone }); eq(t.live.phase, 'access');
+    ok(t.log.findLastIndex((e) => e[0] === 'view' && e[1] === 'input' && e[2] === false) > t.order('view', 'input', true), 'input off after entering');
+    const gets = eventGets(t.mock).length; await sleep(60000); eq(eventGets(t.mock).length, gets, 'stream closed, no more GETs');
+    t.mock.set({ code: MOCK_CODE }); eq(await t.lastAccess.code(MOCK_CODE), null); eq(t.live.phase, 'idle'); ok(t.live.sessionId !== sid, 'new session after re-entering');
+    t.live.close();
+  });
+
+  await check('room · applyRoom merges onto the baseline, keeps room-only fields', async () => {
+    const t = await harness({ entered: true }), base = t.store.snapshot(), sid = t.live.sessionId;
+    eq(base.soil.probeOut, false); t.ui.baseline = () => base;
+    t.store.set('soil.probeOut', true); t.store.set('lamp.brightness', 0.9);
+    const marks = () => t.log.filter((e) => e[0] === 'panel' && e[1] === 'mark' && e[3] === null).length, statuses = () => t.log.filter((e) => e[0] === 'ui' && e[1] === 'status').length;
+    const m0 = marks(), s0 = statuses(), r0 = t.log.filter((e) => e[1] === 'resetRoom').length;
+    t.mock.push(sid, 'room', { state: { lamp: { on: true, brightness: 0.5, status: 'online' }, soil: { moisture: 20 }, env: { hour: 20 } }, clock: { iso: '2026-11-13T20:00:00', label: 'Fri 20:00', hour: 20 } });
+    await waitFor(() => t.store.get('lamp.brightness') === 0.5);
+    eq(t.store.get('soil.probeOut'), false, 'room-only field back to baseline'); eq(t.store.get('soil.moisture'), 20); eq(t.store.get('lamp.on'), true);
+    eq(t.store.get('pump.running'), base.pump.running, 'untouched device back to baseline'); eq(t.store.get('env.hour'), 20);
+    eq(marks() - m0, 6, 'panel.mark(id, null) for all six'); eq(statuses(), s0, 'the instant clock leaves the status line alone');
+    eq(t.log.filter((e) => e[1] === 'resetRoom').length - r0, 1, 'ui.resetRoom once');
+    // a clock event tweens env.hour and shows its label
+    t.mock.push(sid, 'clock', { iso: '2026-11-13T21:00:00', label: 'Fri 21:00', hour: 21 });
+    await waitFor(() => t.store.get('env.hour') === 21); eq(t.find('ui', 'status')[0], 'Fri 21:00');
+    t.live.close();
+  });
+
+  await check('session · 404 on the stream → fresh session with timedOut notice', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId;
+    t.mock.expire(sid);
+    await waitFor(() => t.live.sessionId !== sid && t.live.phase === 'idle');
+    eq(posts(t.mock).length, 2); eq(t.find('view', 'ncb')[0], LIVE_COPY.timedOut); ok(t.log.findLastIndex((e) => e[0] === 'view' && e[1] === 'input' && e[2] === true) > t.order('view', 'ncb', LIVE_COPY.timedOut), 'input on after the notice');
+    eq(t.find('ui', 'beats')[0], { current: 'ask', recoverHidden: true, skippable: [] }); eq(t.live.active, true);
+    await waitFor(() => eventGets(t.mock).at(-1).path.includes(t.live.sessionId));
+    ok([null, '0'].includes(eventGets(t.mock).at(-1).query.after ?? null), 'the new stream starts from the beginning');
+    t.live.close();
+  });
+
+  await check('session · POST sessions 429 budget → limitGlobal; 503 live_off → offline; both back to guided', async () => {
+    for (const [off, line] of [['budget', LIVE_COPY.limitGlobal], ['live_off', LIVE_COPY.offline]]) {
+      const t = await harness(); await t.live.open(); t.mock.set({ off });
+      eq(await t.lastAccess.code(MOCK_CODE), null, off); eq(t.find('view', 'ncb')[0], line, off); ok(t.has('ui', 'offerGuided'), 'guided'); eq(t.live.active, false); eq(t.live.phase, 'off');
+      eq(eventGets(t.mock).length, 0, 'no stream opened');
+    }
+  });
+
+  await check('close · silent after close(); exit() and ui death too', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId, n0 = t.log.length;
+    t.live.close(); t.mock.push(sid, 'room', { state: { lamp: { brightness: 0.7 } }, clock: { iso: 'x', label: 'x', hour: 3 } }); await sleep(2000);
+    eq(t.log.length, n0, 'nothing logged after close'); ok(t.store.get('lamp.brightness') !== 0.7);
+    const u = await harness({ entered: true }); u.ui.kill(); const m = u.log.length; u.mock.push(u.live.sessionId, 'clock', { iso: 'x', label: 'x', hour: 3 }); await sleep(2000);
+    eq(u.log.length, m, 'nothing after ui.alive() false'); u.live.close();
+    const e = await harness({ entered: true }), esid = e.live.sessionId; e.live.exit('Back'); eq(e.find('ui', 'offerGuided')[0], 'Back'); eq(e.live.active, false); ok(e.has('view', 'live', false)); ok(e.has('ui', 'track', false));
+    const m2 = e.log.length; e.mock.push(esid, 'clock', { iso: 'x', label: 'x', hour: 4 }); await sleep(2000); eq(e.log.length, m2, 'silent after exit');
   });
 }
