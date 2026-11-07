@@ -3,7 +3,7 @@
 //   also holds the harness they share (check / eq / ok / harness and the stub LiveView, panel and ui).
 import { createStore } from '../js/engine/store.js';
 import { virtualTime } from './clock.mjs';
-import { createMockLive, MOCK_CODE } from './fixtures/live-mock.mjs';
+import { createMockLive, MOCK_CODE, SCRIPTS } from './fixtures/live-mock.mjs';
 import home from '../js/scenes/home.js';
 import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
 import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
@@ -43,7 +43,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       c.mergeSteps = (steps) => { log.push(['checklist', 'mergeSteps', steps]); for (const s of steps) { c.texts[s.id] = s.text; c.steps[s.id] ??= 'pending'; } };
       c.step = (id, status) => { log.push(['checklist', 'step', id, status]); c.steps[id] = status; };
       c.call = ({ callId, step, label }) => { log.push(['checklist', 'call', callId, step, label]); c.pills[callId] = `${label} · …`; if (step == null) c.loose.push(callId); };
-      c.result = ({ callId, text }) => { log.push(['checklist', 'result', callId, text]); const p = String(c.pills[callId] ?? '').split(' · ')[0]; c.pills[callId] = `${p} · ${text}`; };
+      c.result = ({ callId, text, ok }) => { log.push(['checklist', 'result', callId, text, ok]); const p = String(c.pills[callId] ?? '').split(' · ')[0]; c.pills[callId] = `${p} · ${text}`; };
       c.timeline = (row) => log.push(['checklist', 'timeline', row]);
       c.done = () => log.push(['checklist', 'done']);
       h.checklist = c; return c;
@@ -514,6 +514,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(t.card.enabled, true); eq(t.live.phase, 'awaiting'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusApproval); eq(lastInput(t), true, 'input on while the plan waits');
     await t.card.approve();
     await t.until('view', 'endCard'); await sleep(3100); // the blinds tween over 3 s
+    eq(statusesFrom(t, t.order('card', 'toChecklist', 'plan'))[0], LIVE_COPY.checklistTitle, 'the status leaves "Waiting for your approval" once approved');
     eq(t.mock.calls.filter((c) => c.path.endsWith('/approve')).length, 1);
     eq(t.store.get('lamp.brightness'), 0.2); eq(t.store.get('blinds.closed'), 1);
     eq(t.checklist.steps, { s1: 'done', s2: 'done', s3: 'done' });
@@ -524,7 +525,8 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(soil.slice(0, 4), ['busy', null, 'busy', null], 'the running read: reading, then call (WORKING until its result)');
     ok(t.has('panel', 'reveal', ['soil']), 'a read changes no value, so only reveal brings its card into view');
     ok(!run.some((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'blinds' && e[3] === null), 'done clears busy marks only: the blinds\' JUST SET runs out by itself');
-    eq(t.find('view', 'summary')[0].length > 0, true); eq(t.find('view', 'endCard')[0].remainingToday, 19);
+    eq(t.find('view', 'summary')[0], 'The lamp is at 20%, the blinds are closed, and the soil reads 34%, so the pump stayed off.', 'the summary event\'s text');
+    eq(t.find('view', 'endCard')[0].remainingToday, 19);
     eq(t.find('view', 'endCard')[0], { remainingToday: 19, whatIfLabel: LIVE_COPY.whatIf, whatIf: true });
     eq(t.find('ui', 'beats')[0].current, 'end'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusDone(19));
     ok(t.has('checklist', 'done')); ok(t.has('ui', 'track', true)); eq(t.find('ui', 'track')[0], false, 'track off at done');
@@ -555,6 +557,10 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const r3 = t.order('checklist', 'result', 'c3');
     ok(r3 >= 0 && t.log.slice(r3).some((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'pump' && e[3] === 'just'), 'pump JUST SET after the made-safe result');
     eq(t.store.get('pump.running'), false); eq(count(t, 'card', 'toChecklist'), 1);
+    // a `commanded` result (c2: sent, not confirmed) leaves the pump unmarked; JUST SET is for confirmed / made safe
+    eq(t.checklist.pills.c2, 'Water pump → on for 6 s · commanded');
+    const r2 = t.order('checklist', 'result', 'c2'), c3 = t.order('checklist', 'call', 'c3');
+    eq(t.log.slice(r2, c3).filter((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'pump').map((e) => e[3]), [null], 'pump unmarked after commanded');
     t.live.close();
     // declining the re-plan instead: no event comes, the controller marks the card, the run goes on
     const u = await harness({ entered: true }); await toPlan(u, WATER); await u.card.approve();
@@ -612,7 +618,8 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       t.mock.push(sid, 'limit', { kind: 'budget', rid: 'r1' }); await settle();
       ok(t.has('view', 'ncb', LIVE_COPY.limitGlobal)); eq(t.live.active, true, 'live until done');
       t.mock.push(sid, 'done', { outcome: 'limit', rid: 'r1' }); await waitFor(() => !t.live.active);
-      ok(t.has('ui', 'offerGuided')); eq(count(t, 'view', 'endCard'), 0, 'no end card'); eq(t.live.available, false); }
+      ok(t.has('ui', 'offerGuided')); eq(count(t, 'view', 'endCard'), 0, 'no end card'); eq(t.live.available, false);
+      eq(t.card.enabled, false, 'the plan card left waiting is closed'); ok(t.has('card', 'close', 'plan')); }
   });
 
   await check('run · server offline mid-run → lost card, reconnect resumes from lastId', async () => {
@@ -770,5 +777,111 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const s = createStore({ a: { x: 0 } }); stores.add(s);
     s.tween('a.x', 10, 1000); await sleep(100); ok(s.get('a.x') > 0 && s.get('a.x') < 10, 'tweening');
     s.tween('a.x', 5, 0); eq(s.get('a.x'), 5, 'jumps at once'); await sleep(2000); eq(s.get('a.x'), 5, 'the old tween is gone');
+  });
+
+  // ---- Task 5 fix round 1 ----
+  // A mock whose `movie` request (the default script) runs these segments instead.
+  const movieMock = (...segments) => createMockLive({ scripts: { ...SCRIPTS, movie: segments } });
+  const OPEN_RUN = [SCRIPTS.movie[0], { on: 'approve', events: [['step', { id: 's1', status: 'running' }]] }]; // approved, then no done
+  // The same mock, except the first POST whose path matches `re` gets `answer()` instead.
+  const failOnce = (m, re, answer) => { let left = 1; return { ...m, fetch: (url, init) => (left > 0 && re.test(String(url)) ? (left--, answer()) : m.fetch(url, init)) }; };
+  const jsonAnswer = (status, body) => () => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
+
+  await check('abandoned run · a 401 or exit mid-run releases WORKING, Planning… and tracking', async () => {
+    // a 401 while planning, with the soil being read: no done will come
+    const t = await harness({ mock: movieMock({ on: 'request', events: [['planning', {}], ['reading', { device: 'soil' }]] }), entered: true }), sid = t.live.sessionId;
+    await t.live.submit(MOVIE); await waitFor(() => t.has('view', 'reading', 'the soil sensor')); eq(t.live.phase, 'planning');
+    const from = t.log.length;
+    t.mock.set({ mode: 'down' }); t.mock.drop(sid); t.mock.set({ code: 'NCB-OTHR-CODE' }); await sleep(100); t.mock.set({ mode: 'json' });
+    await waitFor(() => accessCount(t) === 2);
+    const after = t.log.slice(from);
+    ok(after.some((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'soil' && e[3] === null), 'soil WORKING cleared');
+    ok(after.some((e) => e[0] === 'view' && e[1] === 'planning' && e[2] === false), 'Planning… bubble off');
+    ok(after.some((e) => e[0] === 'ui' && e[1] === 'track' && e[2] === false), 'tracking off');
+    t.live.close();
+    // exit while a plan card waits: the card is closed, tracking stops
+    const u = await harness({ entered: true }); await toPlan(u, MOVIE); u.live.exit();
+    eq(u.card.enabled, false); ok(u.has('card', 'close', 'plan'), 'waiting card closed'); eq(u.find('ui', 'track')[0], false);
+    // the session expires while a plan waits: a fresh room, and the old card takes no answers
+    const w = await harness({ entered: true }); await toPlan(w, MOVIE); const wsid = w.live.sessionId; w.mock.expire(wsid);
+    await waitFor(() => w.live.sessionId !== wsid && w.live.phase === 'idle'); ok(w.has('card', 'close', 'plan'), 'old card closed'); eq(w.card.enabled, false); w.live.close();
+    // close() stays silent
+    const v = await harness({ entered: true }); await toPlan(v, MOVIE); const n0 = v.log.length; v.live.close(); eq(v.log.length, n0, 'close is silent');
+  });
+
+  await check('end card · done{failed} before any plan → no what-if; after a plan ran → what-if on that rid', async () => {
+    const failed = ['done', { outcome: 'failed' }], err = ['error', { kind: 'model', message: 'The model stopped.' }];
+    const t = await harness({ mock: movieMock({ on: 'request', events: [['planning', {}], err, failed] }), entered: true });
+    await t.live.submit(MOVIE); await waitFor(() => count(t, 'view', 'endCard') === 1);
+    ok(t.has('view', 'ncb', LIVE_COPY.error)); eq(t.find('view', 'endCard')[0].whatIf, false, 'nothing ran: no what-if');
+    t.find('view', 'endCard')[1].onWhatIf(); eq(count(t, 'view', 'failures'), 0, 'no replay target'); t.live.close();
+    const u = await harness({ mock: movieMock(SCRIPTS.movie[0], { on: 'approve', events: [['step', { id: 's1', status: 'running' }], err, failed] }), entered: true });
+    await toPlan(u, MOVIE); await u.card.approve(); await waitFor(() => count(u, 'view', 'endCard') === 1);
+    eq(u.find('view', 'endCard')[0].whatIf, true, 'the plan ran: what-if offered');
+    u.find('view', 'endCard')[1].onWhatIf(); u.find('view', 'failures')[1]('lamp');
+    await waitFor(() => postsTo(u.mock, /\/whatif$/).length === 1); eq(postsTo(u.mock, /\/whatif$/)[0].path, `sessions/${u.live.sessionId}/requests/r1/whatif`);
+    u.live.close();
+  });
+
+  await check('run · expired closes the waiting card, with the copy once (plan and re-plan)', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, MOVIE); const sid = t.live.sessionId;
+    t.mock.push(sid, 'expired', { rid: 'r1' }); t.mock.push(sid, 'done', { outcome: 'expired', rid: 'r1' }); await waitFor(() => t.live.phase === 'idle');
+    eq(count(t, 'card', 'close'), 1); ok(t.has('card', 'close', 'plan')); eq(t.card.enabled, false);
+    eq(t.log.filter((e) => e[1] === 'ncb' && e[2] === LIVE_COPY.expired).length, 1, 'expired copy once'); eq(count(t, 'view', 'endCard'), 0);
+    eq(t.find('ui', 'beats')[0].current, 'ask'); eq(lastInput(t), true);
+    t.card.approve(); await settle(); eq(postsTo(t.mock, /\/approve$/).length, 0, 'a closed card sends nothing'); t.live.close();
+    // a re-plan left waiting: that card closes, not the plan (now the checklist)
+    const u = await harness({ entered: true }); await toPlan(u, WATER); await u.card.approve();
+    await waitFor(() => u.find('view', 'planCard')[0].kind === 'replan' && u.card.enabled);
+    u.mock.push(u.live.sessionId, 'expired', { rid: 'r1' }); u.mock.push(u.live.sessionId, 'done', { outcome: 'expired', rid: 'r1' }); await waitFor(() => u.live.phase === 'idle');
+    ok(u.has('card', 'close', 'replan')); ok(!u.has('card', 'close', 'plan'), 'the checklist stays');
+    eq(u.log.filter((e) => e[1] === 'ncb' && e[2] === LIVE_COPY.expired).length, 1); ok(u.has('checklist', 'done'));
+    u.live.close();
+  });
+
+  await check('approve · 409 not_waiting → card closed, expired copy once; another error → card enabled again', async () => {
+    const m = createMockLive(), t = await harness({ mock: failOnce(m, /\/approve$/, jsonAnswer(409, { error: 'not_waiting', message: 'Nothing is waiting.' })), entered: true });
+    await toPlan(t, MOVIE); await t.card.approve(); await settle();
+    ok(t.has('card', 'close', 'plan')); eq(t.log.filter((e) => e[1] === 'ncb' && e[2] === LIVE_COPY.expired).length, 1, 'expired copy');
+    // the server's own expired + done follow: no second copy, the request ends
+    m.push(t.live.sessionId, 'expired', { rid: 'r1' }); m.push(t.live.sessionId, 'done', { outcome: 'expired', rid: 'r1' }); await waitFor(() => t.live.phase === 'idle');
+    eq(t.log.filter((e) => e[1] === 'ncb' && e[2] === LIVE_COPY.expired).length, 1, 'still once'); eq(count(t, 'card', 'close'), 1); eq(count(t, 'view', 'endCard'), 0);
+    t.live.close();
+    // a 500: the error copy, the card enabled again, and a second Approve runs the plan
+    const m2 = createMockLive(), u = await harness({ mock: failOnce(m2, /\/approve$/, jsonAnswer(500, { error: 'internal', message: 'Oops.' })), entered: true });
+    await toPlan(u, MOVIE); await u.card.approve(); await settle();
+    ok(u.has('view', 'ncb', LIVE_COPY.error)); eq(u.card.enabled, true, 'enabled again'); eq(u.live.phase, 'awaiting'); eq(lastInput(u), true);
+    eq(count(u, 'card', 'toChecklist'), 0); eq(postsTo(m2, /\/approve$/).length, 0, 'the failed POST never reached the server');
+    await u.card.approve(); await waitFor(() => count(u, 'view', 'endCard') === 1);
+    eq(postsTo(m2, /\/approve$/).length, 1); eq(u.checklist.steps, { s1: 'done', s2: 'done', s3: 'done' });
+    u.live.close();
+  });
+
+  await check('state · an instant numeric state beats a running tween; a missing ok is never success', async () => {
+    const t = await harness({ mock: movieMock(...OPEN_RUN), entered: true }), sid = t.live.sessionId;
+    await toPlan(t, MOVIE); await t.card.approve(); await waitFor(() => t.live.phase === 'running');
+    const push = (kind, data) => t.mock.push(sid, kind, { ...data, rid: 'r1' });
+    push('state', { path: 'lamp.brightness', value: 0.9, ms: 2000 }); await sleep(300); ok(t.store.get('lamp.brightness') > 0, 'tweening');
+    push('state', { path: 'lamp.brightness', value: 0.1, ms: 0 }); await sleep(2500); eq(t.store.get('lamp.brightness'), 0.1, 'the instant value stays');
+    push('call', { step: 's1', callId: 'k1', device: 'lamp', action: 'set', args: {}, label: 'Floor lamp → 10%' });
+    push('result', { callId: 'k1', step: 's1', device: 'lamp', outcome: 'failed', text: 'no answer' });           // no ok, failed
+    push('result', { callId: 'k2', step: 's1', device: 'lamp', outcome: 'confirmed', text: 'confirmed', ok: 'yes' }); // ok not a boolean
+    push('result', { callId: 'k3', step: 's1', device: 'lamp', outcome: 'confirmed', text: 'confirmed' });          // no ok, not failed
+    push('timeline', { at: 'Sat 18:00', text: 'Floor lamp → 35%', ok: 'nope', kind: 'action' });
+    push('timeline', { at: 'Sat 19:00', text: 'Floor lamp → off', ok: false, kind: 'action' });
+    await settle();
+    eq(t.log.filter((e) => e[0] === 'checklist' && e[1] === 'result').map((e) => [e[2], e[4]]), [['k1', false], ['k2', false], ['k3', true]]);
+    eq(t.log.filter((e) => e[0] === 'checklist' && e[1] === 'timeline').map((e) => e[2].ok), [false, false]);
+    push('done', { outcome: 'ok' }); await waitFor(() => count(t, 'view', 'endCard') === 1);
+    t.live.close();
+  });
+
+  await check('lastOne · after the code\'s last request, not again after a what-if', async () => {
+    const t = await harness({ mock: createMockLive({ remaining: 1 }), entered: true }); await movie(t);
+    const lastOnes = () => t.log.filter((e) => e[1] === 'ncb' && e[2] === LIVE_COPY.lastOne).length;
+    eq(t.find('view', 'endCard')[0].remainingToday, 0); eq(lastOnes(), 1);
+    t.find('view', 'endCard')[1].onWhatIf(); t.find('view', 'failures')[1]('lamp'); await waitFor(() => count(t, 'view', 'endCard') === 2);
+    eq(t.find('view', 'endCard')[0].remainingToday, 0); eq(lastOnes(), 1, 'a what-if spends no request');
+    t.live.close();
   });
 }
