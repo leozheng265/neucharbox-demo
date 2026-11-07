@@ -96,12 +96,13 @@ export function createLiveView({ chat, scene }) {
   // The plan (or re-plan) card, waiting for Approve / Not this. toChecklist() turns the same card into the checklist.
   function planCard(spec, { onApprove, onDecline }) {
     const replan = spec.kind === 'replan';
-    const node = parse(`<div class="card live-plan${replan ? ' replan' : ''}"><p class="intro">${esc(replan ? LIVE_COPY.replanIntro(spec.reason) : LIVE_COPY.planIntro)}</p><ol class="lsteps"></ol><div class="row"><button class="btn approve" type="button" disabled>Approve</button><button class="btn decline" type="button" disabled>Not this</button></div></div>`);
+    const node = parse(`<div class="card live-plan${replan ? ' replan' : ''}"><p class="intro"><span class="itxt">${esc(replan ? LIVE_COPY.replanIntro(spec.reason) : LIVE_COPY.planIntro)}</span> <span class="live-badge">${esc(LIVE_COPY.badge)}</span></p><ol class="lsteps"></ol><div class="row"><button class="btn approve" type="button" disabled>Approve</button><button class="btn decline" type="button" disabled>Not this</button></div></div>`);
     const list = stepList(node.querySelector('ol'));
     (spec.steps || []).forEach((s, i) => list.add(s, `${i + 1}.`));
     const approve = node.querySelector('.approve'), decline = node.querySelector('.decline');
     let shut = false;
-    const both = (off) => { approve.disabled = off; decline.disabled = off; };
+    const keepFocus = () => { if (node.contains(document.activeElement)) node.closest('.chat-log')?.focus({ preventScroll: true }); };
+    const both = (off) => { if (off) keepFocus(); approve.disabled = off; decline.disabled = off; };
     approve.onclick = () => { if (!approve.disabled) onApprove(); };
     decline.onclick = () => { if (!decline.disabled) onDecline(); };
     mount(node);
@@ -109,9 +110,9 @@ export function createLiveView({ chat, scene }) {
       enable() { if (!shut) both(false); },
       busy() { both(true); },
       declined() { shut = true; both(true); node.classList.add('declined'); decline.classList.add('chosen'); },
-      close() { shut = true; both(true); if (node.contains(document.activeElement)) document.activeElement.blur(); node.classList.add('done'); },
+      close() { shut = true; both(true); node.classList.add('done'); },
       toChecklist({ replay = false } = {}) {
-        shut = true; node.classList.add('running');
+        shut = true; keepFocus(); node.classList.add('running');
         node.querySelector('.intro').innerHTML = title(replay);
         node.querySelector('.row').remove();
         list.toChecklist();
@@ -167,12 +168,12 @@ export function createLiveView({ chat, scene }) {
          <form class="code" novalidate><input name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" aria-label="Invite code" placeholder="Invite code"><button class="btn primary go" type="submit">Enter</button></form>
          <button class="lnk apply-open" type="button" aria-expanded="false">Apply for access</button>
          <form class="apply" hidden>
-           ${labelled('Email', '<input name="email" type="email" required maxlength="200" autocomplete="email">')}
+           ${labelled('Email', '<input name="email" type="email" required maxlength="200" autocomplete="email" aria-describedby="apply-use">')}
+           <p class="use" id="apply-use">${esc(LIVE_COPY.applyEmailUse)}</p>
            ${labelled('Name (optional)', '<input name="name" type="text" maxlength="100" autocomplete="name">')}
            ${labelled("I'm interested in", `<select name="interest">${INTERESTS.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join('')}</select>`)}
            ${labelled('What would you try?', '<textarea name="wouldTry" rows="2" required maxlength="400"></textarea>')}
            <div class="hp" aria-hidden="true"><label>Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label></div>
-           <p class="use">${esc(LIVE_COPY.applyEmailUse)}</p>
            <button class="btn primary send" type="submit">Send application</button>
          </form>`;
     const node = parse(`<div class="card access${offline ? ' offline' : ''}">${body}${offline ? '' : '<p class="err" role="alert" hidden></p>'}<button class="lnk back" type="button">${esc(LIVE_COPY.back)}</button></div>`);
@@ -215,7 +216,7 @@ export function createLiveView({ chat, scene }) {
     return {
       close() {
         node.classList.add('done');
-        if (node.contains(document.activeElement)) document.activeElement.blur();
+        if (node.contains(document.activeElement)) node.closest('.chat-log')?.focus({ preventScroll: true });
         node.querySelectorAll('button, input, select, textarea').forEach((x) => (x.disabled = true));
       },
     };
@@ -232,7 +233,7 @@ export function createLiveView({ chat, scene }) {
       if (on) {
         sayEl = null;
         if (planningEl?.isConnected) return;
-        planningEl = parse(`<div class="msg ncb planning"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="ptxt">${esc(LIVE_COPY.planning)}</span></div>`);
+        planningEl = parse(`<div class="msg ncb planning"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="ptxt">${esc(LIVE_COPY.planning)}</span> <span class="live-badge">${esc(LIVE_COPY.badge)}</span></div>`);
         mount(planningEl);
       } else if (planningEl) { planningEl.remove(); planningEl = null; }
     },

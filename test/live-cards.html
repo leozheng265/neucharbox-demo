@@ -44,7 +44,8 @@ try {
   go.click(); ok(go.disabled && window.__liveCalled, 'live-go disables and calls onLive');
 
   hr('2 access: code (with a note), offline');
-  const acc = view.access({ mode: 'code', note: LIVE_COPY.savedCodeGone }, { onCode: async (c) => (c === 'GOOD' ? null : LIVE_COPY.badCode), onApply: async () => LIVE_COPY.applied, onBack() {} });
+  let applyTries = 0;
+  const acc = view.access({ mode: 'code', note: LIVE_COPY.savedCodeGone }, { onCode: async (c) => (c === 'GOOD' ? null : LIVE_COPY.badCode), onApply: async () => (++applyTries === 1 ? LIVE_COPY.applyRate : LIVE_COPY.applied), onBack() {} });
   const card = $('.card.access:not(.offline)');
   ok($('.intro', card).textContent === LIVE_COPY.accessIntro, 'access intro');
   ok($('.anote', card).textContent === LIVE_COPY.savedCodeGone, 'access note');
@@ -55,12 +56,17 @@ try {
   ok($('form.apply [name=interest]', card).value === 'home', 'interest defaults to home');
   const hp = $('form.apply input[name=website]', card);
   ok(hp.tabIndex === -1 && hp.closest('[aria-hidden=true]') && getComputedStyle(hp.closest('.hp')).left === '-9999px', 'honeypot off-screen');
-  ok($('form.apply .use', card).textContent === LIVE_COPY.applyEmailUse, 'email sentence');
+  ok($('form.apply .use', card).textContent === LIVE_COPY.applyEmailUse && $('form.apply [name=email]', card).getAttribute('aria-describedby') === $('form.apply .use', card).id, 'email sentence tied to the email field');
   ok($('button.back', card).textContent === LIVE_COPY.back, 'back button');
   for (const el of $$('input, select, textarea', card)) ok(parseFloat(getComputedStyle(el).fontSize) >= 16, `16px: ${el.name}`);
   card.querySelector('form.code input').value = 'nope'; card.querySelector('form.code').requestSubmit();
   await wait(30);
   ok($('.err', card).textContent === LIVE_COPY.badCode && !$('.err', card).hidden, 'bad code shows in .err');
+  const af = $('form.apply', card).elements;
+  af.email.value = 'a@b.co'; af.wouldTry.value = 'water the plant'; $('form.apply', card).requestSubmit(); await wait(30);
+  ok($('.err', card).textContent === LIVE_COPY.applyRate && !$('.err', card).hidden && !$('p.applied', card), 'apply error shows in .err');
+  $('form.apply', card).requestSubmit(); await wait(30);
+  ok($('p.applied', card)?.textContent === LIVE_COPY.applied && !$('form.apply', card) && $('.err', card).hidden, 'applied replaces the form');
   view.access({ mode: 'offline' }, { onCode: async () => null, onApply: async () => null, onBack() {} });
   const off = $('.card.access.offline');
   ok($('.intro', off).textContent === LIVE_COPY.offline && $$('.social-link', off).length === 3 && $('.back', off), 'offline card');
@@ -72,19 +78,19 @@ try {
   view.input(false);
   const form = $('#chatForm'), input = $('#chatText');
   ok(form.classList.contains('live') && input.maxLength === 400 && input.placeholder === LIVE_COPY.placeholder(n), 'live input: badge class, cap, placeholder');
-  ok(getComputedStyle(form, '::before').content.includes(innerWidth <= 520 ? 'LIVE' : 'LIVE AI'), 'badge text');
+  ok(getComputedStyle(form, '::before').content === (innerWidth <= 520 ? '"LIVE"' : '"LIVE AI"'), 'badge text');
   ok(input.disabled, 'input off while badge on');
 
   hr('4 planning with a reading');
   view.planning(true); view.reading('the soil sensor');
-  ok($('.msg.planning .ptxt').textContent === LIVE_COPY.reading('the soil sensor'), 'planning reading');
+  ok($('.msg.planning .ptxt').textContent === LIVE_COPY.reading('the soil sensor') && $('.msg.planning .live-badge')?.textContent === 'LIVE AI', 'planning reading + badge');
 
   hr('5 plan card, waiting');
   const steps = [{ id: 's1', text: 'Dim the floor lamp to 20%', devices: ['lamp'] }, { id: 's2', text: 'Close the blinds fully', devices: ['blinds'] }, { id: 's3', text: 'Read the soil sensor; water only if under 30%', devices: ['soil'] }];
   const noop = () => {};
   const waiting = view.planCard({ kind: 'plan', steps }, { onApprove: noop, onDecline: noop });
   const wnode = $$('.card.live-plan').at(-1);
-  ok($('.intro', wnode).textContent === LIVE_COPY.planIntro, 'plan intro');
+  ok($('.intro .itxt', wnode).textContent === LIVE_COPY.planIntro && $('.intro .live-badge', wnode)?.textContent === 'LIVE AI', 'plan intro + badge');
   ok($('.approve', wnode).disabled && $('.decline', wnode).disabled, 'buttons disabled before enable()');
   ok($$('li.lstep', wnode).length === 3, 'plan steps');
   waiting.enable(); ok(!$('.approve', wnode).disabled && !$('.decline', wnode).disabled, 'enable()');
@@ -108,13 +114,14 @@ try {
   ok($('.lstep[data-id=s3] .glyph', rnode).textContent === '○', 'not started');
 
   hr('7 re-plan, merged, declined');
+  run.step('s3', 'running'); run.call({ callId: 'c3', step: 's3', label: 'Soil sensor → reading' });
   const rp = view.planCard({ kind: 'replan', steps: [{ id: 's3', text: 'Leave the pump off if the soil is over 30%', devices: ['pump'] }, { id: 's4', text: 'Tell you what the soil reads', devices: ['soil'] }], reason: 'the soil sensor is not answering.' }, { onApprove: noop, onDecline: noop });
   const rpnode = $$('.card.live-plan.replan').at(-1);
-  ok($('.intro', rpnode).textContent === LIVE_COPY.replanIntro('the soil sensor is not answering.'), 'replan intro');
+  ok($('.intro .itxt', rpnode).textContent === LIVE_COPY.replanIntro('the soil sensor is not answering.') && $('.intro .live-badge', rpnode), 'replan intro + badge');
   rp.enable(); rp.close();
   run.mergeSteps([{ id: 's3', text: 'Leave the pump off if the soil is over 30%', devices: ['pump'] }, { id: 's4', text: 'Tell you what the soil reads', devices: ['soil'] }]);
-  ok($('.lstep[data-id=s3] .txt', rnode).textContent.startsWith('Leave the pump') && $('.lstep[data-id=s3] .glyph', rnode).textContent === '○', 'mergeSteps replaces text in place');
-  ok($('.lstep[data-id=s1] .call', rnode) && $$('.lstep', rnode).length === 4 && $('.lstep[data-id=s4]', rnode).dataset.status === 'pending', 'mergeSteps keeps pills and appends');
+  ok($('.lstep[data-id=s3] .txt', rnode).textContent.startsWith('Leave the pump') && $('.lstep[data-id=s3] .glyph', rnode).textContent === '●' && $('.lstep[data-id=s3]', rnode).dataset.status === 'running', 'mergeSteps replaces text in place, keeps status');
+  ok($('.lstep[data-id=s1] .call', rnode) && $('.lstep[data-id=s3] .call', rnode)?.textContent === 'Soil sensor → reading · …' && $$('.lstep', rnode).length === 4 && $('.lstep[data-id=s4]', rnode).dataset.status === 'pending', 'mergeSteps keeps pills and appends');
   const rp2 = view.planCard({ kind: 'replan', steps: [{ id: 's5', text: 'Water the plant for 10 s', devices: ['pump'] }], reason: 'it is dry' }, { onApprove: noop, onDecline: noop });
   rp2.enable(); rp2.declined();
   const rp2node = $$('.card.live-plan.replan').at(-1);
