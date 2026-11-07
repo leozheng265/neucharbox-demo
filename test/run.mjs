@@ -63,6 +63,8 @@
 //     a DOM): phases, the beat bar, end-card buttons and their labels, the picker, a declined plan in a request and in
 //     a scenario, an end-card button pressed while its request still runs, no ping or pop while quiet, fault lines, the
 //     dashboard strip back to its first tile as a what-if starts and on the faulted device(s) at its end card.
+// 18. (test/live.mjs, --scene live) The live client against the contract mock (test/fixtures/live-mock.mjs): the mock's own
+//     conformance to docs/superpowers/specs/2026-11-07-live-api-contract.md first, then the client's checks.
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
 import { matchPrompt } from '../js/engine/match.js';
@@ -830,7 +832,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const files = readdirSync(new URL('../js/scenes/', import.meta.url)).filter((f) => f.endsWith('.js') && f !== 'index.js');
   const scenes = [];
   for (const f of files) { const { default: scene } = await import(`../js/scenes/${f}`); if (!ONLY || ONLY === scene.id) scenes.push({ scene, f }); }
-  if (ONLY && ONLY !== 'fixture' && !scenes.length) { console.log(`No scene "${ONLY}" (have: fixture, ${files.map((f) => f.replace(/\.js$/, '')).join(', ')})`); process.exit(1); }
+  if (ONLY && !['fixture', 'live'].includes(ONLY) && !scenes.length) { console.log(`No scene "${ONLY}" (have: fixture, ${files.map((f) => f.replace(/\.js$/, '')).join(', ')})`); process.exit(1); }
   for (const { scene, f } of scenes) await sceneChecks(scene, { src: readFileSync(new URL(`../js/scenes/${f}`, import.meta.url), 'utf8'), meta: SCENES.find((m) => m.id === scene.id) || {} });
   let fixture = null;
   if (!ONLY || ONLY === 'fixture') {
@@ -841,6 +843,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // 8. typed-request routing
   if (scenes.length) { const { routingChecks } = await import('./routing.mjs'); routingChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
   if (scenes.length) { const { controlChecks } = await import('./controls.mjs'); controlChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
+  // 18. the live client against the contract mock
+  if (!ONLY || ONLY === 'live') { const { liveChecks } = await import('./live.mjs'); await liveChecks({ report, initialOf, guardHits }); }
   // 7. room builds (and every what-if through update())
   await buildChecks({ scenes: [...scenes.map(({ scene }) => scene), ...(fixture ? [fixture] : [])] });
 
