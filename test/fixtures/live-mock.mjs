@@ -137,7 +137,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     if (kind === 'done') {
       out = { usage: { promptTokens: 1200, completionTokens: 180, calls: run?.calls ?? 0 }, remainingToday: cfg.remaining, ...data };
       sess.active = null; sess.pending = null;
-      if (run && !run.whatif) sess.last = run;
+      if (run && !run.whatif && (data.outcome === 'ok' || data.outcome === 'failed')) sess.last = run; 
     }
     if (kind === 'cannot_do' || kind === 'declined') sess.pending = null;
     const seq = sess.events.length + 1, ev = { seq, kind, data: { ...out, rid } };
@@ -191,7 +191,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       const o = offAnswer(); if (o) return o;
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
       const id = `sess-${++nSession}`;
-      const sess = { id, events: [], streams: new Set(), state: homeState(), clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0 };
+      const sess = { id, events: [], streams: new Set(), state: homeState(), clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() };
       sessions.set(id, sess);
       return json(201, { sessionId: id, state: clone(sess.state), clock: { ...sess.clock }, suggestions: [...SUGGESTIONS] });
     }
@@ -224,7 +224,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       const o = offAnswer(); if (o) return o;
       if (cfg.remaining <= 0) return fail(429, 'code_limit', 'This code has reached its limit for today.');
       cfg.remaining--;
-      const requestId = `r${++sess.nRid}`, name = SCRIPT_PICK.find(([re]) => re.test(text))[1];
+      const requestId = `r${++sess.nRid}`; sess.known.add(requestId); const name = SCRIPT_PICK.find(([re]) => re.test(text))[1];
       sess.run = { rid: requestId, name, text, used: new Set(), steps: [], proposed: null, calls: 0, whatif: false, before: { state: clone(sess.state), clock: { ...sess.clock } } };
       sess.active = requestId; sess.curRid = requestId; sess.pending = null;
       const seg = segmentFor(sess.run, 'request');
@@ -234,8 +234,8 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     if (action === 'whatif') {
       const last = sess.last;
       if (sess.active) return fail(409, 'busy', 'A request is already running.');
-      if (!last) return fail(404, 'no_request', 'There is nothing to replay.');
-      if (rid !== last.rid || !last.steps.length) return fail(409, 'not_waiting', 'That request cannot be replayed.');
+      if (!last && !sess.known.has(rid)) return fail(404, 'no_request', 'There is nothing to replay.');
+      if (!last || rid !== last.rid || !last.steps.length) return fail(409, 'not_waiting', 'That request cannot be replayed.');
       const device = body?.device, extra = scripts[last.name]?.whatif;
       if (typeof device !== 'string' || !extra) return fail(400, 'bad_request', 'Pick a device that can fail.');
       const requestId = `r${++sess.nRid}`;
