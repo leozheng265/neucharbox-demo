@@ -142,7 +142,7 @@ async function mountScene(meta, gen) {
 
   current = { scene, teardown() { flow?.cancel(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   // QA hooks (visual harness): the host's phase, the quiet-replay flag and the recorded choices.
-  window.__ncb = { store, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
+  window.__ncb = { store, panel, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
   await flow.start();
   } catch (e) {
     if (gen === mountGen) current = null;

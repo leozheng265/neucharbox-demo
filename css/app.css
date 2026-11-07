@@ -83,7 +83,7 @@ button { font: inherit; color: inherit; }
 .panel { display: flex; gap: 8px; padding: 8px 0 8px 12px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--line); scrollbar-width: thin; scroll-padding-inline: 12px; }
 /* the strip's end space (gap 8 + 4 = the 12 px start padding): trailing padding isn't scrollable in every engine */
 .panel::after { content: ''; flex: 0 0 4px; }
-.ent { flex: 0 0 auto; display: flex; align-items: center; gap: 9px; min-width: 150px; max-width: 200px; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 7px 8px; background: #fff; font-size: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .3s; }
+.ent { position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 9px; min-width: 150px; max-width: 200px; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 7px 8px; background: #fff; font-size: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .3s; }
 .ent .ico { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #EEF3F2; color: #6E8785; transition: background .25s, color .25s; }
 .ent .ico svg { width: 20px; height: 20px; }
 .ent .txt { min-width: 0; display: flex; flex-direction: column; }
@@ -94,6 +94,22 @@ button { font: inherit; color: inherit; }
 .ent.busy .ico { background: #DCEFFF; color: #1E7FD8; }
 .ent.bad { border-color: var(--red); } .ent.bad .ico { background: #FDE4DF; color: var(--red); } .ent.bad .val { color: var(--red); font-weight: 600; }
 .ent.selected { border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.25); }
+.ent .ctl { display: flex; align-items: center; margin-top: 4px; height: 12px; }
+.ent .ctl[hidden] { display: none; }
+.ent .bar { flex: 1; min-width: 60px; height: 4px; border-radius: 4px; background: #e6eaef; overflow: hidden; }
+.ent .bar > i { display: block; height: 100%; width: 0; border-radius: 4px; background: #0f9d76; transition: width .25s; }
+.ent .sw { position: relative; flex: 0 0 auto; width: 22px; height: 12px; border-radius: 999px; background: #cfd6dd; transition: background .2s; }
+.ent .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.ent .sw.on { background: #0f9d76; } .ent .sw.on::after { transform: translateX(10px); }
+.ent.bad .bar > i, .ent.bad .sw.on { background: var(--red); }
+.ent .badge { display: none; align-self: flex-start; margin-left: auto; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
+.ent.marked-just .badge, .ent.marked-busy .badge { display: inline-block; }
+.ent.marked-just .badge { background: #E7F7F0; color: #1E8F55; }
+.ent.marked-busy .badge { background: #DCEFFF; color: #1E7FD8; }
+.ent.marked-just { border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.22); }
+.ent.marked-busy { border-color: #93c5fd; }
+.ent.bad .badge { display: none; }
+.ent.bad.marked-just, .ent.bad.marked-busy { border-color: var(--red); box-shadow: none; } /* a fault wins */
 .ent.pop { animation: tilepop .7s cubic-bezier(.2,.9,.3,1.4); }
 @keyframes tilepop { 0% { transform: scale(.85); box-shadow: 0 0 0 0 rgba(41,238,229,.6); } 40% { transform: scale(1.06); } 100% { transform: scale(1); box-shadow: 0 0 0 10px rgba(41,238,229,0); } }
 .ent.bad.pop { animation-name: tilepop-bad; } /* a fault pops with a red halo, like its red ring: no cyan beside the red */
@@ -199,6 +215,8 @@ button { font: inherit; color: inherit; }
 @media (max-width: 959px) {
   .room canvas { height: clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)); }
   .ent { max-width: 240px; }
+  .ent .ctl[hidden] { display: flex; visibility: hidden; } /* same tile height with or without a control */
+  .ent .badge { position: absolute; top: -6px; right: 6px; margin: 0; }
   /* No disabled input bar while a request runs or an end card is up (chat.js marks it .off): the conversation gets its
      height, so an end card and its buttons fit on a phone. It is back with the chips, when there is something to type. */
   .chat-input.off { display: none; }
