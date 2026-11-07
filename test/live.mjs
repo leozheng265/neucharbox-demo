@@ -49,7 +49,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       h.checklist = c; return c;
     };
     h.view = {
-      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'failures', 'lost', 'input', 'live'].map((m) => [m, rec('view').bind(null, m)])),
+      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'failures', 'lost', 'input', 'live', 'closeChips'].map((m) => [m, rec('view').bind(null, m)])),
       endCard(...a) { log.push(['view', 'endCard', ...a]); return { close: () => log.push(['end', 'close']) }; },
       planCard(spec, { onApprove, onDecline }) {
         log.push(['view', 'planCard', spec]);
@@ -910,6 +910,11 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     push('timeline', { at: 'Sat 19:00', text: 'Floor lamp → off', ok: false, kind: 'action' });
     await settle();
     eq(t.log.filter((e) => e[0] === 'checklist' && e[1] === 'result').map((e) => [e[2], e[4]]), [['k1', false], ['k2', false], ['k3', true]]);
+    { // JUST SET follows ok: a confirmed result that is not ok (k2) marks nothing, a plain confirmed one (k3) does
+      const at = (id) => t.log.findIndex((e) => e[0] === 'checklist' && e[1] === 'result' && e[2] === id);
+      const just = (from, to) => t.log.slice(from, to).filter((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'lamp' && e[3] === 'just').length;
+      eq(just(at('k1'), at('k3')), 0, 'no JUST SET for k1 / k2'); eq(just(at('k3')), 1, 'JUST SET for k3');
+    }
     eq(t.log.filter((e) => e[0] === 'checklist' && e[1] === 'timeline').map((e) => e[2].ok), [false, false]);
     push('done', { outcome: 'ok' }); await waitFor(() => count(t, 'view', 'endCard') === 1);
     t.live.close();
@@ -922,5 +927,62 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.find('view', 'endCard')[1].onWhatIf(); t.find('view', 'failures')[1]('lamp'); await waitFor(() => count(t, 'view', 'endCard') === 2);
     eq(t.find('view', 'endCard')[0].remainingToday, 0); eq(lastOnes(), 1, 'a what-if spends no request');
     t.live.close();
+  });
+
+  // ---- final review fixes ----
+  const WI_SCRIPTS = (whatif) => ({ ...SCRIPTS, movie: Object.assign([...SCRIPTS.movie], { whatif }) });
+  const CALL = (callId, device, label) => ['call', { step: 's1', callId, device, action: 'set', args: {}, label }];
+  const RES = (callId, device, outcome, text, ok) => ['result', { callId, step: 's1', device, outcome, text, ok }];
+  const statusLines = (t, from = 0) => t.log.slice(from).filter((e) => e[0] === 'ui' && e[1] === 'status').map((e) => [e[2], !!e[3]]);
+
+  for (const how of ['declined', 'cannot_do', 'expired']) {
+    await check(`what-if · an older end card still targets its request after a ${how} request`, async () => {
+      const sts = [], m = createMockLive({ scripts: { ...SCRIPTS, limitCalls: [SCRIPTS.movie[0]] } });
+      const mock = { ...m, fetch: async (u, i) => { const r = await m.fetch(u, i); if (/whatif$/.test(String(u))) sts.push(r.status); return r; } };
+      const t = await harness({ mock, entered: true }), sid = t.live.sessionId; await movie(t);
+      const endA = t.find('view', 'endCard'); eq(endA[0].whatIf, true);
+      if (how === 'declined') { await toPlan(t, MOVIE); await t.card.decline(); }
+      else if (how === 'cannot_do') await t.live.submit('order a pizza');
+      else { await toPlan(t, 'limit please'); m.push(sid, 'expired', { rid: 'r2' }); m.push(sid, 'done', { outcome: 'expired', rid: 'r2' }); }
+      await waitFor(() => t.live.phase === 'idle'); await settle();
+      eq(count(t, 'view', 'endCard'), 1, 'B shows no end card');
+      const from = t.log.length; endA[1].onWhatIf(); t.find('view', 'failures')[1]('lamp');
+      await waitFor(() => count(t, 'view', 'endCard') === 2);
+      const w = postsTo(t.mock, /\/whatif$/); eq(w.length, 1); eq(w[0].path, `sessions/${sid}/requests/r1/whatif`, 'A, not B'); eq(sts, [202]);
+      const run = t.log.slice(from); ok(run.some((e) => e[0] === 'ui' && e[1] === 'resetRoom'), 'the replay starts with room');
+      t.live.close();
+    });
+  }
+
+  await check('status · a failed call and a commanded one keep their label on the status line (red only when not ok)', async () => {
+    const wi = [['step', { id: 's1', status: 'running' }], CALL('c1', 'lamp', 'Floor lamp → 20%'), RES('c1', 'lamp', 'failed', 'not responding', false),
+      CALL('c2', 'lamp', 'Floor lamp → 20% (retry)'), RES('c2', 'lamp', 'failed', 'still not responding', false),
+      CALL('c3', 'pump', 'Water pump → on'), RES('c3', 'pump', 'commanded', 'sent, not confirmed', true), ['done', { outcome: 'ok' }]];
+    const t = await harness({ mock: createMockLive({ scripts: WI_SCRIPTS(wi) }), entered: true }); await movie(t);
+    const from = t.log.length; t.find('view', 'endCard')[1].onWhatIf(); t.find('view', 'failures')[1]('lamp');
+    await waitFor(() => count(t, 'view', 'endCard') === 2); await sleep(100);
+    const lines = statusLines(t, from);
+    for (const want of [['Floor lamp → 20% · not responding', true], ['Floor lamp → 20% (retry) · still not responding', true], ['Water pump → on · sent, not confirmed', false]]) {
+      ok(lines.some((l) => JSON.stringify(l) === JSON.stringify(want)), `status ${JSON.stringify(want)}`);
+    }
+    ok(!t.log.slice(from).some((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'pump' && e[3] === 'just'), 'a commanded result is no JUST SET');
+    t.live.close();
+  });
+
+  await check('chips · closed when a request is submitted and on exit', async () => {
+    const t = await harness({ entered: true }), c0 = count(t, 'view', 'closeChips');
+    await t.live.submit(MOVIE); await waitFor(() => t.card?.enabled); ok(count(t, 'view', 'closeChips') > c0, 'closed on submit');
+    t.live.close();
+    const u = await harness({ entered: true }), d0 = count(u, 'view', 'closeChips'); u.live.exit(); eq(count(u, 'view', 'closeChips'), d0 + 1, 'closed on exit'); u.live.close();
+  });
+
+  await check('planning · on at submit, before the POST answers, once; off on a failed POST', async () => {
+    let t = null, seen = null; const m = createMockLive();
+    const mock = { ...m, fetch: (u, i) => { if (/\/requests$/.test(String(u)) && i?.method === 'POST') seen = t.log.filter((e) => e[0] === 'view' && e[1] === 'planning' && e[2] === true).length; return m.fetch(u, i); } };
+    t = await harness({ mock, entered: true }); await toPlan(t, MOVIE);
+    eq(seen, 1, 'Planning… shown before the POST left'); eq(t.log.filter((e) => e[0] === 'view' && e[1] === 'planning' && e[2] === true).length, 1, 'not turned on twice'); t.live.close();
+    const m2 = createMockLive(), u = await harness({ mock: failOnce(m2, /\/requests$/, jsonAnswer(500, { error: 'internal', message: 'Oops.' })), entered: true });
+    await u.live.submit(MOVIE); await settle();
+    eq(u.log.filter((e) => e[0] === 'view' && e[1] === 'planning').map((e) => e[2]), [true, false], 'on, then off after the failure'); u.live.close();
   });
 }

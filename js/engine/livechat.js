@@ -185,10 +185,12 @@ export function createLiveView({ chat, scene }) {
            <div class="hp" aria-hidden="true"><label>Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label></div>
            <button class="btn primary send" type="submit">Send application</button>
          </form>`;
+    let codeInput = null;
     const node = parse(`<div class="card access${offline ? ' offline' : ''}">${body}${offline ? '' : '<p class="err" role="alert" hidden></p>'}<button class="lnk back" type="button">${esc(LIVE_COPY.back)}</button></div>`);
     node.querySelector('.back').onclick = () => onBack();
     if (!offline) {
       const err = node.querySelector('.err'), codeForm = node.querySelector('form.code'), applyForm = node.querySelector('form.apply');
+      codeInput = codeForm.elements.code;
       const say = (t) => { err.textContent = t || ''; err.hidden = !t; };
       // One answer in flight per form; a rejected handler reads as offline.
       const run = async (form, fn) => {
@@ -204,7 +206,7 @@ export function createLiveView({ chat, scene }) {
       codeForm.onsubmit = async (e) => {
         e.preventDefault();
         const r = await run(codeForm, () => onCode(codeForm.elements.code.value));
-        if (r) say(r);
+        if (r) say(r); else codeInput.value = ''; // the code never stays on the page
       };
       node.querySelector('.apply-open').onclick = (e) => {
         applyForm.hidden = !applyForm.hidden; e.currentTarget.setAttribute('aria-expanded', String(!applyForm.hidden));
@@ -225,6 +227,7 @@ export function createLiveView({ chat, scene }) {
     return {
       close() {
         node.classList.add('done');
+        if (codeInput) codeInput.value = '';
         if (node.contains(document.activeElement)) node.closest('.chat-log')?.focus({ preventScroll: true });
         node.querySelectorAll('button, input, select, textarea').forEach((x) => (x.disabled = true));
       },
@@ -238,6 +241,7 @@ export function createLiveView({ chat, scene }) {
       if (!texts.length) return;
       chat.chips(texts.map((chip) => ({ chip })), (p) => onPick(p.chip), { heading });
     },
+    closeChips: () => chat.closeChips(),
     planning(on) {
       if (on) {
         sayEl = null;
