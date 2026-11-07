@@ -107,7 +107,18 @@ export function createLiveView({ chat, scene }) {
     decline.onclick = () => { if (!decline.disabled) onDecline(); };
     mount(node);
     return {
-      enable() { if (!shut) both(false); },
+      // Approve / Not this go live: scroll the log just far enough that they are in view (the input bar coming back
+      // shrinks the log; a plan taller than the log would otherwise leave them a few pixels below its edge).
+      enable() {
+        if (shut) return;
+        both(false);
+        const reveal = () => {
+          const lg = node.closest('.chat-log'); if (!lg || shut) return;
+          const over = approve.getBoundingClientRect().bottom - lg.getBoundingClientRect().bottom + 8;
+          if (over > 0) lg.scrollTop += over;
+        };
+        reveal(); requestAnimationFrame(reveal);
+      },
       busy() { both(true); },
       declined() { shut = true; both(true); node.classList.add('declined'); decline.classList.add('chosen'); },
       close() { shut = true; both(true); node.classList.add('done'); },
