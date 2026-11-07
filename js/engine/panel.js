@@ -128,7 +128,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     if (!ctl) { el.textContent = ''; el._kind = null; return; }
     if (el._kind !== ctl.kind) { el._kind = ctl.kind; el.innerHTML = ctl.kind === 'bar' ? '<span class="bar"><i></i></span>' : '<span class="sw"></span>'; }
     if (ctl.kind === 'bar') el.querySelector('i').style.width = `${Math.round(ctl.value * 100)}%`;
-    else el.querySelector('.sw').classList.toggle('on', ctl.on);
+    else el.querySelector('.sw').classList.toggle('on', !!ctl.on);
   }
   const markTimers = {};
   // mark(id, 'just' | 'busy' | null): the JUST SET (clears itself after 2 s) and WORKING badges.
