@@ -112,8 +112,9 @@ export function createLiveView({ chat, scene }) {
       enable() {
         if (shut) return;
         both(false);
+        const follow = chat.atEnd?.() !== false; // a visitor who scrolled up (reading an error) is left where they are
         const reveal = () => {
-          const lg = node.closest('.chat-log'); if (!lg || shut) return;
+          const lg = node.closest('.chat-log'); if (!lg || shut || !follow) return;
           const over = approve.getBoundingClientRect().bottom - lg.getBoundingClientRect().bottom + 8;
           if (over > 0) lg.scrollTop += over;
         };

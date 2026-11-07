@@ -82,6 +82,8 @@ export function createChat(root, { onPromptText } = {}) {
   const PLACEHOLDER = 'Or type what you want…';
   return {
     enableInput(on) { setInput(on); },
+    // Read-only: the log is at its end (or on its way there) and the visitor hasn't scrolled up since: the keepEnd rule.
+    atEnd() { return pinned || toEnd; },
     // Live mode hooks (js/engine/livechat.js): the log's own helpers, so live cards scroll and escape like the rest.
     mount(node, opts) { return push(node, opts); },
     esc,
