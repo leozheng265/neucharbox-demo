@@ -24,11 +24,11 @@ export function createChat(root, { onPromptText } = {}) {
   // Input and send button are on or off together; switching off drops any half-typed text, so it can't be sent
   // (or reappear) later. If one of them had keyboard focus, focus stays in the conversation (not back to the page top).
   // The form carries .off while they are: on a phone the bar then gives its height to the conversation (css/app.css).
-  // Coming back, it takes that height from the log: a log at its end stays at its end (a live plan that waits for
-  // Approve with the bar on keeps its buttons in view).
+  // Coming back, it takes that height from the log: a log sent to its end stays at its end, even while a smooth scroll
+  // is still on its way there (a live plan that waits for Approve with the bar on keeps its buttons in view).
   const setInput = (on) => {
     if (!on && form.contains(document.activeElement)) log.focus({ preventScroll: true });
-    const keepEnd = on && form.classList.contains('off') && (pinned || log.scrollHeight - log.scrollTop - log.clientHeight < 2);
+    const keepEnd = on && form.classList.contains('off') && (pinned || toEnd);
     input.disabled = !on; send.disabled = !on; form.classList.toggle('off', !on); if (!on) input.value = '';
     if (keepEnd) log.scrollTop = log.scrollHeight;
   };
@@ -37,8 +37,17 @@ export function createChat(root, { onPromptText } = {}) {
   // Follow new messages only while the visitor is at (or near) the bottom: reading a tall plan and pressing Edit must
   // not snap the log away from the line they changed. Adding a message always scrolls to it.
   let pinned = true;
-  log.addEventListener('scroll', () => { pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 48; }, { passive: true });
-  const scrollDown = (force = false) => requestAnimationFrame(() => { if (force || pinned) { log.scrollTop = log.scrollHeight; pinned = true; } });
+  // toEnd: this code last sent the log to its end (push, scrollDown), and the visitor hasn't scrolled up since. Unlike
+  // `pinned` it holds while a smooth scroll is still on its way down. A log that only got shorter (it clamps, still at
+  // its end) doesn't count as scrolling up.
+  let toEnd = true, lastTop = 0;
+  log.addEventListener('scroll', () => {
+    const fromEnd = log.scrollHeight - log.scrollTop - log.clientHeight;
+    pinned = fromEnd < 48;
+    if (log.scrollTop < lastTop && fromEnd > 2) toEnd = false;
+    lastTop = log.scrollTop;
+  }, { passive: true });
+  const scrollDown = (force = false) => requestAnimationFrame(() => { if (force || pinned) { log.scrollTop = log.scrollHeight; pinned = true; toEnd = true; } });
   // A card taller than the log is shown from its top, so a plan is read from item 1 rather than from its button; a
   // list of chips that doesn't fit below the message that introduces it is shown from that message. A re-plan card
   // follows like a message: what it ends with, "Needs you", stays in view on a phone, and its first lines are a scroll up.
@@ -47,8 +56,8 @@ export function createChat(root, { onPromptText } = {}) {
     if (typingEl) { typingEl.remove(); typingEl = null; }
     log.appendChild(node);
     requestAnimationFrame(() => {
-      if (from && from.isConnected && topIn(node) + node.offsetHeight - topIn(from) > log.clientHeight - 16) { log.scrollTop = topIn(from) - 8; pinned = false; }
-      else { log.scrollTop = log.scrollHeight; pinned = true; }
+      if (from && from.isConnected && topIn(node) + node.offsetHeight - topIn(from) > log.clientHeight - 16) { log.scrollTop = topIn(from) - 8; pinned = false; toEnd = false; }
+      else { log.scrollTop = log.scrollHeight; pinned = true; toEnd = true; }
     });
     return node;
   };
