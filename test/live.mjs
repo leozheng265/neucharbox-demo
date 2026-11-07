@@ -7,6 +7,7 @@ import { createMockLive, MOCK_CODE } from './fixtures/live-mock.mjs';
 import home from '../js/scenes/home.js';
 import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
 import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
+import { createSseParser, openEventStream } from '../js/engine/sse.js';
 
 export { MOCK_CODE };
 const BASE = 'http://mock/live/api/';
@@ -202,5 +203,140 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const m3 = createMockLive(), a3 = apiOf(m3), { sessionId: s3 } = await a3.createSession('home');
     ok(a3.eventsUrl(s3, 4).endsWith(`/live/api/sessions/${s3}/events?after=4`) && !a3.eventsUrl(s3).includes('after'), 'eventsUrl');
     ok(!a3.eventsUrl(s3, 4).includes(MOCK_CODE), 'eventsUrl has no code'); eq(a3.headers().Authorization, `Bearer ${MOCK_CODE}`, 'sse headers');
+  });
+
+  // ---- Task 3: the event stream ----
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // A recorder for openEventStream: events, statuses, and waiters woken by each callback (no polling, no timers).
+  const watch = () => {
+    const w = { events: [], statuses: [], waiters: [] };
+    const wake = () => { w.waiters = w.waiters.filter(([f, r]) => { if (f()) { r(); return false; } return true; }); };
+    w.onEvent = (e) => { w.events.push(e); wake(); };
+    w.onStatus = (s) => { w.statuses.push(s); wake(); };
+    w.until = (f) => (f() ? Promise.resolve() : new Promise((r) => w.waiters.push([f, r])));
+    return w;
+  };
+  // A fetch that counts calls, records when each began and its signal, then hands on to `inner`.
+  const counting = (inner) => {
+    const f = (url, init) => { f.log.push({ at: performance.now(), url: String(url), signal: init?.signal }); return inner(url, init); };
+    f.log = []; return f;
+  };
+  // A hand-made event stream: `script(push, signal)` writes into it; it errors when the signal aborts.
+  const scripted = (script) => (url, init) => {
+    const enc = new TextEncoder();
+    const body = new ReadableStream({ start(c) {
+      const push = (t) => { try { c.enqueue(enc.encode(t)); } catch { /* closed */ } };
+      init.signal.addEventListener('abort', () => { try { c.error(new DOMException('aborted', 'AbortError')); } catch { /* done */ } }, { once: true });
+      script(push, init.signal);
+    } });
+    return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+  };
+  const frame = (id, event, data) => `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  await check('sse · parser: chunk splits, CRLF, multi-line data, comments, bad JSON', () => {
+    const got = [], p = createSseParser((e) => got.push(e));
+    for (const c of ['id: 1\r\nev', 'ent: state\r\ndata: {"path":"lamp.on",', '"value":true,"ms":0}\r\n\r\n', ': ping\n\n',
+                     'id: 2\nevent: say\ndata: {"delta":\ndata: "hi"}\n\n', 'id: 3\nevent: x\ndata: {nope\n\n']) p.push(c);
+    eq(got, [{ id: 1, event: 'state', data: { path: 'lamp.on', value: true, ms: 0 } }, { id: 2, event: 'say', data: { delta: 'hi' } }]);
+    // a CR at the end of a chunk may be half of a CRLF; an event cut off by end() is dropped
+    const g2 = [], p2 = createSseParser((e) => g2.push(e));
+    p2.push('id: 4\revent: a\rdata: {"n":1}\r'); p2.push('\n\r'); p2.push('\n'); p2.push('id: 5\ndata: {"n":2}\n'); p2.end(); p2.push('\n');
+    eq(g2, [{ id: 4, event: 'a', data: { n: 1 } }], 'CR, split CRLF, end() drops a half event');
+  });
+
+  await check('sse · resume after a drop asks ?after=lastId and skips repeats', async () => {
+    const mock = createMockLive(), api = apiOf(mock), { sessionId: sid } = await api.createSession('home');
+    // the second stream starts with a copy of event 5, as a flaky proxy might replay it
+    let nEvents = 0;
+    const f = counting((url, init) => {
+      if (!/\/events/.test(url) || ++nEvents < 2) return mock.fetch(url, init);
+      return mock.fetch(url, init).then((res) => {
+        const enc = new TextEncoder(), reader = res.body.getReader();
+        const body = new ReadableStream({ async start(c) {
+          c.enqueue(enc.encode(frame(5, 'say', { delta: 'e5', rid: 'r1' })));
+          for (;;) { const r = await reader.read().catch(() => ({ done: true })); if (r.done) return c.close(); c.enqueue(r.value); }
+        } });
+        return new Response(body, { status: 200, headers: res.headers });
+      });
+    });
+    const w = watch(), es = openEventStream({ api, sessionId: sid, fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+    await w.until(() => w.statuses.includes('open'));
+    for (let i = 1; i <= 5; i++) mock.push(sid, 'say', { delta: `e${i}`, rid: 'r1' });
+    await w.until(() => w.events.length === 5); eq(es.lastId, 5, 'lastId');
+    const t0 = performance.now(); mock.drop(sid);
+    await w.until(() => w.statuses.filter((s) => s === 'open').length === 2);
+    eq(w.statuses, ['open', 'retrying', 'open']);
+    eq(Math.round(performance.now() - t0), 500, 'first backoff');
+    const gets = mock.calls.filter((c) => c.path.endsWith('/events'));
+    eq(gets.map((c) => c.query.after ?? null), [null, '5'], 'resume asks ?after=5');
+    mock.push(sid, 'say', { delta: 'e6', rid: 'r1' });
+    await w.until(() => w.events.length === 6);
+    eq(w.events.map((e) => e.id), [1, 2, 3, 4, 5, 6], 'no event twice');
+    // a second drop: opening reset the backoff, so the wait is 500 ms again, not 1000
+    const t1 = performance.now(); mock.drop(sid);
+    await w.until(() => w.statuses.filter((s) => s === 'open').length === 3); eq(Math.round(performance.now() - t1), 500, 'backoff reset by open');
+    eq(gets[0].headers.accept, 'text/event-stream'); eq(gets[0].headers.authorization, `Bearer ${MOCK_CODE}`, 'auth header');
+    ok(!f.log.some((c) => c.url.includes(MOCK_CODE)), 'no code in a url');
+    es.close();
+  });
+
+  await check('sse · 404 → gone, 401 → unauthorized, backoff used up → lost, HTML 200 → lost, close() is silent', async () => {
+    // 404: the session expired under the stream
+    { const mock = createMockLive(), api = apiOf(mock), { sessionId: sid } = await api.createSession('home'), f = counting(mock.fetch), w = watch();
+      const es = openEventStream({ api, sessionId: sid, fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await w.until(() => w.statuses.includes('open')); mock.expire(sid);
+      await w.until(() => w.statuses.includes('gone')); await sleep(30000);
+      eq(w.statuses, ['open', 'retrying', 'gone'], '404 statuses'); eq(f.log.length, 2, 'no GET after gone'); es.close(); }
+    // 401: the code stopped working
+    { const mock = createMockLive(), api = apiOf(mock), { sessionId: sid } = await api.createSession('home'), f = counting(mock.fetch), w = watch();
+      const es = openEventStream({ api, sessionId: sid, fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await w.until(() => w.statuses.includes('open')); mock.set({ code: 'NCB-OTHR-CODE' }); mock.drop(sid);
+      await w.until(() => w.statuses.includes('unauthorized')); await sleep(30000);
+      eq(w.statuses, ['open', 'retrying', 'unauthorized'], '401 statuses'); eq(f.log.length, 2, 'no GET after unauthorized'); es.close(); }
+    // the server is down: first attempt + five retries, at 0, 500, 1500, 3500, 7500, 15500 ms
+    { const mock = createMockLive({ mode: 'down' }), api = apiOf(mock), f = counting(mock.fetch), w = watch(), t0 = performance.now();
+      const es = openEventStream({ api, sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await w.until(() => w.statuses.includes('lost')); await sleep(60000);
+      eq(w.statuses, ['retrying', 'retrying', 'retrying', 'retrying', 'retrying', 'lost'], 'down statuses');
+      eq(f.log.map((c) => Math.round(c.at - t0)), [0, 500, 1500, 3500, 7500, 15500], 'six GETs on the backoff'); es.close(); }
+    // an HTML 200 (interstitial, captive portal) is a failed attempt, never "open"
+    { const mock = createMockLive({ mode: 'html' }), api = apiOf(mock), f = counting(mock.fetch), w = watch();
+      const es = openEventStream({ api, sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await w.until(() => w.statuses.includes('lost')); await sleep(60000);
+      ok(!w.statuses.includes('open'), 'html never opens'); eq(w.statuses.at(-1), 'lost'); eq(f.log.length, 6, 'html: six GETs'); es.close(); }
+    // a 5xx is retried too
+    { const w = watch(), f = counting(() => Promise.resolve(new Response('{}', { status: 502, headers: { 'content-type': 'application/json' } })));
+      const es = openEventStream({ api: apiOf(createMockLive()), sessionId: 's', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus, backoff: [10, 10] });
+      await w.until(() => w.statuses.includes('lost')); eq(w.statuses, ['retrying', 'retrying', 'lost'], '502'); eq(f.log.length, 3); es.close(); }
+    // close() while retrying: silence, no further GET
+    { const mock = createMockLive({ mode: 'down' }), api = apiOf(mock), f = counting(mock.fetch), w = watch();
+      const es = openEventStream({ api, sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await w.until(() => w.statuses.includes('retrying')); es.close(); await sleep(60000);
+      eq(w.statuses, ['retrying'], 'silent after close'); eq(f.log.length, 1, 'no GET after close'); }
+    // close() with a fetch in flight aborts its signal; one with an open stream does too, and no callback follows
+    { const w = watch(), f = counting(() => new Promise(() => {}));
+      const es = openEventStream({ api: apiOf(createMockLive()), sessionId: 's', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await sleep(10); ok(!f.log[0].signal.aborted); es.close(); ok(f.log[0].signal.aborted, 'pending fetch aborted'); await sleep(60000); eq(w.statuses, []); eq(f.log.length, 1); }
+    { const mock = createMockLive(), api = apiOf(mock), { sessionId: sid } = await api.createSession('home'), f = counting(mock.fetch), w = watch();
+      const es = openEventStream({ api, sessionId: sid, fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await w.until(() => w.statuses.includes('open')); es.close(); mock.push(sid, 'say', { delta: 'late', rid: 'r1' }); await sleep(60000);
+      ok(f.log[0].signal.aborted, 'open stream aborted'); eq(w.events.length, 0, 'no event after close'); eq(w.statuses, ['open']); eq(f.log.length, 1); }
+  });
+
+  await check('sse · 45 s with no bytes (no ping) → reconnect', async () => {
+    // one event, then silence: aborted at 45 s, 'retrying', then a GET with ?after=1
+    { const w = watch(), t0 = performance.now(); let abortedAt = null;
+      const f = counting(scripted((push, signal) => { signal.addEventListener('abort', () => { abortedAt ??= performance.now() - t0; }); if (f.log.length === 1) push(frame(1, 'say', { delta: 'a', rid: 'r1' })); }));
+      const es = openEventStream({ api: apiOf(createMockLive()), sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await w.until(() => f.log.length === 2);
+      eq(Math.round(abortedAt), 45000, 'aborted at 45 s'); eq(w.statuses.slice(0, 2), ['open', 'retrying']);
+      ok(f.log[1].url.endsWith('events?after=1'), `resume url ${f.log[1].url}`); eq(Math.round(f.log[1].at - t0), 45500, 'then the 500 ms backoff');
+      es.close(); }
+    // a ping every 15 s keeps it open for two minutes
+    { const w = watch(); let iv;
+      const f = counting(scripted((push, signal) => { iv = setInterval(() => push(': ping\n\n'), 15000); signal.addEventListener('abort', () => clearInterval(iv)); }));
+      const es = openEventStream({ api: apiOf(createMockLive()), sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
+      await sleep(120000); eq(f.log.length, 1, 'one GET in 120 s'); ok(!f.log[0].signal.aborted, 'never aborted'); eq(w.statuses, ['open']);
+      es.close(); clearInterval(iv); }
   });
 }
