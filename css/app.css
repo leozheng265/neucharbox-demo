@@ -86,7 +86,7 @@ button { font: inherit; color: inherit; }
 .ent { position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 9px; min-width: 150px; max-width: 200px; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 7px 8px; background: #fff; font-size: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .3s; }
 .ent .ico { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #EEF3F2; color: #6E8785; transition: background .25s, color .25s; }
 .ent .ico svg { width: 20px; height: 20px; }
-.ent .txt { min-width: 0; display: flex; flex-direction: column; }
+.ent .txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; } /* the whole text column: every bar spans it */
 .ent b { font-size: 12px; font-weight: 650; color: var(--ink); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ent .val { color: var(--ink-2); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ent.offline { opacity: .5; } .ent.offline .ico { background: #F1F3F3; color: #B4BDBC; }
@@ -102,7 +102,9 @@ button { font: inherit; color: inherit; }
 .ent .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: #fff; transition: transform .2s; }
 .ent .sw.on { background: #0f9d76; } .ent .sw.on::after { transform: translateX(10px); }
 .ent.bad .bar > i, .ent.bad .sw.on { background: var(--red); }
-.ent .badge { display: none; align-self: flex-start; margin-left: auto; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
+.ent.bad .bar, .ent.bad .sw { background: #F3C4B8; } /* a fault turns the control red at 0 % or off too */
+/* over the tile's top-right corner, out of the flow: a marked tile keeps its size (no value pushed onto a second line) */
+.ent .badge { display: none; position: absolute; top: -7px; right: 6px; font-size: 9.5px; line-height: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
 .ent.marked-just .badge, .ent.marked-busy .badge { display: inline-block; }
 .ent.marked-just .badge { background: #E7F7F0; color: #17744A; }
 .ent.marked-busy .badge { background: #DCEFFF; color: #1667B3; }
@@ -216,7 +218,12 @@ button { font: inherit; color: inherit; }
   .room canvas { height: clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)); }
   .ent { max-width: 240px; }
   .ent .ctl[hidden] { display: flex; visibility: hidden; } /* same tile height with or without a control */
-  .ent .badge { position: absolute; top: -6px; right: 6px; margin: 0; }
+  /* A slimmer strip, so the control row costs 1 px, not 13: at 360 x 640 an end card shown from its top keeps its
+     buttons in view. (The strip's 6 px still holds a badge, which sits 6 px over its tile's top edge.) */
+  .panel { padding-top: 6px; padding-bottom: 6px; }
+  .ent { padding-top: 5px; padding-bottom: 5px; }
+  .ent .ctl { margin-top: 2px; height: 10px; }
+  .ent .sw { width: 18px; height: 10px; } .ent .sw::after { width: 6px; height: 6px; } .ent .sw.on::after { transform: translateX(8px); }
   /* No disabled input bar while a request runs or an end card is up (chat.js marks it .off): the conversation gets its
      height, so an end card and its buttons fit on a phone. It is back with the chips, when there is something to type. */
   .chat-input.off { display: none; }
