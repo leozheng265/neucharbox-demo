@@ -9,6 +9,8 @@ import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
 import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
 import { createSseParser, openEventStream } from '../js/engine/sse.js';
 import { createLive, codeStore, normalizeCode, LIVE_COPY } from '../js/engine/live.js';
+import { FRESH_START } from '../js/engine/flow.js';
+import { REPLAYING } from '../js/engine/whatif.js';
 
 export { MOCK_CODE };
 const BASE = 'http://mock/live/api/';
@@ -236,9 +238,13 @@ export async function liveChecks({ report, initialOf, guardHits }) {
   const frame = (id, event, data) => `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
   await check('sse · parser: chunk splits, CRLF, multi-line data, comments, bad JSON', () => {
-    const got = [], p = createSseParser((e) => got.push(e));
-    for (const c of ['id: 1\r\nev', 'ent: state\r\ndata: {"path":"lamp.on",', '"value":true,"ms":0}\r\n\r\n', ': ping\n\n',
-                     'id: 2\nevent: say\ndata: {"delta":\ndata: "hi"}\n\n', 'id: 3\nevent: x\ndata: {nope\n\n']) p.push(c);
+    const got = [], p = createSseParser((e) => got.push(e)), warns = [], warn = console.warn;
+    console.warn = (...a) => warns.push(a); // the bad JSON warns on purpose: keep it out of the test output, and count it
+    try {
+      for (const c of ['id: 1\r\nev', 'ent: state\r\ndata: {"path":"lamp.on",', '"value":true,"ms":0}\r\n\r\n', ': ping\n\n',
+                       'id: 2\nevent: say\ndata: {"delta":\ndata: "hi"}\n\n', 'id: 3\nevent: x\ndata: {nope\n\n']) p.push(c);
+    } finally { console.warn = warn; }
+    eq(warns.length, 1, 'one warning, for the bad JSON');
     eq(got, [{ id: 1, event: 'state', data: { path: 'lamp.on', value: true, ms: 0 } }, { id: 2, event: 'say', data: { delta: 'hi' } }]);
     // a CR at the end of a chunk may be half of a CRLF; an event cut off by end() is dropped
     const g2 = [], p2 = createSseParser((e) => g2.push(e));
@@ -442,9 +448,9 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(t.store.get('pump.running'), base.pump.running, 'untouched device back to baseline'); eq(t.store.get('env.hour'), 20);
     eq(marks() - m0, 6, 'panel.mark(id, null) for all six'); eq(statuses(), s0, 'the instant clock leaves the status line alone');
     eq(t.log.filter((e) => e[1] === 'resetRoom').length - r0, 1, 'ui.resetRoom once');
-    // a clock event tweens env.hour and shows its label
+    // a clock event outside the current request is ignored (the rid filter, Task 5; the weekend check covers clock events)
     t.mock.push(sid, 'clock', { iso: '2026-11-13T21:00:00', label: 'Fri 21:00', hour: 21 });
-    await waitFor(() => t.store.get('env.hour') === 21); eq(t.find('ui', 'status')[0], 'Fri 21:00');
+    await sleep(100); eq(t.store.get('env.hour'), 20, 'clock of no current request'); eq(statuses(), s0, 'and no status line');
     t.live.close();
   });
 
@@ -471,9 +477,298 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const t = await harness({ entered: true }), sid = t.live.sessionId, n0 = t.log.length;
     t.live.close(); t.mock.push(sid, 'room', { state: { lamp: { brightness: 0.7 } }, clock: { iso: 'x', label: 'x', hour: 3 } }); await sleep(2000);
     eq(t.log.length, n0, 'nothing logged after close'); ok(t.store.get('lamp.brightness') !== 0.7);
-    const u = await harness({ entered: true }); u.ui.kill(); const m = u.log.length; u.mock.push(u.live.sessionId, 'clock', { iso: 'x', label: 'x', hour: 3 }); await sleep(2000);
-    eq(u.log.length, m, 'nothing after ui.alive() false'); u.live.close();
+    // a room event (no rid filter applies to it), so the silence below comes from the ui / exit guards
+    const u = await harness({ entered: true }); u.ui.kill(); const m = u.log.length; u.mock.push(u.live.sessionId, 'room', { state: { lamp: { brightness: 0.7 } }, clock: { iso: 'x', label: 'x', hour: 3 } }); await sleep(2000);
+    eq(u.log.length, m, 'nothing after ui.alive() false'); ok(u.store.get('lamp.brightness') !== 0.7, 'room untouched after ui death'); u.live.close();
     const e = await harness({ entered: true }), esid = e.live.sessionId; e.live.exit('Back'); eq(e.find('ui', 'offerGuided')[0], 'Back'); eq(e.live.active, false); ok(e.has('view', 'live', false)); ok(e.has('ui', 'track', false));
-    const m2 = e.log.length; e.mock.push(esid, 'clock', { iso: 'x', label: 'x', hour: 4 }); await sleep(2000); eq(e.log.length, m2, 'silent after exit');
+    const m2 = e.log.length; e.mock.push(esid, 'room', { state: { lamp: { brightness: 0.7 } }, clock: { iso: 'x', label: 'x', hour: 4 } }); await sleep(2000); eq(e.log.length, m2, 'silent after exit'); ok(e.store.get('lamp.brightness') !== 0.7, 'room untouched after exit');
+  });
+
+  // ---- Task 5: controller part 2 (requests, the event stream, what-ifs, limits) ----
+  const MOVIE = 'Movie night, but keep an eye on the plant', WATER = 'Water the plant if it needs it';
+  const settle = () => sleep(1); // every event already on its way lands first
+  const count = (t, source, method) => t.log.filter((e) => e[0] === source && e[1] === method).length;
+  const postsTo = (m, re) => m.calls.filter((c) => c.method === 'POST' && re.test(c.path));
+  const lastInput = (t) => t.log.filter((e) => e[0] === 'view' && e[1] === 'input').at(-1)?.[2];
+  const statusesFrom = (t, i) => t.log.slice(i).filter((e) => e[0] === 'ui' && e[1] === 'status').map((e) => e[2]);
+  // The kinds of every event the mock holds for a session: a fresh GET from the start, read until it goes quiet.
+  const streamKinds = async (m, sid) => {
+    const r = await m.fetch(`${BASE}sessions/${sid}/events`, { headers: { authorization: `Bearer ${MOCK_CODE}` } });
+    const rd = r.body.getReader(), dec = new TextDecoder(); let b = '';
+    for (;;) { const x = await Promise.race([rd.read(), new Promise((res) => setTimeout(() => res({ done: true }), 5))]); if (x.done) break; b += dec.decode(x.value); }
+    await rd.cancel(); return [...b.matchAll(/event: (\w+)/g)].map((a) => a[1]);
+  };
+  // A request up to its plan card, waiting for approval (the card enabled).
+  const toPlan = async (t, text) => { const n = count(t, 'view', 'planCard'); await t.live.submit(text); await waitFor(() => count(t, 'view', 'planCard') > n && t.card.enabled); };
+  // The movie request run to its end card, its tweens (the blinds take 3 s) settled.
+  const movie = async (t) => { const n = count(t, 'view', 'endCard'); await toPlan(t, MOVIE); await t.card.approve(); await waitFor(() => count(t, 'view', 'endCard') > n); await sleep(3100); };
+
+  await check('run · plan → approve → state → done', async () => {
+    const t = await harness({ entered: true }); await t.live.submit(MOVIE);
+    await t.until('view', 'planCard'); await settle(); ok(t.has('view', 'planning', true) && t.has('panel', 'mark', 'soil', 'busy'), 'planning (sent before the POST answered) and the soil read');
+    ok(t.has('view', 'user', MOVIE)); ok(t.has('view', 'reading', 'the soil sensor'), 'the planning bubble reads the soil sensor');
+    ok(t.log.slice(0, t.order('view', 'planCard')).some((e) => e[0] === 'panel' && e[1] === 'reveal' && JSON.stringify(e[2]) === '["soil"]'), 'reading reveals the card (the planning-time read has no call)');
+    eq(t.find('view', 'planCard')[0], { kind: 'plan', steps: [
+      { id: 's1', text: 'Dim the floor lamp to 20%', devices: ['lamp'] }, { id: 's2', text: 'Close the blinds fully', devices: ['blinds'] },
+      { id: 's3', text: 'Read the soil sensor; water only if under 30%', devices: ['soil', 'pump'] }] });
+    eq(t.card.enabled, true); eq(t.live.phase, 'awaiting'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusApproval); eq(lastInput(t), true, 'input on while the plan waits');
+    await t.card.approve();
+    await t.until('view', 'endCard'); await sleep(3100); // the blinds tween over 3 s
+    eq(t.mock.calls.filter((c) => c.path.endsWith('/approve')).length, 1);
+    eq(t.store.get('lamp.brightness'), 0.2); eq(t.store.get('blinds.closed'), 1);
+    eq(t.checklist.steps, { s1: 'done', s2: 'done', s3: 'done' });
+    eq(t.checklist.pills.c1, 'Floor lamp → 20% · confirmed'); eq(t.checklist.pills.c3, 'Soil sensor → reading · 34%');
+    ok(t.order('panel', 'mark', 'lamp', 'busy') < t.order('panel', 'mark', 'lamp', 'just'), 'lamp WORKING, then JUST SET');
+    const run = t.log.slice(t.order('view', 'planCard'));
+    const soil = run.filter((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'soil').map((e) => e[3]);
+    eq(soil.slice(0, 4), ['busy', null, 'busy', null], 'the running read: reading, then call (WORKING until its result)');
+    ok(t.has('panel', 'reveal', ['soil']), 'a read changes no value, so only reveal brings its card into view');
+    ok(!run.some((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'blinds' && e[3] === null), 'done clears busy marks only: the blinds\' JUST SET runs out by itself');
+    eq(t.find('view', 'summary')[0].length > 0, true); eq(t.find('view', 'endCard')[0].remainingToday, 19);
+    eq(t.find('view', 'endCard')[0], { remainingToday: 19, whatIfLabel: LIVE_COPY.whatIf, whatIf: true });
+    eq(t.find('ui', 'beats')[0].current, 'end'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusDone(19));
+    ok(t.has('checklist', 'done')); ok(t.has('ui', 'track', true)); eq(t.find('ui', 'track')[0], false, 'track off at done');
+    eq(t.live.phase, 'idle'); eq(lastInput(t), true); ok(!t.has('view', 'ncb', LIVE_COPY.lastOne));
+    t.live.close();
+  });
+
+  await check('run · decline → nothing changed, declined copy, input back', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, MOVIE);
+    const before = t.store.snapshot(); await t.card.decline(); await waitFor(() => t.live.phase === 'idle'); await settle();
+    eq(t.store.snapshot(), before, 'room unchanged'); ok(t.has('view', 'ncb', LIVE_COPY.declined), 'declined copy'); ok(t.has('card', 'declined', 'plan'));
+    eq(count(t, 'view', 'endCard'), 0, 'no end card'); eq(postsTo(t.mock, /\/decline$/).length, 1);
+    eq(lastInput(t), true, 'view.input(true) last'); eq(t.find('ui', 'beats')[0].current, 'ask'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusWaiting(6));
+    t.live.close();
+  });
+
+  await check('run · re-plan card → approve → known id replaced, new id added, stepless pill on its own row', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, WATER); await t.card.approve();
+    await waitFor(() => t.find('view', 'planCard')[0].kind === 'replan' && t.card.enabled);
+    const spec = t.find('view', 'planCard')[0];
+    eq(spec.reason, 'the soil reads 28%, under the 30% you asked for'); eq(LIVE_COPY.replanIntro(spec.reason), 'I need to change the plan: the soil reads 28%, under the 30% you asked for.');
+    eq(spec.steps.map((s) => s.id), ['s2', 's3']); eq(t.live.phase, 'awaiting'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusApproval);
+    await t.card.approve(); await waitFor(() => count(t, 'view', 'endCard') === 1); await settle();
+    eq(postsTo(t.mock, /\/approve$/).length, 2, 'a second /approve'); ok(t.has('card', 'close', 'replan'), 're-plan card closed');
+    eq(Object.entries(t.checklist.texts), [['s1', 'Read the soil sensor'], ['s2', 'Water the plant for 6 seconds'], ['s3', 'Read the soil sensor again']]);
+    eq(t.checklist.steps, { s1: 'done', s2: 'done', s3: 'done' });
+    eq(t.checklist.loose, ['c3']); eq(t.checklist.pills.c3, 'Water pump → off · made safe');
+    const r3 = t.order('checklist', 'result', 'c3');
+    ok(r3 >= 0 && t.log.slice(r3).some((e) => e[0] === 'panel' && e[1] === 'mark' && e[2] === 'pump' && e[3] === 'just'), 'pump JUST SET after the made-safe result');
+    eq(t.store.get('pump.running'), false); eq(count(t, 'card', 'toChecklist'), 1);
+    t.live.close();
+    // declining the re-plan instead: no event comes, the controller marks the card, the run goes on
+    const u = await harness({ entered: true }); await toPlan(u, WATER); await u.card.approve();
+    await waitFor(() => u.find('view', 'planCard')[0].kind === 'replan' && u.card.enabled);
+    const phases = [], summary = u.view.summary; u.view.summary = (x) => { phases.push(u.live.phase); summary(x); };
+    await u.card.decline(); await waitFor(() => count(u, 'view', 'endCard') === 1);
+    eq(postsTo(u.mock, /\/decline$/).length, 1); ok(!(await streamKinds(u.mock, u.live.sessionId)).includes('declined'), 'no declined event in the stream');
+    ok(!u.has('view', 'ncb', LIVE_COPY.declined), 'no declined copy'); ok(u.has('card', 'declined', 'replan'), 'the controller marks the card itself');
+    eq(phases, ['running'], 'running until done'); ok(!u.log.some((e) => e[0] === 'checklist' && e[1] === 'call' && /pump/i.test(e[4])), 'no pump call');
+    eq(u.find('view', 'endCard')[0].whatIf, true);
+    u.live.close();
+  });
+
+  await check('run · what-if on the lamp replays, faults, recovers', async () => {
+    const t = await harness({ entered: true }); await movie(t); const sid = t.live.sessionId;
+    t.find('view', 'endCard')[1].onWhatIf();
+    const [list, pick] = t.find('view', 'failures');
+    eq(list.length, 6); eq(list[0], { key: 'lamp', icon: 'lamp', name: 'Floor lamp' }); eq(list.map((d) => d.key), ['lamp', 'blinds', 'soil', 'pump', 'camera', 'thermostat']);
+    const notes = []; t.store.subscribe((s, path, v) => { if (path === 'lamp.status' && v === 'fault') notes.push(s.lamp.faultNote); });
+    const from = t.log.length; pick('lamp');
+    await waitFor(() => count(t, 'view', 'endCard') === 2); await sleep(3100);
+    const run = t.log.slice(from);
+    eq(run.find((e) => e[0] === 'view' && e[1] === 'user')?.[2], 'What if the floor lamp fails?');
+    const w = postsTo(t.mock, /\/whatif$/); eq(w.length, 1); eq(w[0].path, `sessions/${sid}/requests/r1/whatif`); eq(w[0].body, { device: 'lamp' });
+    ok(run.some((e) => e[0] === 'ui' && e[1] === 'rewind'), 'strip rewound'); eq(statusesFrom(t, from)[0], REPLAYING);
+    ok(run.some((e) => e[0] === 'ui' && e[1] === 'resetRoom'), 'room event applied'); eq(t.store.get('lamp.brightness'), 0, 'the room before the movie request');
+    eq(run.find((e) => e[0] === 'view' && e[1] === 'checklist')?.[3], { replay: true }); ok(!run.some((e) => e[0] === 'view' && e[1] === 'planCard'), 'no plan card');
+    eq(t.store.get('lamp.status'), 'fault'); ok(t.has('ui', 'beats', { current: 'recover', recoverHidden: false, skippable: [] }), 'recover beat');
+    eq(notes, ['not responding'], 'the server text is the fault note before the status turns fault');
+    eq(t.checklist.steps, { s1: 'failed', s2: 'done', s3: 'pending' });
+    const end = t.find('view', 'endCard'); eq(end[0], { remainingToday: 19, whatIfLabel: LIVE_COPY.anotherFailure, whatIf: true });
+    eq(t.find('ui', 'beats')[0], { current: 'end', recoverHidden: false, skippable: [] });
+    // "Try another failure": the movie request's rid again, not the what-if's
+    end[1].onWhatIf(); t.find('view', 'failures')[1]('pump');
+    await waitFor(() => count(t, 'view', 'endCard') === 3);
+    const w2 = postsTo(t.mock, /\/whatif$/); eq(w2.length, 2); eq(w2[1].path, `sessions/${sid}/requests/r1/whatif`); eq(w2[1].body, { device: 'pump' });
+    ok(t.has('view', 'user', 'What if the water pump fails?'));
+    t.live.close();
+  });
+
+  await check('run · limit: 429 code_limit → guided; 429 budget / 503 live_off → guided; limit{calls} mid-run → limitRun + end card without what-if', async () => {
+    { const t = await harness({ entered: true }); t.mock.set({ remaining: 0 }); await t.live.submit(MOVIE);
+      eq(t.find('view', 'ncb')[0], LIVE_COPY.limitCode); ok(t.has('ui', 'offerGuided'), 'guided'); eq(t.live.active, false); ok(t.has('view', 'live', false)); eq(t.live.phase, 'off'); }
+    for (const [off, line] of [['budget', LIVE_COPY.limitGlobal], ['live_off', LIVE_COPY.offline]]) {
+      const t = await harness({ entered: true }); eq(t.live.available, true, `${off}: available before`); t.mock.set({ off }); await t.live.submit(MOVIE);
+      eq(t.find('view', 'ncb')[0], line, off); ok(t.has('ui', 'offerGuided'), `${off}: guided`); eq(t.live.active, false, off); ok(t.has('view', 'live', false)); eq(t.live.available, false, `${off}: available after`);
+    }
+    // a run cut off by its limit: limitRun, then the end card without the what-if
+    { const t = await harness({ entered: true }); await toPlan(t, 'push it to the limit'); await t.card.approve();
+      await waitFor(() => count(t, 'view', 'endCard') === 1);
+      ok(t.has('view', 'ncb', LIVE_COPY.limitRun)); eq(t.find('view', 'endCard')[0], { remainingToday: 19, whatIfLabel: LIVE_COPY.whatIf, whatIf: false });
+      eq(t.live.active, true); eq(t.live.phase, 'idle'); t.find('view', 'endCard')[1].onWhatIf(); eq(count(t, 'view', 'failures'), 0, 'no what-if target after a limit'); t.live.close(); }
+    // the kill switch mid-run: limitGlobal, then guided once done arrives
+    { const t = await harness({ entered: true }); await toPlan(t, MOVIE); const sid = t.live.sessionId;
+      t.mock.push(sid, 'limit', { kind: 'budget', rid: 'r1' }); await settle();
+      ok(t.has('view', 'ncb', LIVE_COPY.limitGlobal)); eq(t.live.active, true, 'live until done');
+      t.mock.push(sid, 'done', { outcome: 'limit', rid: 'r1' }); await waitFor(() => !t.live.active);
+      ok(t.has('ui', 'offerGuided')); eq(count(t, 'view', 'endCard'), 0, 'no end card'); eq(t.live.available, false); }
+  });
+
+  await check('run · server offline mid-run → lost card, reconnect resumes from lastId', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, MOVIE); const sid = t.live.sessionId;
+    t.mock.set({ mode: 'down' }); t.mock.drop(sid);
+    await waitFor(() => t.has('view', 'lost')); eq(t.live.phase, 'awaiting');
+    const [reconnect] = t.find('view', 'lost'); t.mock.set({ mode: 'json' });
+    const gets = eventGets(t.mock).length; reconnect();
+    await waitFor(() => eventGets(t.mock).length > gets); eq(eventGets(t.mock).at(-1).query.after, '4', 'resumes after the last id seen');
+    await settle(); await t.card.approve(); await waitFor(() => count(t, 'view', 'endCard') === 1);
+    eq(t.checklist.steps, { s1: 'done', s2: 'done', s3: 'done' }); eq(t.live.phase, 'idle');
+    t.live.close();
+  });
+
+  await check('run · cannot_do → reason + suggestion chips, no plan card', async () => {
+    const t = await harness({ entered: true }), chips0 = count(t, 'view', 'chips');
+    await t.live.submit('order a pizza'); await waitFor(() => t.live.phase === 'idle'); await settle();
+    ok(t.has('view', 'ncb', 'I can’t order food from here, only control the devices in this home.'), 'the reason as sent');
+    eq(count(t, 'view', 'chips'), chips0 + 1); const [texts, pick] = t.find('view', 'chips');
+    eq(texts, ['Movie night, but keep an eye on the plant', "I'm away for the weekend"]);
+    eq(count(t, 'view', 'planCard'), 0, 'no plan card'); ok(t.order('view', 'planning', true) < t.order('view', 'planning', false), 'planning bubble off');
+    eq(count(t, 'view', 'endCard'), 0); eq(t.find('ui', 'beats')[0].current, 'ask'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusWaiting(6)); eq(lastInput(t), true);
+    pick(texts[0]); await waitFor(() => postsTo(t.mock, /\/requests$/).length === 2); eq(postsTo(t.mock, /\/requests$/)[1].body, { text: texts[0] }, 'a chip starts a request');
+    t.live.close();
+  });
+
+  await check('run · weekend: clock tweens env.hour, status shows label, timeline rows incl. 📩 notify', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, "I'm away for the weekend");
+    const tw = [], tween = t.store.tween; t.store.tween = (p, v, ms, e) => { if (p === 'env.hour') tw.push([v, ms]); return tween(p, v, ms, e); };
+    await sleep(1000); const from = t.log.length;
+    await t.card.approve(); await waitFor(() => count(t, 'view', 'endCard') === 1); await sleep(900);
+    eq(t.store.get('env.hour'), 64.5, 'Sun 16:30');
+    eq(tw[0], [18, 800], 'the first clock tweens over the gap, at most 800 ms'); eq(tw.slice(1), [[22.5, 0], [31.17, 0], [42, 0], [57, 0], [64.5, 0]], 'clocks in one burst jump');
+    eq(statusesFrom(t, from).filter((s) => /^(Fri|Sat|Sun) \d\d:\d\d$/.test(s)), ['Fri 18:00', 'Fri 22:30', 'Sat 07:10', 'Sat 18:00', 'Sun 09:00', 'Sun 16:30']);
+    const rows = t.log.filter((e) => e[0] === 'checklist' && e[1] === 'timeline').map((e) => e[2]);
+    eq(rows.map((r) => r.kind), ['action', 'action', 'notify', 'action']); eq(rows[2], { at: 'Sat 19:20', text: 'Sent you: someone at the door', ok: true, kind: 'notify' });
+    eq(t.find('ui', 'status')[0], LIVE_COPY.statusDone(19));
+    t.live.close();
+  });
+
+  await check('approve twice → one POST', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, MOVIE);
+    t.card.approve(); t.card.approve(); t.card.decline(); await waitFor(() => count(t, 'view', 'endCard') === 1);
+    eq(postsTo(t.mock, /\/approve$/).length, 1); eq(postsTo(t.mock, /\/decline$/).length, 0); eq(count(t, 'card', 'toChecklist'), 1); eq(count(t, 'card', 'busy'), 1);
+    t.live.close();
+    const u = await harness({ entered: true }); await toPlan(u, MOVIE);
+    u.card.decline(); u.card.decline(); await waitFor(() => u.live.phase === 'idle'); eq(postsTo(u.mock, /\/decline$/).length, 1, 'decline twice → one POST');
+    u.live.close();
+  });
+
+  await check('typed change re-plans', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, MOVIE);
+    await t.live.submit('make it 30% instead');
+    await waitFor(() => postsTo(t.mock, /\/requests$/).length === 2);
+    const decline = t.mock.calls.findIndex((c) => c.path.endsWith('/decline')), second = t.mock.calls.findLastIndex((c) => c.path.endsWith('/requests'));
+    ok(decline >= 0 && decline < second, 'POST /decline, then POST /requests'); eq(postsTo(t.mock, /\/decline$/).length, 1);
+    eq(t.mock.calls[second].body, { text: 'make it 30% instead' }); ok(t.has('card', 'declined', 'plan')); ok(!t.has('view', 'ncb', LIVE_COPY.declined), 'no declined copy');
+    await waitFor(() => count(t, 'view', 'planCard') === 2 && t.card.enabled); ok(t.has('view', 'user', 'make it 30% instead'));
+    eq(count(t, 'view', 'endCard'), 0); eq(t.live.phase, 'awaiting');
+    t.live.close();
+  });
+
+  await check('one request at a time; over 400 after trim refused locally', async () => {
+    const t = await harness({ entered: true }); await Promise.all([t.live.submit(MOVIE), t.live.submit(MOVIE)]);
+    eq(postsTo(t.mock, /\/requests$/).length, 1); eq(count(t, 'view', 'user'), 1); t.live.close();
+    const u = await harness({ entered: true }), reqs = () => postsTo(u.mock, /\/requests$/), tooLong = () => u.log.filter((e) => e[1] === 'ncb' && e[2] === LIVE_COPY.tooLong).length;
+    await u.live.submit('x'.repeat(401)); eq(tooLong(), 1); eq(reqs().length, 0);
+    eq('😀'.repeat(201).length, 402); await u.live.submit('😀'.repeat(201)); eq(tooLong(), 2); eq(reqs().length, 0, 'emoji count in UTF-16 units');
+    await u.live.submit('   '); eq(reqs().length, 0, 'blank'); eq(count(u, 'view', 'user'), 0);
+    await u.live.submit(`  ${'x'.repeat(400)}  `); eq(reqs().length, 1); eq(reqs()[0].body, { text: 'x'.repeat(400) }, 'the trimmed text is sent');
+    u.live.close();
+  });
+
+  await check('close mid-run is silent', async () => {
+    const rejections = [], onRejection = (e) => rejections.push(e); process.on('unhandledRejection', onRejection);
+    try {
+      const t = await harness({ entered: true }); await toPlan(t, MOVIE);
+      let n = null, writes = 0;
+      t.store.subscribe((s, path) => { if (n !== null) { writes++; return; } if (path === 'lamp.on') { t.live.close(); n = t.log.length; } });
+      await t.card.approve(); await sleep(60000);
+      ok(n !== null, 'closed after the first state event'); eq(t.log.length, n, 'no view / panel / ui call after close'); eq(writes, 0, 'no store write after close');
+      ok(eventGets(t.mock).length > 0 && eventGets(t.mock).every((c) => c.signal?.aborted), 'the stream signal aborted'); eq(t.live.active, false);
+    } finally { process.off('unhandledRejection', onRejection); }
+    eq(rejections.length, 0, 'no unhandled rejection');
+  });
+
+  await check('reset → FRESH_START, room back from the HTTP answer, what-if gone until the next request', async () => {
+    const t = await harness({ entered: true }); await movie(t); const sid = t.live.sessionId;
+    t.store.set('env.hour', 20); const k0 = (await streamKinds(t.mock, sid)).length, [, end] = t.find('view', 'endCard'), from = t.log.length;
+    end.onReset(); await waitFor(() => t.has('view', 'ncb', FRESH_START));
+    eq(postsTo(t.mock, /\/reset$/).length, 1); eq((await streamKinds(t.mock, sid)).length, k0, 'reset sends no stream event');
+    eq(t.store.get('lamp.brightness'), 0); eq(t.store.get('blinds.closed'), 0); eq(t.store.get('env.hour'), 16.5);
+    eq(t.find('ui', 'beats')[0], { current: 'ask', recoverHidden: true, skippable: [] }); eq(t.find('ui', 'status')[0], LIVE_COPY.statusWaiting(6));
+    eq(statusesFrom(t, from), [LIVE_COPY.statusWaiting(6)], 'the instant clock leaves the status line alone'); eq(t.live.phase, 'idle'); eq(lastInput(t), true);
+    const f0 = count(t, 'view', 'failures'); end.onWhatIf(); await settle();
+    eq(postsTo(t.mock, /\/whatif$/).length, 0, 'no POST /whatif'); eq(count(t, 'view', 'failures'), f0, 'no picker after the reset');
+    await movie(t); eq(t.find('view', 'endCard')[0].whatIf, true, 'the next request offers it again');
+    t.find('view', 'endCard')[1].onWhatIf(); t.find('view', 'failures')[1]('lamp');
+    await waitFor(() => postsTo(t.mock, /\/whatif$/).length === 1); eq(postsTo(t.mock, /\/whatif$/)[0].path, `sessions/${sid}/requests/r2/whatif`);
+    await waitFor(() => count(t, 'view', 'endCard') === 3);
+    t.live.close();
+  });
+
+  // ---- Task 4 review guards ----
+  await check('guard · two codes in flight → one session', async () => {
+    const t = await harness(); await t.live.open();
+    eq(await Promise.all([t.lastAccess.code(MOCK_CODE), t.lastAccess.code(MOCK_CODE)]), [null, null]);
+    eq(posts(t.mock).length, 1, 'one POST sessions'); eq(count(t, 'view', 'live'), 1, 'entered once'); eq(t.live.phase, 'idle');
+    t.live.close();
+  });
+
+  await check('guard · a stale Reconnect after a 401 opens no stream', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId;
+    t.mock.set({ mode: 'down' }); t.mock.drop(sid); await waitFor(() => t.has('view', 'lost'));
+    const [reconnect] = t.find('view', 'lost'); t.mock.set({ mode: 'json', code: 'NCB-OTHR-CODE' });
+    reconnect(); await waitFor(() => accessCount(t) === 2); eq(t.live.phase, 'access'); eq(t.live.sessionId, null, 'session forgotten');
+    const gets = eventGets(t.mock).length; reconnect(); await sleep(60000);
+    eq(eventGets(t.mock).length, gets, 'no GET from the stale button'); eq(accessCount(t), 2);
+    t.live.close();
+  });
+
+  await check('guard · available follows POST sessions budget / live_off and health in open()', async () => {
+    for (const off of ['budget', 'live_off']) {
+      const t = await harness(); eq(await t.live.probe(), true); await t.live.open(); t.mock.set({ off });
+      await t.lastAccess.code(MOCK_CODE); eq(t.live.available, false, off);
+    }
+    const t = await harness(); eq(await t.live.probe(), true); t.mock.set({ liveEnabled: false }); await t.live.open();
+    eq(t.find('view', 'access')[0], { mode: 'offline' }); eq(t.live.available, false, 'health off in open()');
+    const u = await harness({ mock: createMockLive({ liveEnabled: false }) }); eq(await u.live.probe(), false); u.mock.set({ liveEnabled: true });
+    await u.live.open(); eq(u.live.available, true, 'health back on in open()'); u.live.close();
+  });
+
+  await check('guard · a room event without a state object is ignored; unsafe store paths are skipped', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId, before = t.store.snapshot(), r0 = count(t, 'ui', 'resetRoom');
+    for (const state of [null, 'lamp', [1, 2]]) t.mock.push(sid, 'room', { state, clock: { iso: 'x', label: 'x', hour: 3 } });
+    await sleep(100); eq(t.store.snapshot(), before, 'room kept'); eq(count(t, 'ui', 'resetRoom'), r0, 'no reset');
+    try {
+      t.mock.push(sid, 'room', { state: JSON.parse('{"__proto__":{"polluted":1},"lamp":{"brightness":0.4},"nosuch":{"x":1}}'), clock: { iso: 'x', label: 'x', hour: 16.5 } });
+      await waitFor(() => t.store.get('lamp.brightness') === 0.4); eq(({}).polluted, undefined, 'room: no prototype write'); eq(t.store.get('nosuch'), undefined, 'room: unknown slice');
+      await toPlan(t, MOVIE);
+      for (const path of ['__proto__.polluted', 'nosuch.x', 'lamp']) t.mock.push(sid, 'state', { path, value: 1, ms: 0, rid: 'r1' });
+      t.mock.push(sid, 'state', { path: 'lamp.brightness', value: 0.6, ms: 0, rid: 'r1' });
+      await waitFor(() => t.store.get('lamp.brightness') === 0.6);
+      eq(({}).polluted, undefined, 'state: no prototype write'); eq(t.store.get('nosuch'), undefined); ok(typeof t.store.get('lamp') === 'object', 'a path needs a field');
+    } finally { delete Object.prototype.polluted; }
+    t.live.close();
+  });
+
+  await check('guard · close() ends active', async () => {
+    const t = await harness({ entered: true }); eq(t.live.active, true); t.live.close(); eq(t.live.active, false);
+    await t.live.submit(MOVIE); eq(postsTo(t.mock, /\/requests$/).length, 0, 'nothing after close');
+  });
+
+  await check('store · a 0 ms tween replaces a running tween on its path', async () => {
+    const s = createStore({ a: { x: 0 } }); stores.add(s);
+    s.tween('a.x', 10, 1000); await sleep(100); ok(s.get('a.x') > 0 && s.get('a.x') < 10, 'tweening');
+    s.tween('a.x', 5, 0); eq(s.get('a.x'), 5, 'jumps at once'); await sleep(2000); eq(s.get('a.x'), 5, 'the old tween is gone');
   });
 }

@@ -20,7 +20,10 @@ export function createStore(initial, { headless = false } = {}) {
   const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
 
   function tween(path, to, ms, ease = easeInOut) {
-    if (headless || ms <= 0) { set(path, to); return Promise.resolve(); }
+    if (headless || ms <= 0) { // a jump replaces a running tween on the path, as a longer tween does (else it overwrites the jump)
+      const t = tweens.get(path); if (t) { tweens.delete(path); t.res(); }
+      set(path, to); return Promise.resolve();
+    }
     const from = Number(get(path)) || 0;
     if (tweens.has(path)) tweens.get(path).res();
     return new Promise((res) => tweens.set(path, { from, to, ms, start: performance.now(), ease, res }));
