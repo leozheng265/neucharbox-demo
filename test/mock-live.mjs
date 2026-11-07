@@ -24,6 +24,7 @@ const server = createServer(async (req, res) => {
   try {
     const r = await mock.fetch(`http://${req.headers.host}${req.url}`, { method: req.method, headers: req.headers, body: chunks.length ? Buffer.concat(chunks).toString('utf8') : undefined, signal: ac.signal });
     res.writeHead(r.status, { ...Object.fromEntries(r.headers), ...CORS });
+    res.flushHeaders(); // an event stream with nothing to say yet must still answer
     if (r.body) Readable.fromWeb(r.body).on('error', () => res.end()).pipe(res); else res.end();
   } catch { res.destroy(); }
 });

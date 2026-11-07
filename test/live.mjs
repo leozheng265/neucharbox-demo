@@ -101,4 +101,49 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const [f] = await readFrames(again, 1);
     ok(f.startsWith('id: 3\nevent: plan\ndata: {"steps":[{"id":"s1"') && f.endsWith(',"rid":"r1"}\n\n'), `resume frame: ${f.slice(0, 60)}`);
   });
+
+  // A small client over the mock for the contract checks below.
+  const rig = (opts) => {
+    const m = createMockLive(opts), auth = { authorization: `Bearer ${MOCK_CODE}` };
+    const post = async (path, body) => { const r = await m.fetch(`${BASE}${path}`, { method: 'POST', headers: auth, body: JSON.stringify(body ?? {}) }); return [r.status, await r.json()]; };
+    const kinds = async (sid, after = 0) => { const r = await m.fetch(`${BASE}sessions/${sid}/events?after=${after}`, { headers: auth }); const rd = r.body.getReader(), dec = new TextDecoder(); let b = ''; for (;;) { const x = await Promise.race([rd.read(), new Promise((res) => setTimeout(() => res({ done: true }), 5))]); if (x.done) break; b += dec.decode(x.value); } await rd.cancel(); return [...b.matchAll(/event: (\w+)/g)].map((a) => a[1]); };
+    const settle = () => new Promise((r) => setTimeout(r, 1));
+    return { m, post, kinds, settle, session: async () => (await post('sessions', { scene: 'home' }))[1].sessionId };
+  };
+
+  await check('mock · contract: busy, errors, reset, done last', async () => {
+    const { m, post, kinds, settle, session } = rig({ remaining: 1 }), sid = await session();
+    const [, { requestId: rid }] = await post(`sessions/${sid}/requests`, { text: 'Movie night' }); await settle();
+    eq((await post(`sessions/${sid}/requests`, { text: 'again' }))[1].error, 'busy', 'second request');
+    eq(await post(`sessions/${sid}/reset`), [409, { error: 'busy', message: (await post(`sessions/${sid}/reset`))[1].message }], 'reset mid-request');
+    await post(`sessions/${sid}/requests/${rid}/approve`); await settle();
+    const ks = await kinds(sid); eq(ks.at(-1), 'done'); eq(ks.filter((k) => k === 'done').length, 1, 'one done');
+    const n = ks.length; eq((await post(`sessions/${sid}/reset`))[0], 200); eq((await kinds(sid)).length, n, 'reset pushed an event');
+    eq((await post(`sessions/${sid}/requests`, { text: 'again' }))[1].error, 'code_limit', 'remaining 0');
+    m.set({ off: 'budget' }); eq((await post(`sessions/${sid}/requests`, { text: 'again' }))[1].error, 'budget', 'budget before code_limit');
+    m.set({ off: 'live_off' }); eq((await post(`sessions/${sid}/requests`, { text: 'again' }))[0], 503);
+  });
+
+  await check('mock · contract: what-if order, declined runs', async () => {
+    const { post, kinds, settle, session } = rig(), sid = await session();
+    let [, { requestId: rid }] = await post(`sessions/${sid}/requests`, { text: 'Movie night' }); await settle();
+    await post(`sessions/${sid}/requests/${rid}/approve`); await settle();
+    const before = (await kinds(sid)).length;
+    const [st, { requestId: w }] = await post(`sessions/${sid}/requests/${rid}/whatif`, { device: 'lamp' }); await settle();
+    const wk = (await kinds(sid)).slice(before); eq(st, 202); ok(w !== rid);
+    eq(wk.slice(0, 3), ['room', 'plan', 'step'], 'what-if starts room, plan, run'); ok(!wk.includes('awaiting_approval'), 'what-if asks nothing'); eq(wk.at(-1), 'done');
+    eq((await post(`sessions/${sid}/requests/${rid}/whatif`, { device: 'lamp' }))[0], 202, 'same rid replays again'); await settle();
+    // a declined request is not a what-if target
+    [, { requestId: rid }] = await post(`sessions/${sid}/requests`, { text: 'Movie night' }); await settle();
+    await post(`sessions/${sid}/requests/${rid}/decline`); await settle();
+    eq((await post(`sessions/${sid}/requests/${rid}/whatif`, { device: 'lamp' }))[1].error, 'not_waiting', 'what-if after declined');
+    // a declined re-plan emits no `declined` and the run goes on
+    const sid2 = await session(); let r2, r3; [, { requestId: r2 }] = await post(`sessions/${sid2}/requests`, { text: 'water the plant' }); await settle();
+    await post(`sessions/${sid2}/requests/${r2}/approve`); await settle(); await post(`sessions/${sid2}/requests/${r2}/decline`); await settle();
+    const k2 = await kinds(sid2); ok(!k2.includes('declined'), 'declined re-plan'); eq(k2.slice(-2), ['summary', 'done']);
+    // done {limit}: no what-if
+    const sid3 = await session(); [, { requestId: r3 }] = await post(`sessions/${sid3}/requests`, { text: 'limit' }); await settle();
+    await post(`sessions/${sid3}/requests/${r3}/approve`); await settle();
+    eq((await post(`sessions/${sid3}/requests/${r3}/whatif`, { device: 'lamp' }))[1].error, 'not_waiting', 'what-if after limit');
+  });
 }
