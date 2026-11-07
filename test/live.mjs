@@ -5,6 +5,8 @@ import { createStore } from '../js/engine/store.js';
 import { virtualTime } from './clock.mjs';
 import { createMockLive, MOCK_CODE } from './fixtures/live-mock.mjs';
 import home from '../js/scenes/home.js';
+import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
+import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
 
 export { MOCK_CODE };
 const BASE = 'http://mock/live/api/';
@@ -145,5 +147,60 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const sid3 = await session(); [, { requestId: r3 }] = await post(`sessions/${sid3}/requests`, { text: 'limit' }); await settle();
     await post(`sessions/${sid3}/requests/${r3}/approve`); await settle();
     eq((await post(`sessions/${sid3}/requests/${r3}/whatif`, { device: 'lamp' }))[1].error, 'not_waiting', 'what-if after limit');
+  });
+  // ---- Task 2: config and API client ----
+  await check('config · ?liveApi= only for localhost', () => {
+    const at = (q) => liveApiBase({ search: q });
+    eq(at('?liveApi=http://localhost:8787/'), 'http://localhost:8787');
+    eq(at('?liveApi=http://127.0.0.1:8787'), 'http://127.0.0.1:8787');
+    eq(at('?liveApi=https://evil.example'), LIVE_CONFIG.apiBase);
+    eq(at('?liveApi=http://localhost.evil.example'), LIVE_CONFIG.apiBase);
+    eq(at('?liveApi=javascript:alert(1)'), LIVE_CONFIG.apiBase);
+  });
+
+  const apiOf = (mock, extra = {}) => createLiveApi({ base: 'http://mock', fetch: mock.fetch, getCode: () => MOCK_CODE, ...extra });
+  const fails = async (p) => { try { await p; return null; } catch (e) { return e instanceof LiveError ? { status: e.status, kind: e.kind } : { notLiveError: String(e) }; } };
+
+  await check('api · health: ok, disabled, HTML 200 → offline, down → offline, slow → offline', async () => {
+    const m = createMockLive(), api = apiOf(m);
+    eq(await api.health(), { ok: true, liveEnabled: true, scenes: ['home'] }, 'json');
+    ok(!('authorization' in m.calls[0].headers), 'health sends no authorization');
+    eq(m.calls[0].headers['ngrok-skip-browser-warning'], '1', 'ngrok header on health');
+    m.set({ liveEnabled: false }); eq(await api.health(), { ok: true, liveEnabled: false, scenes: ['home'] }, 'disabled');
+    m.set({ liveEnabled: true, mode: 'html' }); eq(await api.health(), { ok: false, liveEnabled: false, scenes: [] }, 'html');
+    m.set({ mode: 'down' }); eq(await api.health(), { ok: false, liveEnabled: false, scenes: [] }, 'down');
+    const t0 = performance.now(), slow = createLiveApi({ base: 'http://mock', fetch: () => new Promise(() => {}) });
+    eq(await slow.health(), { ok: false, liveEnabled: false, scenes: [] }, 'slow');
+    eq(Math.round(performance.now() - t0), 4000, 'health gives up after 4000 ms');
+  });
+
+  await check('api · headers and errors', async () => {
+    const m = createMockLive(), api = apiOf(m), last = () => m.calls.at(-1);
+    const { sessionId: sid } = await api.createSession('home');
+    eq(last().headers.authorization, `Bearer ${MOCK_CODE}`, 'session auth');
+    await api.request(sid, 'Movie night');
+    eq(last().headers.authorization, `Bearer ${MOCK_CODE}`, 'request auth');
+    eq(last().headers['ngrok-skip-browser-warning'], '1', 'ngrok header');
+    eq(last().headers['content-type'], 'application/json', 'content-type');
+    eq(last().body, { text: 'Movie night' }, 'request body');
+    m.set({ remaining: 20 }); eq(await api.check('ncb-test-case'), { remainingToday: 20 });
+    eq(last().body, { code: 'ncb-test-case' }, 'check body'); ok(!('authorization' in last().headers), 'check sends no authorization');
+    eq(last().path, 'access/check'); ok(!JSON.stringify(m.calls.map((c) => [c.path, c.query])).includes(MOCK_CODE), 'code never in a url');
+    await api.apply({ email: 'a@b.c', interest: 'home', wouldTry: 'x', scene: 'home', website: '' }); ok(!('authorization' in last().headers), 'apply sends no authorization');
+    eq(await fails(apiOf(m, { getCode: () => 'NOPE' }).createSession('home')), { status: 401, kind: 'bad_code' }, 'bad code');
+    eq(await fails(api.check('nope')), { status: 401, kind: 'bad_code' }, 'check bad code');
+    const m2 = createMockLive(), a2 = apiOf(m2), { sessionId: s2 } = await a2.createSession('home');
+    eq(await fails(a2.request(s2, 'x'.repeat(401))), { status: 400, kind: 'too_long' }, 'too long');
+    m2.set({ remaining: 0 }); eq(await fails(a2.request(s2, 'hi')), { status: 429, kind: 'code_limit' }, 'limit');
+    m2.set({ off: 'budget' }); eq(await fails(a2.createSession('home')), { status: 429, kind: 'budget' }, 'budget');
+    m2.set({ off: 'live_off' }); eq(await fails(a2.request(s2, 'hi')), { status: 503, kind: 'live_off' }, 'live_off');
+    const e = await a2.request(s2, 'hi').catch((x) => x); ok(typeof e.message === 'string' && e.message.length > 0, 'message from the body');
+    m2.set({ off: null, mode: 'html' }); eq(await fails(a2.createSession('home')), { status: 200, kind: 'bad_response' }, 'html');
+    m2.set({ mode: 'down' }); eq(await fails(a2.createSession('home')), { status: 0, kind: 'network' }, 'down');
+    const slow = createLiveApi({ base: 'http://mock', fetch: () => new Promise(() => {}), timeoutMs: 500 });
+    eq(await fails(slow.reset('s')), { status: 0, kind: 'network' }, 'timeout');
+    const m3 = createMockLive(), a3 = apiOf(m3), { sessionId: s3 } = await a3.createSession('home');
+    ok(a3.eventsUrl(s3, 4).endsWith(`/live/api/sessions/${s3}/events?after=4`) && !a3.eventsUrl(s3).includes('after'), 'eventsUrl');
+    ok(!a3.eventsUrl(s3, 4).includes(MOCK_CODE), 'eventsUrl has no code'); eq(a3.headers().Authorization, `Bearer ${MOCK_CODE}`, 'sse headers');
   });
 }
