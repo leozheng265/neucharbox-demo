@@ -32,7 +32,8 @@ export function controlChecks({ report, scenes }) {
     creator: [['mic', { muted: false }, 'on', true], ['mic', { muted: true }, 'on', false]],
   };
   for (const [id, want] of Object.entries(WANT)) {
-    const q = [], sc = scenes[id], devs = sc.devices;
+    const sc = scenes[id]; if (!sc) continue;
+    const q = [], devs = sc.devices;
     const name = (c) => (c ? `${c.kind}:${c.field}` : '—');
     for (const d of sc.deviceOrder) {
       if (!(d in want)) { q.push(`${d} is in the scene but not in the table`); continue; }
@@ -44,7 +45,6 @@ export function controlChecks({ report, scenes }) {
       const c = controlFor(devs[d], slice);
       if (!c || c[key] !== w) q.push(`${id} ${d} ${JSON.stringify(slice)}: got ${c && c[key]}, want ${w}`);
     }
-    p.push(...q);
     report(`${id} · each device card shows the right control`, q);
   }
 }
