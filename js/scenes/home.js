@@ -48,7 +48,7 @@ export default {
     soil:       { icon: 'moisture', name: 'Soil sensor', ref: 'the soil sensor', initial: { moisture: SOIL_START, probeOut: false }, format: (s) => `${s.moisture.toFixed(0)}% moisture`, faultText: `last reading ${SOIL_START}%` },
     pump:       { icon: 'pump', name: 'Water pump', ref: 'the water pump', initial: { running: false, blocked: false }, format: (s) => (s.running ? 'running' : 'idle'), faultText: 'controller offline' },
     camera:     { icon: 'camera', name: 'Door camera', ref: 'the door camera', initial: { armed: false, motion: false, off: false }, format: (s) => (s.off ? 'off' : s.armed ? (s.motion ? 'motion at door' : 'armed · no motion') : 'standby'), faultText: 'missed its check-ins' },
-    thermostat: { icon: 'thermostat', name: 'Thermostat', ref: 'the thermostat', initial: { target: 21, current: 21.4, cold: false }, format: (s) => `${s.target.toFixed(0)}°C set · ${s.current.toFixed(1)}°C now`, faultText: 'off the network' },
+    thermostat: { icon: 'thermostat', name: 'Thermostat', ref: 'the thermostat', initial: { target: 21, current: 21.4, cold: false }, format: (s) => `${s.target.toFixed(0)}°C set · ${s.current.toFixed(1)}°C now`, faultText: 'off the network', control: { kind: 'bar', field: 'target', min: 10, max: 28 } }, // the bar shows the set point on the thermostat's 10–28 °C range
   },
 
   build({ R, P, M, THREE, store, speed = 1, quiet }) {

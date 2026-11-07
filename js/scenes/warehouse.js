@@ -209,9 +209,9 @@ export default {
   askIntro: 'Give the line an instruction. Pick one, or type your own.',
   deviceOrder: ['c1', 'c2', 'c3', 'scanner', 'gate', 'agvA', 'agvB', 'dock'],
   devices: {
-    c1:      { icon: 'conveyor', name: 'Conveyor C1', ref: 'conveyor C1', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault' },
-    c2:      { icon: 'conveyor', name: 'Conveyor C2', ref: 'conveyor C2', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault' },
-    c3:      { icon: 'conveyor', name: 'Conveyor C3', ref: 'conveyor C3', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault' },
+    c1:      { icon: 'conveyor', name: 'Conveyor C1', ref: 'conveyor C1', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault', control: { kind: 'bar', field: 'speed', max: 0.5 } }, // full speed is 0.5 m/s
+    c2:      { icon: 'conveyor', name: 'Conveyor C2', ref: 'conveyor C2', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault', control: { kind: 'bar', field: 'speed', max: 0.5 } }, // full speed is 0.5 m/s
+    c3:      { icon: 'conveyor', name: 'Conveyor C3', ref: 'conveyor C3', initial: { running: false, speed: 0, slip: false, runOn: false }, format: beltText, active: beltMoving, faultText: 'motor fault', control: { kind: 'bar', field: 'speed', max: 0.5 } }, // full speed is 0.5 m/s
     scanner: { icon: 'scanner', name: 'Scanner arch', ref: 'the scanner arch', initial: { armed: false, count: 0, misreads: 0, dark: false }, format: (s) => (!s.armed ? 'idle' : s.misreads ? `${Math.round(s.count)} scanned · ${Math.round(s.misreads)} unreadable` : `armed · ${Math.round(s.count)} scanned`), faultText: 'reads not trusted' },
     gate:    { icon: 'gate', name: 'Sorter gate', ref: 'the sorter gate', initial: { lane: 'A', pos: 0, all: false, stuck: false }, format: (s) => `→ lane ${s.lane}${s.lane === 'B' && s.all ? ' · every parcel' : ''}`, active: (s) => s.lane === 'B', faultText: 'controller offline' },
     agvA:    { icon: 'cart', name: 'Cart A', ref: 'cart A', initial: { state: 'parked', u: 0, load: false, creep: false }, format: cartText, active: driving, faultText: 'off the network' },
