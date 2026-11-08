@@ -1,6 +1,7 @@
 // The contract mock (test/fixtures/live-mock.mjs) over HTTP, for browser checks of the live client.
 // Usage: node test/mock-live.mjs [port=8787] [--pace 350] [--mode json|html|down] [--code NCB-TEST-CASE] [--scenes home,elder]
-// The page is served on http://localhost:8765 (serve.py); point it here with ?liveApi=http://localhost:<port>.
+// The page is served on http://localhost:8765 (serve.py; any other localhost port works too); point it here with
+// ?liveApi=http://localhost:<port>.
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { createMockLive, MOCK_CODE } from './fixtures/live-mock.mjs';
@@ -11,10 +12,12 @@ const port = Number(argv.find((a, i) => /^\d+$/.test(a) && !argv[i - 1]?.startsW
 const code = opt('code', MOCK_CODE), mode = opt('mode', 'json'), pace = Number(opt('pace', 0)), scenes = opt('scenes', 'home').split(',').filter(Boolean);
 const ORIGIN = 'http://localhost:8765';
 const mock = createMockLive({ code, mode, pace, scenes, scene: scenes[0] });
-const CORS = { 'access-control-allow-origin': ORIGIN, vary: 'Origin' };
+// The page's origin when it is a local one (a second preview server, e.g. serve.py 8766), else serve.py's default.
+const corsFor = (origin) => ({ 'access-control-allow-origin': /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin || '') ? origin : ORIGIN, vary: 'Origin' });
 
 const server = createServer(async (req, res) => {
   if (mode === 'down') { req.socket.destroy(); return; }
+  const CORS = corsFor(req.headers.origin);
   if (req.method === 'OPTIONS') {
     res.writeHead(204, { ...CORS, 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'Authorization, Content-Type, Accept, ngrok-skip-browser-warning', 'access-control-max-age': '600' });
     res.end(); return;

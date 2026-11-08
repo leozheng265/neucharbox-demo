@@ -16,7 +16,8 @@ export function createCustomController({ storage, makeLive, ui }) {
     layout = next; saveLayout(storage, layout); ui.layout(layout);
     if (devices && !was && changed()) ui.notice('changed');
   }
-  const canBuild = () => !(live && live.active && live.phase !== 'idle' && live.phase !== 'off');
+  // Building waits for a request to end; an access card waiting for a code is not one (the room stays as built).
+  const canBuild = () => !(live && live.active && !['idle', 'off', 'access'].includes(live.phase));
 
   return {
     get mode() { return mode; },

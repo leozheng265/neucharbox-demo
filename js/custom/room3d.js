@@ -10,21 +10,33 @@
 // twin of each wall-hung mesh, shown while every untagged ancestor of that mesh is visible, so a removed wall device
 // takes its shadow with it.
 // update() runs every frame; a device with no slice in `state` yet (one just added while building) shows its catalog
-// initial state. The page passes its `store` too; the room reads only the state update() is given.
+// initial state. Each model's update also gets the room's light outside, env = { hour, sky } (sky: 0 at night, 1 by day),
+// for parts that show the daylight (the blinds' own pane). The page passes its `store` too; the room reads only the
+// state update() is given.
 import { typeOf } from './catalog.js';
-import { ROOM } from './layout.js';
+import { ROOM, WINDOW } from './layout.js';
 import { DEVICE_UI } from './devices/index.js';
 import { mergeMeshes } from './devices/kit.js';
 import { START_HOUR } from './scene.js';
 
 const HX = ROOM.w / 2, HZ = ROOM.d / 2;
-const WINDOW = { x: 2.2, y: 1.55, ww: 1.8, wh: 1.36 }; // right of the back wall: wall devices fill it from the left (freeSpot)
 // Real point lights in the room at once, in layout order. A lamp past the budget still glows (shade and bulb) but
 // lights nothing: twenty point lights in every lit fragment would not stay smooth on a phone.
 export const LIGHT_BUDGET = 4;
+// How light it is outside at an hour, 0 (night) to 1 (midday), with a little left at dawn and dusk: the renderer's
+// daylight() curve, for the parts of a model that show the sky.
+export function skyAt(hour) {
+  const h = ((hour % 24) + 24) % 24, day = Math.max(0, Math.sin(((h - 6) / 12) * Math.PI));
+  const dusk = Math.exp(-(((h - 18.5) / 1.2) ** 2)) + Math.exp(-(((h - 6) / 1.2) ** 2));
+  return Math.min(1, day + 0.35 * dusk);
+}
 
 export function createRoom3d({ R, P, M, THREE }) {
   R.scene.background = new THREE.Color(0xDCEBF3);
+  // The renderer's sun shadow covers 10 m across, sized for 5 m rooms. Seen from the sun, this room reaches 5.4 m from
+  // the frustum's centre in the morning, so a corner would go unshadowed (sunlit through the wall): widen it.
+  const sunCam = R.lights?.sun?.shadow?.camera;
+  if (sunCam) { Object.assign(sunCam, { left: -6.4, right: 6.4, top: 6, bottom: -4.8 }); sunCam.updateProjectionMatrix(); }
   // The floor's planks at Home's scale (its 5 m floor repeats the texture 1.6 times).
   const floorMat = M.floor.clone();
   for (const k of ['map', 'bumpMap']) if (M.floor[k]) { floorMat[k] = M.floor[k].clone(); floorMat[k].repeat.set(1.6 * ROOM.w / 5, 1.6 * ROOM.d / 5); }
@@ -102,13 +114,14 @@ export function createRoom3d({ R, P, M, THREE }) {
   return {
     sync, focus,
     update(state, t) {
-      const h = state?.env?.hour; R.daylight(Number.isFinite(h) ? h : START_HOUR);
+      const h0 = state?.env?.hour, h = Number.isFinite(h0) ? h0 : START_HOUR; R.daylight(h);
+      const env = { hour: h, sky: skyAt(h) };
       const hs = state?.hub, on = hs && (hs.status === 'online' || hs.status === 'on');
       hub.ledMat.emissiveIntensity = on ? (2.5 + Math.sin(t * 2.2) * 1.5) * (Number.isFinite(hs.led) ? hs.led : 1) : 0;
       pulse(hub);
       for (const [id, o] of objs) {
         const s = state?.[id] || (o.idle ||= { ...typeOf(o.type).initial, status: 'online' });
-        o.model.update(s, t); pulse(o);
+        o.model.update(s, t, env); pulse(o);
       }
     },
     reset() { for (const o of [hub, ...objs.values()]) if (o.hi) { o.cut = true; for (const s of o.shells) s.visible = false; } },

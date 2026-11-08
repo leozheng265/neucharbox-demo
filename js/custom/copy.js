@@ -8,6 +8,7 @@ export const CUSTOM_COPY = {
   run: 'Run',
   done: 'Done building →',
   empty: 'Your room is empty. Pick devices on the right to add them.',
+  emptyBelow: 'Your room is empty. Pick devices below to add them.', // phones: the devices are in a sheet under the room
   full: "That's 20 devices, the most one room can hold. Remove one to add another.",
   count: (n) => `${n} / 20 devices`,
   changed: 'Adding or removing devices starts a new conversation.',
@@ -18,6 +19,8 @@ export const CUSTOM_COPY = {
   all: 'All',
   isNew: 'new',
   noMatch: 'No devices match.',
+  sheetOpen: 'Show all devices',
+  sheetClose: 'Show fewer devices',
   hint: 'Drag to move · tap a device to rotate or remove',
   rotate: 'Rotate',
   remove: 'Remove',

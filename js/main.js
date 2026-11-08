@@ -4,14 +4,14 @@ import { createPanel } from './engine/panel.js';
 import { interpret, asksWhatIfFails } from './engine/match.js';
 import { icon } from './engine/icons.js';
 import { createFlow, BEATS, quoted, WHATIF_HOW } from './engine/flow.js';
-import { SCENES } from './scenes/index.js';
+import { SCENES, CUSTOM } from './scenes/index.js';
 import { SOCIAL, socialLinks } from './engine/social.js';
 import { createLive, LIVE_COPY } from './engine/live.js';
 import { createLiveView } from './engine/livechat.js';
 import { liveApiBase } from './live-config.js';
 
 // Picker thumbnails: the hub and a few of the devices each room connects (line icons, same as the dashboard tiles).
-const THUMB_ICONS = { home: ['lamp', 'blinds', 'moisture', 'camera', 'thermostat'], lab: ['laser', 'mirror', 'stage', 'meter', 'beamcam'], elder: ['bed', 'door', 'motion', 'kettle', 'bulb'], warehouse: ['conveyor', 'scanner', 'gate', 'cart', 'dock'], creator: ['keylight', 'camera', 'mic', 'capture', 'sign'] };
+const THUMB_ICONS = { home: ['lamp', 'blinds', 'moisture', 'camera', 'thermostat'], lab: ['laser', 'mirror', 'stage', 'meter', 'beamcam'], elder: ['bed', 'door', 'motion', 'kettle', 'bulb'], warehouse: ['conveyor', 'scanner', 'gate', 'cart', 'dock'], creator: ['keylight', 'camera', 'mic', 'capture', 'sign'], custom: ['lamp', 'camera', 'thermostat', 'conveyor', 'mic'] };
 const app = document.getElementById('app');
 let current = null; // { scene, teardown }
 let mountGen = 0;   // bumped on every route; an in-flight mount that sees a newer value abandons itself
@@ -29,7 +29,7 @@ function renderPicker() {
     <main class="picker">
       <h1>Try NeuCharBox before it ships.</h1>
       <p class="lede">Pick a place. Plug in the hub, connect what's there, say what you want — or give exact instructions — approve the plan, and watch it run. Then make something fail, and see what it does.</p>
-      <div class="scene-grid">${SCENES.map((s, i) => `
+      <div class="scene-grid">${[...SCENES, CUSTOM].map((s, i) => `
         <a class="scene-card" href="#${s.id}" style="--thumb:${s.thumb}"><div class="thumb${darkThumb(s.thumb) ? ' dark' : ''}" data-n="0${i + 1}"><span class="icons" aria-hidden="true">${['hub', ...(THUMB_ICONS[s.id] || [])].map(icon).join('')}</span></div><div class="body"><h3>${esc(s.title)}</h3><p>${esc(s.promise)}</p>${s.tag ? `<span class="tag">${esc(s.tag)}</span>` : ''}</div></a>`).join('')}
       </div>
       <p class="foot">Everything here is a simulation running in your browser. No account, no data leaves the page. Scenes marked illustrative are typical setups, not a specific customer's.</p>
@@ -170,6 +170,11 @@ async function mountScene(meta, gen) {
 // The scene could not start. Most often the browser can't run it (no WebGL 2, or too old for the 3D code); say so in
 // plain words where the chat would be, with a way on. The raw error stays in the console.
 function showLoadFailure(e) {
+  // The page's own module never arrived (the custom page renders its markup itself): a bare page to say so in.
+  if (!document.getElementById('chat')) {
+    app.classList.remove('picker-mode');
+    app.innerHTML = `<header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a>${follow()}</header><div class="stage"><div class="status" id="status" role="status"></div><div class="side"><div class="chat" id="chat"></div></div></div>`;
+  }
   const chatEl = document.getElementById('chat'), st = document.getElementById('status');
   let gl = false; try { gl = !!document.createElement('canvas').getContext('webgl2'); } catch {}
   const msg = String(e?.message || '');
@@ -196,7 +201,9 @@ function route() {
   current?.teardown?.(); current = null;
   const id = location.hash.replace('#', '');
   const meta = SCENES.find((s) => s.id === id);
-  if (meta) mountScene(meta, gen).catch((e) => { console.error(e); if (gen === mountGen) showLoadFailure(e); });
+  const failed = (e) => { console.error(e); if (gen === mountGen) showLoadFailure(e); };
+  if (meta) mountScene(meta, gen).catch(failed);
+  else if (id === CUSTOM.id) CUSTOM.load().then((m) => m.mountCustom({ app, gen, isCurrent: () => gen === mountGen, setCurrent: (c) => { current = c; } })).catch(failed);
   else renderPicker();
   window.scrollTo(0, 0);
 }
