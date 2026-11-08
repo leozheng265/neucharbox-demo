@@ -231,6 +231,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   function render(state) {
     for (const id of ids) {
       const s = state[id], d = scene.devices[id], c = cards[id];
+      if (!s) continue; // a custom room's device removed while this panel still lists it: its card keeps its last value
       const tone = s.status === 'offline' ? 'offline' : s.status === 'fault' ? 'bad' : s.status === 'busy' ? 'busy' : (d.active ? d.active(s, state) : looksActive(s)) ? 'on' : 'idle';
       // A fault shows the scenario's note for it (fail.faultText → <id>.faultNote, rewritten later if the scene says so;
       // every store write re-renders), else the device's default fault text.

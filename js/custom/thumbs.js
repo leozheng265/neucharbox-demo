@@ -86,7 +86,7 @@ export function createThumbs({ THREE, parts, makeModel = (type, ctx) => DEVICE_U
         o.geometry?.dispose?.();
         for (const m of [].concat(o.material || [])) {
           if (shared.has(m)) continue;
-          for (const k of ['map', 'bumpMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap']) m[k]?.dispose?.();
+          for (const k of ['map', 'bumpMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap']) if (!m[k]?.userData?.shared) m[k]?.dispose?.(); // kit.js's glow texture is shared with the room
           m.dispose?.();
         }
       });
