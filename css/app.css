@@ -72,8 +72,9 @@ button { font: inherit; color: inherit; }
 .room { position: relative; background: #DCEBF3; min-height: 0; min-width: 0; overflow: hidden; }
 .room canvas { width: 100%; max-width: 100%; height: min(75vw, 42dvh); display: block; touch-action: none; }
 .room .hint { position: absolute; right: 10px; top: 10px; max-width: calc(100% - 100px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: rgba(255,255,255,.85); background: rgba(20,30,40,.45); padding: 4px 8px; border-radius: 999px; pointer-events: none; }
-.status { display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 13px; color: var(--ink-2); background: var(--panel); border-top: 1px solid var(--line); min-height: 32px; }
+.status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 14px; font-size: 13px; color: var(--ink-2); background: var(--panel); border-top: 1px solid var(--line); min-height: 32px; }
 .status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); flex: 0 0 auto; }
+.status .stext { flex: 1 1 12ch; min-width: 0; }
 .status.bad { color: var(--ink); } .status.bad::before { background: var(--red); }
 .room canvas:focus-visible { outline: 2px solid var(--accent-a); outline-offset: -2px; }
 .room .reset { position: absolute; left: 10px; top: 10px; font-size: 11px; color: #fff; background: rgba(20,30,40,.5); border: 0; padding: 5px 9px; border-radius: 999px; cursor: pointer; }
@@ -358,4 +359,51 @@ button { font: inherit; color: inherit; }
   .card.end .row .btn { font-size: 13px; padding: 7px 10px; }
   .card.end .follow { gap: 5px; font-size: 12.5px; }
   .card.end .follow .social-link { padding: 4px 8px 4px 7px; }
+}
+
+/* ---- editable cards (live mode): controls right on the card, and the clock beside the status line ---- */
+.ent:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
+.ent .edits { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+.clockctl[hidden], .clockctl .clk-pick[hidden] { display: none; }
+.ent.has-edits .ctl, .ent.has-edits[class] .ctl[hidden] { display: none; } /* the controls replace the display bar and switch */
+.ent .erow { display: flex; align-items: center; gap: 6px; min-height: 22px; min-width: 0; }
+.ent .erow.switch { gap: 5px; }
+.ent .elab { flex: 0 0 auto; font-size: 11px; color: var(--ink-2); }
+.ent .eval { flex: 0 0 auto; min-width: 3.2ch; text-align: right; font-size: 12px; font-weight: 650; color: #138a9a; font-variant-numeric: tabular-nums; }
+.ent .edits.one { padding-right: 0; }
+.ent .edits.one .eval { position: absolute; right: 10px; top: 8px; }
+.ent .edits.one .erow { padding-top: 0; }
+.ent .edit-range { -webkit-appearance: none; appearance: none; flex: 1 1 auto; min-width: 48px; height: 22px; margin: 0; padding: 0; background: transparent; cursor: pointer; --fill: 0%; }
+.ent .edit-range:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; border-radius: 6px; }
+.ent .edit-range::-webkit-slider-runnable-track { height: 6px; border-radius: 6px; background: linear-gradient(90deg, #19c3d6, #36c98a) left / var(--fill) 100% no-repeat, #e6eef0; }
+.ent .edit-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -5px; border-radius: 50%; background: #fff; border: 2px solid #19b3c6; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.ent .edit-range::-moz-range-track { height: 6px; border-radius: 6px; background: #e6eef0; }
+.ent .edit-range::-moz-range-progress { height: 6px; border-radius: 6px; background: linear-gradient(90deg, #19c3d6, #36c98a); }
+.ent .edit-range::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 2px solid #19b3c6; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.ent .edit-sw { border: 0; padding: 0; cursor: pointer; width: 26px; height: 15px; }
+.ent .edit-sw::after { top: 2px; left: 2px; width: 11px; height: 11px; }
+.ent .edit-sw.on { background: #36c98a; } .ent .edit-sw.on::after { transform: translateX(11px); }
+.ent .edit-sw::before { content: ''; position: absolute; inset: -9px -5px; } /* a bigger hit area than the switch itself */
+.ent .edit-sw:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
+.ent.bad .edit-sw.on { background: #F3C4B8; }
+.ent .edit-range:disabled, .ent .edit-sw:disabled { opacity: .45; cursor: default; }
+.ent .edit-range:disabled { pointer-events: none; }
+
+.clockctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--ink-2); }
+.clockctl .clk-label { font-weight: 650; color: var(--ink); margin-right: 2px; }
+.clockctl .clk-pick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.clockctl .clk-btn { min-height: 26px; padding: 2px 10px; border: 1px solid #9fd9e1; border-radius: 999px; background: #fff; color: #138a9a; font-size: 12px; font-weight: 600; cursor: pointer; }
+.clockctl .clk-btn:hover:not(:disabled) { border-color: var(--accent-a); }
+.clockctl .clk-btn:disabled { color: var(--ink-3); border-color: var(--line-2); cursor: default; }
+.clockctl .clk-btn:focus-visible, .clockctl select:focus-visible, .clockctl input:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 1px; }
+.clockctl .clk-day, .clockctl .clk-time { min-height: 26px; padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 8px; background: #fff; font: inherit; font-size: 12px; color: var(--ink); }
+@media (max-width: 959px) {
+  .ent.has-edits { align-items: flex-start; max-width: 260px; }
+  .ent.has-edits .ico { margin-top: 3px; }
+  .ent .erow { min-height: 32px; }
+  .ent .edit-range { height: 32px; min-width: 70px; }
+  .ent .edits.one .eval { top: 6px; }
+  .ent .edits { margin-top: 2px; gap: 0; }
+  .clockctl .clk-btn, .clockctl .clk-day, .clockctl .clk-time { min-height: 32px; }
+  .clockctl .clk-day, .clockctl .clk-time { font-size: 16px; } /* no zoom on focus */
 }

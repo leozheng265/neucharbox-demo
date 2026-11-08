@@ -8,6 +8,7 @@ import { SCENES } from './scenes/index.js';
 import { SOCIAL, socialLinks } from './engine/social.js';
 import { createLive, LIVE_COPY } from './engine/live.js';
 import { createLiveView } from './engine/livechat.js';
+import { createClockCtl } from './engine/clockctl.js';
 import { liveApiBase } from './live-config.js';
 
 // Picker thumbnails: the hub and a few of the devices each room connects (line icons, same as the dashboard tiles).
@@ -43,7 +44,7 @@ async function mountScene(meta, gen) {
     <nav class="beats" id="beats" aria-label="Demo steps">${BEATS.map(([id, label]) => `<button data-beat="${id}" disabled${id === 'recover' ? ' hidden' : ''}>${label}</button>`).join('')}</nav>
     <div class="stage">
       <div class="room"><canvas id="room"></canvas><div class="hint">${coarse ? 'drag · pinch · tap a device' : 'drag to orbit · scroll to zoom · right-drag to pan · tap a device'}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button></div>
-      <div class="status" id="status" role="status">Loading the ${esc(meta.title.toLowerCase())}…</div>
+      <div class="status" id="status"><span class="stext" id="statusText" role="status">Loading the ${esc(meta.title.toLowerCase())}…</span><span class="clockctl" id="clockctl" hidden></span></div>
       <div class="side">
         <div class="panel" id="panel"></div>
         <div class="chat" id="chat"></div>
@@ -68,7 +69,7 @@ async function mountScene(meta, gen) {
   R.onFrame((t) => { store.tick(performance.now()); room.update(store.state, t); });
   R.start();
 
-  const statusEl = document.getElementById('status');
+  const statusEl = document.getElementById('status'), statusText = document.getElementById('statusText');
   document.getElementById('resetView').onclick = () => R.resetView();
   // Tap names: devices, the hub, and anything else the scene lets you tap (scene.extraNames, e.g. { webcam: 'USB webcam' }).
   const nameOf = (id) => (scene.devices[id] ? scene.devices[id].name : id === 'hub' ? 'NeuCharBox' : scene.extraNames?.[id] || null);
@@ -117,7 +118,7 @@ async function mountScene(meta, gen) {
   } });
 
   // The status dot turns red while the line reports a fault; the next status write clears it.
-  const setStatus = (text, bad) => { statusEl.textContent = text; statusEl.classList.toggle('bad', !!bad); };
+  const setStatus = (text, bad) => { statusText.textContent = text; statusEl.classList.toggle('bad', !!bad); };
   const setBeats = ({ current, recoverHidden, skippable }) => {
     const idx = BEATS.findIndex((b) => b[0] === current);
     beatBtns.forEach((b, i) => {
@@ -148,9 +149,13 @@ async function mountScene(meta, gen) {
     clearMarkers: () => R.clearMarkers(),
   } });
   const base = liveApiBase();
+  // The clock control beside the status line: shown in live mode, usable between requests (live.advance).
+  const clockCtl = createClockCtl(document.getElementById('clockctl'), { onAdvance: (h) => live?.advance(h) });
   live = base ? createLive({ scene, store, panel, base, view: createLiveView({ chat, scene }), ui: {
     alive: () => gen === mountGen, status: setStatus, beats: setBeats, track: (on) => panel.track(on), rewind: () => panel.rewind(),
     resetRoom: () => { room.reset?.(); R.clearMarkers(); }, baseline: () => flow.baseline,
+    editing: (on) => { panel.editable(on, { onEdit: (p, v) => live.edit(p, v) }); clockCtl.active(on); },
+    clock: (c) => clockCtl.render(c),
     offerGuided: (h) => { chat.closeEnds(); chat.closeFailures(); if (flow.baseline) { store.restore(flow.baseline); room.reset?.(); R.clearMarkers(); } flow.offerChips(h); },
   } }) : null;
   beatBtns.forEach((b) => (b.onclick = () => flow.skipTo(b.dataset.beat)));

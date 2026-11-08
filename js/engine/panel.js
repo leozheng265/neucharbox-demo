@@ -2,7 +2,7 @@
 // Tone: offline (grey, dimmed) · idle (grey icon) · on (amber) · busy (blue) · bad (red).
 // On phones it is a horizontal strip, on desktop a two-column grid; either way only the panel scrolls, never the page.
 import { icon } from './icons.js';
-import { controlFor } from './controls.js';
+import { controlFor, editsFor } from './controls.js';
 
 const looksActive = (s) => !!(s.on || s.running || s.armed || s.active || s.pressed || s.moving || s.state === 'moving' || (s.open > 0.5) || (s.brightness > 0.02) || s.shutter === 'open' || s.light === 'green' || s.scene === 'live' || s.scene === 'recording' || (s.muted === false));
 const now = () => performance.now();
@@ -17,10 +17,11 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   const cards = {};
   for (const id of ids) {
     const d = scene.devices[id];
-    const card = document.createElement('button');
-    card.className = 'ent offline'; card.dataset.id = id; card.type = 'button';
+    const card = document.createElement('div'); // a div, not a button: edit mode puts real controls inside it
+    card.className = 'ent offline'; card.dataset.id = id; card.setAttribute('role', 'button'); card.tabIndex = 0;
     card.innerHTML = `<span class="ico">${icon(d.icon)}</span><span class="txt"><b>${d.name}</b><span class="val"></span><span class="ctl" hidden></span></span><span class="badge"></span>`;
     card.onclick = () => { select(id); onSelect && onSelect(id); };
+    card.onkeydown = (e) => { if (e.target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); card.click(); } }; // as a click did on the button
     root.appendChild(card); cards[id] = card;
   }
 
@@ -130,6 +131,77 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     if (ctl.kind === 'bar') el.querySelector('i').style.width = `${Math.round(ctl.value * 100)}%`;
     else el.querySelector('.sw').classList.toggle('on', !!ctl.on);
   }
+  // ---- edit mode (live): the controls of editsFor() on the cards, in the store's units ----
+  // A slider shows its value as round(value × scale) + unit; it reports on `change` (a release, a key press), in store
+  // units. A switch reports !on on click. The controls never select the card: they stop click, pointer and key events.
+  let onEditCb = null, editing = false;
+  const OFFTONES = ['offline', 'bad', 'busy'];
+  const decimals = (e) => (e.step * e.scale < 1 ? 1 : 0);
+  const showVal = (e, v) => `${(Math.round(v * e.scale * 10 ** decimals(e)) / 10 ** decimals(e)).toFixed(decimals(e))}${e.unit || ''}`;
+  const fieldOf = (e) => e.label || e.path.split('.').slice(1).join('.');
+  function buildEdits(id) {
+    const c = cards[id], d = scene.devices[id], list = editsFor(id, d, store.state[id]);
+    if (!list.length) return;
+    const box = document.createElement('span'); box.className = list.length === 1 && list[0].kind === 'slider' ? 'edits one' : 'edits';
+    c._ctls = [];
+    for (const e of list) {
+      const row = document.createElement('span'); row.className = `erow ${e.kind}`;
+      const name = `${d.name} ${fieldOf(e)}`;
+      let el;
+      if (e.kind === 'slider') {
+        el = document.createElement('input'); el.type = 'range'; el.className = 'edit-range';
+        el.min = String(Math.round(e.min * e.scale * 1e6) / 1e6); el.max = String(Math.round(e.max * e.scale * 1e6) / 1e6); el.step = String(Math.round(e.step * e.scale * 1e6) / 1e6);
+        const val = document.createElement('span'); val.className = 'eval';
+        if (e.label) { const lab = document.createElement('span'); lab.className = 'elab'; lab.textContent = e.label; row.appendChild(lab); }
+        row.append(el, val);
+        const show = (shown = Number(el.value)) => { const n = Number(el.value); val.textContent = showVal(e, shown / e.scale); el.setAttribute('aria-valuetext', val.textContent); el.style.setProperty('--fill', `${((n - el.min) / (el.max - el.min)) * 100}%`); };
+        el._show = show;
+        el.oninput = () => { el._at = now(); show(); };
+        el.onchange = () => { el._at = now(); show(); const v = Math.round((Number(el.value) / e.scale) * 1e6) / 1e6; if (onEditCb) onEditCb(e.path, v); };
+        const rest = () => { el._drag = false; setTimeout(() => { if (editing) render(store.state); }, 0); }; // after the release's own `change`
+        el.onpointerdown = () => { el._drag = true; addEventListener('pointerup', rest, { once: true }); addEventListener('pointercancel', rest, { once: true }); };
+        el.onblur = rest;
+      } else {
+        el = document.createElement('button'); el.type = 'button'; el.className = 'sw edit-sw'; el.setAttribute('role', 'switch'); el.setAttribute('aria-checked', 'false');
+        const lab = document.createElement('span'); lab.className = 'elab'; lab.textContent = e.label || fieldOf(e);
+        row.append(el, lab);
+        el.onclick = () => { if (onEditCb) onEditCb(e.path, el.getAttribute('aria-checked') !== 'true'); };
+      }
+      el.dataset.path = e.path; el.setAttribute('aria-label', name);
+      c._ctls.push({ el, e }); box.appendChild(row);
+    }
+    // A control never selects its card nor pings it in 3D. The panel's hand-tracking (which would see these events
+    // otherwise) is kept by hand: the strip doesn't scroll away from a slider being dragged.
+    for (const ev of ['click', 'keyup', 'pointerup']) box.addEventListener(ev, (x) => x.stopPropagation());
+    box.addEventListener('keydown', (x) => { x.stopPropagation(); hand(); });
+    box.addEventListener('pointerdown', (x) => { x.stopPropagation(); handDown = true; hand(); addEventListener('pointerup', () => { handDown = false; hand(); }, { once: true }); });
+    c.querySelector('.txt').appendChild(box); c._edits = box; c.classList.add('has-edits');
+  }
+  function syncEdits(id, s, tone) {
+    const c = cards[id]; if (!c._edits) return;
+    const list = editsFor(id, scene.devices[id], s), off = OFFTONES.includes(tone);
+    const key = `${off}|${list.map((e) => e.value).join(',')}`;
+    const stale = c._ctls.some(({ el }) => el._drag || (el.ownerDocument.activeElement === el && now() - (el._at || -Infinity) < 1200)); // being used: leave it be
+    if (c._ek === key && !stale) return;
+    list.forEach((e, i) => {
+      const { el } = c._ctls[i], v = Number(e.value), ok = Number.isFinite(v);
+      el.disabled = off || !ok;
+      if (e.kind === 'switch') { el.setAttribute('aria-checked', String(!!e.value)); el.classList.toggle('on', !!e.value); return; }
+      if (el._drag || (el.ownerDocument.activeElement === el && now() - (el._at || -Infinity) < 1200)) return;
+      if (ok) { el.value = String(Math.round(v * e.scale * 1e6) / 1e6); el._show(v * e.scale); } // the text shows the store's value, which the input may have snapped to its step
+    });
+    c._ek = stale ? null : key;
+  }
+  function editable(on, { onEdit } = {}) {
+    editing = !!on; onEditCb = on ? onEdit || null : null;
+    root.classList.toggle('editable', editing);
+    for (const id of ids) {
+      const c = cards[id];
+      if (c._edits) { c._edits.remove(); c._edits = c._ctls = c._ek = null; c.classList.remove('has-edits'); }
+      if (editing) buildEdits(id);
+    }
+    render(store.state);
+  }
   const markTimers = {};
   // mark(id, 'just' | 'busy' | null): the JUST SET (clears itself after 2 s) and WORKING badges.
   function mark(id, kind) {
@@ -149,6 +221,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
       const v = s.status === 'offline' ? 'not connected' : s.status === 'fault' ? (s.faultNote || d.faultText || 'unavailable') : d.format(s, state);
       const ctl = controlFor(d, s, state), ck = ctl ? `${ctl.kind}|${ctl.kind === 'switch' ? ctl.on : Math.round(ctl.value * 100) / 100}` : '';
       if (c._ck !== ck) { c._ck = ck; setControl(c, ctl); } // a moving tween updates the bar; the change-tracking key below ignores it
+      if (c._edits) syncEdits(id, s, tone);
       if (c._tone === tone && c._v === v) continue;
       if (c._tone !== tone) { c._tone = tone; for (const t of ['offline', 'bad', 'busy', 'on', 'idle']) c.classList.toggle(t, t === tone); }
       if (c._v !== v) { c._v = v; c.querySelector('.val').textContent = v; c.title = `${d.name}: ${v}`; } // title: the full value if the tile cuts it
@@ -176,5 +249,5 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   // dropped, so the strip ends on what failed. No pop: nothing new happened to them.
   function show(list) { queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; reveal(list); }
   store.subscribe(render); render(store.state);
-  return { select, render, pop, reveal, rewind, track, show, mark };
+  return { select, render, pop, reveal, rewind, track, show, mark, editable };
 }
