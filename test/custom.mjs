@@ -1,7 +1,28 @@
-// Check 19: the custom-room catalog copy and layout model (js/custom/catalog.js, layout.js, tools/sync-catalog.mjs).
-//   customChecks({ report, guardHits }) runs the checks below; pure Node, no DOM.
+// Check 19: the custom room: catalog copy and layout model (js/custom/catalog.js, layout.js, tools/sync-catalog.mjs),
+// the device UI registry and models (js/custom/devices/), the 3D room (room3d.js) and the scene object (scene.js).
+//   customChecks({ report, guardHits }) runs the checks below in Node; the 3D ones use test/build.mjs's fake canvas
+//   and stub renderer.
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { env, stubRenderer } from './build.mjs';
+import { ICONS } from '../js/engine/icons.js';
+import { controlFor } from '../js/engine/controls.js';
+
+// Every state the catalog can reach for a type, as store slices: the initial state; each edit field at its min and
+// max (a bool both ways); each value an action's effects can write (a constant, every enum value of the argument it
+// takes, an argument's min and max times its scale, a bool argument both ways); each of those in every status.
+export function reachableStates(t) {
+  const base = { ...t.initial }, out = [base];
+  for (const e of t.edit || []) out.push(...(e.kind === 'bool' ? [true, false] : [e.min, e.max]).map((v) => ({ ...base, [e.field]: v })));
+  for (const a of t.actions || []) for (const f of a.effects || []) {
+    if (!f.set) continue;
+    if ('value' in f) out.push({ ...base, [f.set]: f.value });
+    const p = f.arg ? a.parameters?.properties?.[f.arg] : null; if (!p) continue;
+    const vals = p.enum ? p.enum : p.type === 'boolean' ? [true, false] : Number.isFinite(p.minimum) && Number.isFinite(p.maximum) ? [p.minimum, p.maximum].map((v) => v * (f.scale ?? 1)) : [];
+    out.push(...vals.map((v) => ({ ...base, [f.set]: v })));
+  }
+  return ['online', 'busy', 'fault', 'offline'].flatMap((status) => out.map((s) => ({ ...s, status })));
+}
 
 export async function customChecks({ report, guardHits }) {
   const check = async (tag, fn) => {
@@ -132,5 +153,171 @@ export async function customChecks({ report, guardHits }) {
     eq(sameDevices(A, { ...A, devices: [...A.devices].reverse() }), false, 'order matters');
     eq(sameDevices(A, { ...A, devices: A.devices.map((d, i) => (i === 1 ? { ...d, type: 'thermostat' } : d)) }), false, 'type');
     eq(devicesForSession(A), [{ type: 'floor_lamp', id: 'floor_lamp' }, { type: 'blinds', id: 'blinds' }, { type: 'floor_lamp', id: 'floor_lamp_2' }]);
+  }));
+
+  // ---- Task 6: the device UI registry, the models and the 3D room ----
+  const ui = await import('../js/custom/devices/index.js').catch((e) => ({ err: e }));
+  const r3 = await import('../js/custom/room3d.js').catch((e) => ({ err: e }));
+  const sc = await import('../js/custom/scene.js').catch((e) => ({ err: e }));
+  const need = (...ms) => (fn) => async (t) => { for (const m of [cat, lay, ...ms]) if (m.err) throw m.err; await fn(t); };
+  const types = () => cat.CATALOG.types;
+
+  await check('ui · every catalog type has its UI, and nothing else', need(ui)(({ eq, ok }) => {
+    const { DEVICE_UI } = ui;
+    eq(Object.keys(DEVICE_UI).sort(), types().map((t) => t.type).sort(), 'DEVICE_UI keys');
+    for (const t of types()) {
+      const u = DEVICE_UI[t.type]; if (!u) continue;
+      ok(typeof u.format === 'function' && typeof u.model === 'function', `${t.type}: format and model are functions`);
+      ok(Number.isFinite(u.size) && u.size > 0 && u.size <= 2, `${t.type}: size ${u.size} m`);
+      ok(u.mountY == null || (t.mount === 'wall' && u.mountY > 0 && u.mountY < 2.8), `${t.type}: mountY ${u.mountY} only on a wall mount, inside the room`);
+      ok(u.plural == null || typeof u.plural === 'boolean', `${t.type}: plural is a boolean`);
+      ok(u.active == null || typeof u.active === 'function', `${t.type}: active is a function`);
+      const c = u.control;
+      ok(c === undefined || c === false || typeof c === 'function' || (c && (c.kind === 'bar' || c.kind === 'switch') && c.field in t.initial), `${t.type}: control ${JSON.stringify(c)} is a bar or switch on a state field`);
+    }
+    eq(DEVICE_UI.blinds?.plural, true, 'the blinds are plural');
+  }));
+
+  await check('ui · format renders every reachable state', need(ui)(({ ok }) => {
+    for (const t of types()) {
+      const u = ui.DEVICE_UI[t.type]; if (!u) continue;
+      const bad = new Set();
+      for (const s of reachableStates(t)) {
+        const at = `${t.type} ${JSON.stringify(s)}`;
+        try {
+          const text = u.format(s);
+          if (typeof text !== 'string' || !text.trim()) bad.add(`${at}: format gave ${JSON.stringify(text)}`);
+          else { if (/undefined|NaN|null|\[object/.test(text)) bad.add(`${at}: "${text}"`); for (const g of guardHits(text)) bad.add(`${at}: "${text}" ${g}`); }
+          if (u.active) u.active(s);
+          const c = controlFor(u, s);
+          if (c && c.kind === 'bar' && !(c.value >= 0 && c.value <= 1)) bad.add(`${at}: bar value ${c.value}`);
+        } catch (e) { bad.add(`${at}: threw ${e.message}`); }
+      }
+      ok(!bad.size, [...bad].slice(0, 4).join(' · '));
+    }
+    const f = (type, s) => ui.DEVICE_UI[type].format({ ...cat.typeOf(type).initial, ...s, status: 'online' });
+    ok(f('floor_lamp', { brightness: 1 }) === 'full' && f('floor_lamp', { brightness: 0 }) === 'off' && f('floor_lamp', { brightness: 0.996 }) === 'full', `lamp ends: ${f('floor_lamp', { brightness: 1 })} / ${f('floor_lamp', { brightness: 0 })} / ${f('floor_lamp', { brightness: 0.996 })}`);
+    ok(f('blinds', { closed: 0 }) === 'open' && f('blinds', { closed: 1 }) === 'closed' && f('blinds', { closed: 0.4 }) === '40% closed', `blinds: ${f('blinds', { closed: 0 })} / ${f('blinds', { closed: 1 })} / ${f('blinds', { closed: 0.4 })}`);
+  }));
+
+  await check('ui · icons exist', need(ui)(({ ok }) => {
+    for (const [type, u] of Object.entries(ui.DEVICE_UI)) ok(typeof u.icon === 'string' && u.icon in ICONS, `${type}: icon "${u.icon}" is not in ICONS`);
+  }));
+
+  // A device's world bounding box (its meshes, no highlight shells): inside the room.
+  const ROOM_EPS = 1e-3;
+  const outside = (THREE, obj) => {
+    obj.updateWorldMatrix(true, true);
+    const b = new THREE.Box3(), mb = new THREE.Box3();
+    obj.traverse((m) => { if (!m.isMesh || m.userData.isShell) return; if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); b.union(mb.copy(m.geometry.boundingBox).applyMatrix4(m.matrixWorld)); });
+    if (b.isEmpty()) return 'no meshes';
+    const f = (v) => v.toFixed(3);
+    return b.min.y >= -ROOM_EPS && b.max.y <= 2.8 + ROOM_EPS && b.min.x >= -4 - ROOM_EPS && b.max.x <= 4 + ROOM_EPS && b.min.z >= -3 - ROOM_EPS && b.max.z <= 3 + ROOM_EPS
+      ? null : `box (${f(b.min.x)}, ${f(b.min.y)}, ${f(b.min.z)}) – (${f(b.max.x)}, ${f(b.max.y)}, ${f(b.max.z)})`;
+  };
+  const room3dOn = async () => {
+    const { THREE, parts } = await env();
+    const R = stubRenderer(), M = parts.materials(), P = parts.parts(R.scene, M);
+    return { THREE, R, room: r3.createRoom3d({ R, P, M, THREE, store: null }) };
+  };
+
+  await check('room3d · builds and animates every type', need(ui, r3)(async ({ ok }) => {
+    const { THREE, R, room } = await room3dOn();
+    const { emptyLayout, addDevice, moveDevice, rotateDevice } = lay, { DEVICE_UI } = ui;
+    const all = types().map((t) => t.type);
+    ok(R.pickIds.has('hub') && room.hubObject && room.pickIds().includes('hub'), 'the hub is tappable as "hub"');
+    let t = 0;
+    for (let i = 0; i < all.length; i += 20) {
+      let L = emptyLayout();
+      for (const type of all.slice(i, i + 20)) L = addDevice(L, type, DEVICE_UI[type].size).layout;
+      room.sync(L);
+      for (const d of L.devices) {
+        ok(R.pickIds.has(d.id) && room.pickIds().includes(d.id), `${d.id} is not tappable`);
+        const o = room.objectFor(d.id); ok(o && o.parent, `${d.id}: objectFor gives an object in the scene`);
+        const out = o && outside(THREE, o); ok(!out, `${d.id} at (${d.x}, ${d.z}) rot ${d.rot}: ${out}`);
+      }
+      // every reachable state, 30 frames each
+      const st = Object.fromEntries(L.devices.map((d) => [d.id, reachableStates(cat.typeOf(d.type))]));
+      const n = Math.max(...Object.values(st).map((v) => v.length));
+      for (let k = 0; k < n; k++) {
+        const state = { env: { hour: 16.5 + k * 0.7 }, hub: { status: k % 2 ? 'online' : 'offline', led: 1 }, plan: {} };
+        for (const d of L.devices) state[d.id] = st[d.id][k % st[d.id].length];
+        for (let f = 0; f < 30; f++) room.update(state, (t += 1 / 30));
+      }
+      room.update({ env: { hour: 16.5 } }, (t += 1 / 30)); // no slices yet (a device just added in build mode)
+      for (const d of L.devices) room.focus(d.id); room.focus('hub'); room.update({ env: { hour: 16.5 } }, (t += 1 / 30)); room.reset();
+      // pushed into every corner (floor and ceiling devices in all four turns): still inside the room
+      for (const d of L.devices) {
+        const mount = cat.typeOf(d.type).mount, size = DEVICE_UI[d.type].size;
+        for (const pos of [{ x: 99, z: 99 }, { x: -99, z: -99 }, { x: 99, z: -99 }, { x: -99, z: 99 }]) {
+          let C = moveDevice(L, d.id, pos, size);
+          for (let r = 0; r < (mount === 'wall' ? 1 : 4); r++) {
+            room.sync(C); const c = C.devices.find((x) => x.id === d.id);
+            const out = outside(THREE, room.objectFor(d.id)); ok(!out, `${d.id} at (${c.x}, ${c.z}) rot ${c.rot}: ${out}`);
+            C = rotateDevice(C, d.id);
+          }
+        }
+      }
+      room.sync(L);
+    }
+  }));
+
+  await check('room3d · sync adds, moves and removes devices', need(ui, r3)(async ({ eq, ok }) => {
+    const { THREE, R, room } = await room3dOn();
+    const { emptyLayout, addDevice, removeDevice, moveDevice, moveHub } = lay;
+    let L = emptyLayout(); for (const type of ['floor_lamp', 'blinds', 'floor_lamp']) L = addDevice(L, type, ui.DEVICE_UI[type].size).layout;
+    room.sync(L);
+    eq(room.pickIds().sort(), ['blinds', 'floor_lamp', 'floor_lamp_2', 'hub'], 'pickIds');
+    const blinds = room.objectFor('blinds'), lamp = room.objectFor('floor_lamp');
+    L = removeDevice(L, 'floor_lamp'); room.sync(L);
+    ok(!R.pickIds.has('floor_lamp') && !room.pickIds().includes('floor_lamp'), 'a removed device is no longer tappable');
+    ok(R.pickIds.has('floor_lamp_2'), 'the other lamp stays tappable');
+    ok(room.objectFor('floor_lamp') == null && !lamp.parent, 'a removed device leaves the scene');
+    ok(room.objectFor('blinds') === blinds, 'a device that stays is not rebuilt');
+    const wall = (o) => { let w = null; o.traverse((x) => { if (!w && x.userData.wall) w = x.userData.wall; }); return w; };
+    eq(wall(blinds), { nx: 0, nz: 1, d: -3 }, 'blinds on the back wall hide with it');
+    eq([blinds.position.z, Math.abs(blinds.rotation.y) < 1e-9], [-3, true], 'back wall: z -3, facing +z');
+    L = moveDevice(L, 'blinds', { x: -3.9, z: 0.5 }, ui.DEVICE_UI.blinds.size); room.sync(L);
+    eq(wall(blinds), { nx: 1, nz: 0, d: -4 }, 'blinds moved to the left wall hide with it');
+    ok(blinds.position.x === -4 && Math.abs(blinds.rotation.y - Math.PI / 2) < 1e-9, `left wall: x -4, facing +x (got x ${blinds.position.x}, rotation ${blinds.rotation.y})`);
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(blinds.quaternion); ok(fwd.x > 0.999, `the left-wall blinds face +x (${fwd.toArray().map((v) => v.toFixed(2))})`);
+    ok(Math.abs(blinds.position.y - (ui.DEVICE_UI.blinds.mountY ?? 1.4)) < 1e-9, 'a wall device hangs at its mountY');
+    L = moveDevice(L, 'floor_lamp_2', { x: 1.25, z: 0.5 }, ui.DEVICE_UI.floor_lamp.size); room.sync(L);
+    const l2 = room.objectFor('floor_lamp_2'); eq([l2.position.x, l2.position.y, l2.position.z], [1.25, 0, 0.5], 'a floor device stands where the layout says');
+    L = moveHub(L, { x: 2, z: 1 }); room.sync(L); eq([room.hubObject.position.x, room.hubObject.position.z], [2, 1], 'the hub follows the layout');
+    for (const pos of [{ x: 99, z: 99 }, { x: -99, z: -99 }]) { room.sync(moveHub(L, pos)); const out = outside(THREE, room.hubObject); ok(!out, `the hub in a corner: ${out}`); }
+    ok(room.objectFor('hub') === room.hubObject, 'objectFor("hub")');
+    let sprites = 0; R.scene.traverse((o) => { if (o.isSprite) sprites++; });
+    const spriteGeo = new THREE.Sprite().geometry; let freed = false; spriteGeo.addEventListener('dispose', () => { freed = true; });
+    room.sync(removeDevice(L, 'blinds')); ok(!freed, 'removing a device leaves the sprite geometry every sprite shares');
+    room.sync(L); ok(sprites > 0, 'the LEDs have their glow sprites');
+    // six lamps: only a few real lights, so a room of lamps stays smooth on a phone
+    let F = emptyLayout(); for (let i = 0; i < 6; i++) F = addDevice(F, 'floor_lamp', ui.DEVICE_UI.floor_lamp.size).layout;
+    room.sync(F); let lights = 0; R.scene.traverse((o) => { if (o.isPointLight && o.visible) lights++; });
+    ok(lights <= 4, `${lights} visible point lights for six lamps`);
+    room.sync(emptyLayout()); eq(room.pickIds(), ['hub'], 'an empty room leaves the hub');
+    let meshes = 0; R.scene.traverse((o) => { if (o.isMesh && o.userData.deviceId && o.userData.deviceId !== 'hub') meshes++; });
+    eq(meshes, 0, 'no device meshes left in the scene');
+  }));
+
+  await check('scene · sceneFor names and orders devices', need(ui, sc)(({ eq, ok }) => {
+    const { emptyLayout, addDevice } = lay;
+    let L = emptyLayout(); for (const type of ['floor_lamp', 'floor_lamp', 'blinds']) L = addDevice(L, type).layout;
+    const s = sc.sceneFor(L);
+    eq([s.id, s.title, s.startHour], ['custom', 'Build your own', 16.5], 'id, title, start hour');
+    ok(s.camera && Array.isArray(s.camera.position) && Array.isArray(s.camera.target), 'a camera');
+    eq(s.deviceOrder, ['floor_lamp', 'floor_lamp_2', 'blinds'], 'deviceOrder');
+    eq(s.deviceOrder.map((id) => s.devices[id].name), ['Floor lamp', 'Floor lamp 2', 'Blinds'], 'names');
+    eq(s.devices.floor_lamp_2.ref, 'the floor lamp 2', 'ref');
+    const d = s.devices.floor_lamp;
+    eq([d.type, d.icon, d.faultText, d.plural, d.initial], ['floor_lamp', 'lamp', 'off the network', false, { brightness: 0 }], 'device fields');
+    ok(d.format === ui.DEVICE_UI.floor_lamp.format && d.control === ui.DEVICE_UI.floor_lamp.control, 'format and control from DEVICE_UI');
+    eq(s.devices.blinds.plural, true, 'blinds plural');
+    const init = sc.initialFor(s);
+    eq(init.floor_lamp_2, { brightness: 0, status: 'online' }, 'device initial');
+    eq([init.hub, init.env, init.plan], [{ status: 'online', led: 1 }, { hour: 16.5 }, {}], 'hub, env, plan');
+    init.floor_lamp.brightness = 1; eq(sc.initialFor(s).floor_lamp.brightness, 0, 'initialFor gives fresh objects');
+    eq(sc.sceneFor(emptyLayout()).deviceOrder, [], 'an empty room');
+    for (const g of guardHits(`${s.title}`)) ok(false, `title ${g}`);
   }));
 }

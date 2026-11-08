@@ -233,6 +233,8 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
   // Register a tappable part for a device. The first part registered for an id (or one passed { anchor: true })
   // is where rings and labels appear.
   function addPickable(obj, id, { anchor = false } = {}) { obj.userData.deviceId = id; obj.traverse((c) => { c.userData.deviceId = id; }); const rec = { obj, id }; if (anchor) pickables.unshift(rec); else pickables.push(rec); }
+  // Drop every tappable part registered for a device (one taken out of the room): taps, rings and labels skip it.
+  function removePickable(id) { for (let i = pickables.length - 1; i >= 0; i--) if (pickables[i].id === id) pickables.splice(i, 1); }
 
   // ---- discovery / attention markers: an expanding ring plus a floating label at a device ----
   const markers = []; const box3 = new THREE.Box3(); const _bb = new THREE.Box3(); const tmp = new THREE.Vector3(); const ndc = new THREE.Vector3(); const viewPos = new THREE.Vector3();
@@ -359,7 +361,7 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
 
   return {
     THREE, renderer, scene, camera, controls, lights: { hemi, sun, fill }, composer, gtao, bloom,
-    addPickable, onPick: (fn) => pickHandlers.push(fn), onFrame: (fn) => frameFns.push(fn), ping, unping, anchorOf, resetView,
+    addPickable, removePickable, onPick: (fn) => pickHandlers.push(fn), onFrame: (fn) => frameFns.push(fn), ping, unping, anchorOf, resetView,
     clearMarkers() { for (const m of markers) dropMarker(m); markers.length = 0; },
     daylight, setQuality, resize, get quality() { return currentQuality; },
     // Debug/QA: render one frame on demand (works while the tab is hidden and requestAnimationFrame is paused).

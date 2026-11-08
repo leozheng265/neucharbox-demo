@@ -31,23 +31,32 @@ function fakeCanvas() {
   return { width: 300, height: 150, style: {}, getContext: () => ctx, addEventListener() {}, toDataURL: () => '' };
 }
 let THREE = null, partsMod = null;
-async function env() {
+// The Node stand-ins the room code needs (a fake 2D canvas, matchMedia) and the vendored THREE and parts.js.
+export async function env() {
   globalThis.document ??= { createElement: () => fakeCanvas() };
   globalThis.matchMedia ??= () => ({ matches: false });
   THREE ??= await import('three');
   partsMod ??= await import('../js/engine/parts.js');
+  return { THREE, parts: partsMod };
 }
-// A stub renderer and the scene's room on `store`. noise(kind, id, text) is told of every ring and pulse.
-function makeRoom(scene, store, quiet, noise, { speed } = {}) {
+// A stub of js/engine/renderer.js's API over a real THREE scene and camera, without WebGL (await env() first).
+// pickIds / picks: what the room made tappable (picks: id → its objects). noise(kind, id, text) is told of every ring.
+export function stubRenderer({ fov = 42, noise = () => {} } = {}) {
+  if (!THREE) throw new Error('stubRenderer: await env() first');
   const scn = new THREE.Scene(); scn.background = new THREE.Color(0xCFDDE6);
   const hemi = new THREE.HemisphereLight(), sun = new THREE.DirectionalLight(), fill = new THREE.DirectionalLight(); scn.add(hemi, sun, fill);
-  const camera = new THREE.PerspectiveCamera(scene.camera?.fov ?? 42, 1.5, 0.05, 80);
-  const pickIds = new Set(), picks = new Map(); // picks: id → the objects the room made tappable for it
-  const R = { THREE, scene: scn, camera, controls: { autoRotate: true, target: new THREE.Vector3(), update() {} }, lights: { hemi, sun, fill }, quality: 'high',
+  const camera = new THREE.PerspectiveCamera(fov, 1.5, 0.05, 80);
+  const pickIds = new Set(), picks = new Map();
+  return { THREE, scene: scn, camera, controls: { autoRotate: true, target: new THREE.Vector3(), update() {} }, lights: { hemi, sun, fill }, quality: 'high',
     addPickable: (obj, id) => { if (!obj || typeof obj.traverse !== 'function') throw new Error(`addPickable("${id}") got ${obj}`); pickIds.add(id); if (!picks.has(id)) picks.set(id, []); picks.get(id).push(obj); }, pickIds, picks,
+    removePickable: (id) => { pickIds.delete(id); picks.delete(id); },
     onPick() {}, onFrame() {},
     ping(id, text) { noise('rang', id, text); },
     unping() {}, clearMarkers() {}, anchorOf: () => null, resetView() {}, step() {}, daylight(h) { if (!Number.isFinite(h)) throw new Error(`daylight(${h})`); } };
+}
+// A stub renderer and the scene's room on `store`. noise(kind, id, text) is told of every ring and pulse.
+function makeRoom(scene, store, quiet, noise, { speed } = {}) {
+  const R = stubRenderer({ fov: scene.camera?.fov ?? 42, noise });
   const M = partsMod.materials(); const P = partsMod.parts(R.scene, M);
   const highlighter = P.highlighter; // a pulse on a device: parts.js's highlighter focus()
   P.highlighter = (map) => { const h = highlighter(map), focus = h.focus; h.focus = (id, hex) => { noise('pulsed', id); return focus(id, hex); }; return h; };
