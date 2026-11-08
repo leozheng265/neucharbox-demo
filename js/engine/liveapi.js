@@ -58,6 +58,8 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
     approve: (sid, rid) => req(sid, rid, 'approve'),
     decline: (sid, rid) => req(sid, rid, 'decline'),
     whatIf: (sid, rid, device) => call('POST', `sessions/${enc(sid)}/requests/${enc(rid)}/whatif`, { body: { device } }),
+    set: (sid, path, value) => call('POST', `sessions/${enc(sid)}/set`, { body: { path, value } }),
+    advance: (sid, hours) => call('POST', `sessions/${enc(sid)}/advance`, { body: { hours }, ms: 40000 }),
     reset: (sid) => call('POST', `sessions/${enc(sid)}/reset`, { body: {} }),
     eventsUrl: (sid, after) => `${root}sessions/${enc(sid)}/events${after ? `?after=${Number(after)}` : ''}`,
     headers: () => ({ Authorization: `Bearer ${getCode() ?? ''}`, 'ngrok-skip-browser-warning': '1', Accept: 'text/event-stream' }),
