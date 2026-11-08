@@ -117,6 +117,12 @@ const abortError = () => new DOMException('The operation was aborted.', 'AbortEr
 const mergeSteps = (steps, more) => { const out = steps.map((s) => ({ ...s })); for (const s of more) { const i = out.findIndex((x) => x.id === s.id); if (i >= 0) out[i] = { ...s }; else out.push({ ...s }); } return out; };
 // What a hand edit may change (the same table as the server): path → 'bool' or [min, max].
 const EDITABLE = { 'lamp.brightness': [0, 1], 'blinds.closed': [0, 1], 'soil.moisture': [0, 100], 'pump.running': 'bool', 'camera.armed': 'bool', 'camera.motion': 'bool', 'thermostat.target': [10, 28], 'thermostat.current': [5, 35] };
+// A custom room's: each device's catalog `edit` fields, as the server's CustomRoom.Build gives them (types: id → type).
+const customEditable = (types) => {
+  const out = {};
+  for (const [id, type] of Object.entries(types)) for (const e of typeOf(type).edit || []) out[`${id}.${e.field}`] = e.kind === 'bool' ? 'bool' : [e.min, e.max];
+  return out;
+};
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const pad = (n) => String(n).padStart(2, '0');
 // The room clock `hours` later (the mock reads the ISO time as UTC, which is only arithmetic here).
@@ -211,7 +217,8 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
         const state = { env: { hour: CLOCK.hour } };
         for (const d of list) state[d.id] = { ...clone(typeOf(d.type).initial), status: 'online' };
         const id = `sess-${++nSession}`;
-        sessions.set(id, { id, initial: clone(state), events: [], streams: new Set(), state, clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
+        const editable = customEditable(Object.fromEntries(list.map((d) => [d.id, d.type])));
+        sessions.set(id, { id, initial: clone(state), editable, events: [], streams: new Set(), state, clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
         return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: ["Check each device and tell me what it's doing"] });
       }
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
@@ -246,14 +253,14 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       if (recent.length >= 10) { editTimes.set(sid, recent); return fail(429, 'rate', 'Too many changes at once. Wait a moment.'); }
       recent.push(now); editTimes.set(sid, recent);
       if (sub === 'set') {
-        const { path, value } = body, rule = Object.hasOwn(EDITABLE, path) ? EDITABLE[path] : null;
+        const { path, value } = body, table = sess.editable ?? EDITABLE, rule = typeof path === 'string' && Object.hasOwn(table, path) ? table[path] : null;
         const good = rule === 'bool' ? typeof value === 'boolean' : !!rule && typeof value === 'number' && Number.isFinite(value) && value >= rule[0] && value <= rule[1];
         if (!good) return fail(400, 'bad_value', "That value isn't allowed for this device.");
         const [dev] = path.split('.');
         if (sess.state[dev].status === 'fault' || sess.state[dev].status === 'busy') return fail(409, 'device_unavailable', "That device can't be changed right now.");
         const rid = sess.active;
         emit(sess, 'state', { path, value, ms: 0, src: 'edit' }, rid);
-        if (path === 'lamp.brightness') emit(sess, 'state', { path: 'lamp.on', value: value > 0, ms: 0, src: 'edit' }, rid);
+        if (!sess.editable && path === 'lamp.brightness') emit(sess, 'state', { path: 'lamp.on', value: value > 0, ms: 0, src: 'edit' }, rid); // Home's lamp only
         return json(202, {});
       }
       const hours = body.hours;

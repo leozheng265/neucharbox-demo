@@ -12,6 +12,7 @@ export default {
   // on the frame while locked. The thumb-turn quarter-turns with it.
   smart_lock: {
     icon: 'lock', size: 0.2, mountY: 1.1,
+    edit: [{ field: 'locked', kind: 'switch' }],
     format: (s) => (s.locked ? 'locked' : 'unlocked'),
     active: (s) => !!s.locked,
     control: { kind: 'switch', field: 'locked' },
@@ -44,6 +45,7 @@ export default {
   // lens ring and the LED go amber while it sees movement.
   video_doorbell: {
     icon: 'doorbell', size: 0.12, mountY: 1.3,
+    edit: [{ field: 'ringing', kind: 'switch', label: 'ringing' }, { field: 'motion', kind: 'switch', label: 'motion' }],
     format: (s) => (s.ringing ? 'ringing' : s.motion ? 'movement at the door' : 'quiet'),
     active: (s) => !!s.ringing || !!s.motion,
     control: false,
@@ -78,6 +80,7 @@ export default {
   // when open.
   door_window_sensor: {
     icon: 'windowsensor', size: 0.2, mountY: 1.0,
+    edit: [{ field: 'open', kind: 'switch' }],
     format: (s) => (s.open ? 'open' : 'closed'),
     active: (s) => !!s.open,
     control: { kind: 'switch', field: 'open' },
@@ -105,6 +108,7 @@ export default {
   // green heartbeat otherwise.
   smoke_co_alarm: {
     icon: 'smoke', size: 0.28,
+    edit: [{ field: 'alarm', kind: 'switch' }],
     format: (s) => (s.alarm ? 'alarm sounding' : 'all clear'),
     active: (s) => !!s.alarm,
     control: false,
@@ -140,6 +144,7 @@ export default {
   // while it sounds.
   siren: {
     icon: 'siren', size: 0.3, mountY: 2.2,
+    edit: [{ field: 'sounding', kind: 'switch' }],
     format: (s) => (s.sounding ? 'sounding' : 'silent'),
     active: (s) => !!s.sounding,
     control: { kind: 'switch', field: 'sounding' },
@@ -179,6 +184,7 @@ export default {
   // top over 8 s (the same time the server takes), showing the dark bay behind; a lamp on the opener blinks while moving.
   garage_door: {
     icon: 'garage', size: 1.9, mountY: 1.0,
+    edit: [{ field: 'open', kind: 'switch' }],
     format: (s) => (s.open ? 'open' : 'closed'),
     active: (s) => !!s.open,
     control: { kind: 'switch', field: 'open' },

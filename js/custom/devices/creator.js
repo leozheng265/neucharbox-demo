@@ -11,6 +11,7 @@ export default {
   // A softbox on a stand. The panel glows with the brightness, warmer at 2700 K and cooler at 6500 K.
   key_light: {
     icon: 'keylight', size: 0.6,
+    edit: [{ field: 'brightness', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : `${r >= 100 ? 'full' : `${r}%`} · ${Math.round(num(s.kelvin) / 100) * 100}K`; },
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },
@@ -40,6 +41,7 @@ export default {
   // A camera on a tripod. The tally lamp is red on air and the lens ring glows while it is on.
   main_camera: {
     icon: 'camera', size: 0.6,
+    edit: [{ field: 'on', kind: 'switch' }],
     format: (s) => (s.on ? 'on' : 'off'),
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },
@@ -70,6 +72,7 @@ export default {
   // A mic on a boom stand. Its band is red while muted and green while live.
   mic: {
     icon: 'mic', size: 0.6, control: (s) => ({ kind: 'switch', field: 'muted', on: !s.muted }), // on = live, so the switch reads opposite to the muted flag
+    edit: [{ field: 'muted', kind: 'switch' }],
     format: (s) => (s.muted ? 'muted' : 'live'),
     active: (s) => !s.muted,
     model({ THREE, P, M }) {
@@ -95,6 +98,7 @@ export default {
   // A capture card box with its inputs on the front; the top shows the chosen input and whether a signal arrives.
   capture_card: {
     icon: 'capture', size: 0.5,
+    edit: [{ field: 'signal', kind: 'switch' }],
     format: (s) => `${s.input} · ${s.signal ? 'signal' : 'no signal'}`,
     active: (s) => !!s.signal,
     control: false,
@@ -168,6 +172,7 @@ export default {
   // A lit sign: "ON AIR" in red letters, glowing while on.
   on_air_sign: {
     icon: 'sign', size: 0.5, mountY: 2.0,
+    edit: [{ field: 'on', kind: 'switch' }],
     format: (s) => (s.on ? 'ON AIR' : 'off'),
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },
@@ -191,6 +196,7 @@ export default {
   // A strip of light along the wall, with a soft wash on the wall around it, in the chosen colour.
   led_strip: {
     icon: 'strip', size: 1.2, mountY: 1.0,
+    edit: [{ field: 'brightness', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : `${s.color} · ${r >= 100 ? 'full' : `${r}%`}`; },
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },

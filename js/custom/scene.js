@@ -15,12 +15,25 @@ export const CAMERA_PHONE = { ...CAMERA, position: [5.2, 7.6, 4.5], target: [-0.
 export const isPhonePortrait = (w, h) => w <= 600 && h > w * 1.15;
 export const cameraFor = (w, h) => (isPhonePortrait(w, h) ? CAMERA_PHONE : CAMERA);
 
+// The card's hand edits (js/engine/controls.js editsFor): every catalog edit field, in the catalog's order, as DEVICE_UI
+// presents it, with the catalog's range. A field DEVICE_UI doesn't present is left out (a test keeps there being none).
+function editOf(t, ui) {
+  const out = [];
+  for (const e of t.edit || []) {
+    const p = (ui.edit || []).find((x) => x.field === e.field); if (!p) continue;
+    out.push(e.kind === 'number'
+      ? { field: e.field, kind: 'slider', min: e.min, max: e.max, step: p.step, scale: p.scale ?? 1, unit: p.unit, label: p.label }
+      : { field: e.field, kind: 'switch', label: p.label });
+  }
+  return out;
+}
+
 export function sceneFor(layout) {
   const devices = {}, deviceOrder = [];
   for (const d of layout?.devices || []) {
     const t = typeOf(d.type), ui = DEVICE_UI[d.type], names = t && nameOf(d.type, d.id);
     if (!t || !ui || !names) continue;
-    devices[d.id] = { type: d.type, icon: ui.icon, name: names.name, ref: names.ref, initial: structuredClone(t.initial), format: ui.format, active: ui.active, control: ui.control, faultText: t.faultText, plural: !!ui.plural };
+    devices[d.id] = { type: d.type, icon: ui.icon, name: names.name, ref: names.ref, initial: structuredClone(t.initial), format: ui.format, active: ui.active, control: ui.control, edit: editOf(t, ui), faultText: t.faultText, plural: !!ui.plural };
     deviceOrder.push(d.id);
   }
   return { id: 'custom', title: 'Build your own', startHour: START_HOUR, camera: CAMERA, deviceOrder, devices };

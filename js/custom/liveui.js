@@ -8,10 +8,22 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 // getPanel() is the current session's panel (it is made again for every session). alive() is false once the page is
 // gone. chat.mount(node) puts the card in the conversation; doc is the document that makes it.
-export function liveUiFor({ statusEl, getPanel, room3d, R, baselineRef, onBackToBuilding, chat, alive, doc = globalThis.document }) {
+// Hand edits, as main.js wires Home: editing(on) turns the panel's edit mode on or off (its edits go to getLive(), the
+// current live), shows the clock control (js/engine/clockctl.js) and marks editRoot `live-edit`; clock(c) renders the
+// clock control. statusTextEl is the status row's text (the row also holds the clock control); while the clock control
+// shows, a status line that is only the clock's label is dropped, as on Home.
+export function liveUiFor({ statusEl, statusTextEl = statusEl, getPanel, room3d, R, baselineRef, onBackToBuilding, chat, alive, doc = globalThis.document,
+  clockCtl = null, editRoot = null, getLive = () => null }) {
+  let clockOn = false, clockText = null;
   return {
     alive: () => !!alive(),
-    status: (text, bad) => { statusEl.textContent = text; statusEl.classList.toggle('bad', !!bad); },
+    status: (text, bad) => { if (clockOn && clockText && text === clockText) return; statusTextEl.textContent = text; statusEl.classList.toggle('bad', !!bad); },
+    editing: (on) => {
+      clockOn = !!on; editRoot?.classList.toggle('live-edit', !!on);
+      getPanel()?.editable(on, { onEdit: (p, v) => getLive()?.edit(p, v) });
+      clockCtl?.active(on);
+    },
+    clock: (c) => { clockText = c?.label || null; clockCtl?.render(c); },
     beats: () => {}, // no beat bar in this scene
     track: (on) => getPanel()?.track(on),
     rewind: () => getPanel()?.rewind(),

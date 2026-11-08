@@ -12,6 +12,7 @@ export default {
   // and a row of ten lights on the base fills with the progress.
   printer_3d: {
     icon: 'printer3d', size: 0.5,
+    edit: [{ field: 'printing', kind: 'switch' }, { field: 'progress', kind: 'slider', step: 1, unit: '%', label: 'progress' }],
     format: (s) => {
       const p = whole(s.progress);
       if (p >= 100) return 'print done';
@@ -73,6 +74,7 @@ export default {
   // get there. The cube rides in the gripper while it holds, and stays on the tray or the pad where it was let go.
   robot_arm: {
     icon: 'arm', size: 0.8,
+    edit: [{ field: 'holding', kind: 'switch' }],
     format: (s) => `${s.pose === 'pick' ? 'at the pick spot' : s.pose === 'place' ? 'at the place spot' : 'at home'} · ${s.holding ? 'holding a part' : 'gripper empty'}`,
     active: (s) => !!s.holding,
     control: { kind: 'switch', field: 'holding' },
@@ -141,6 +143,7 @@ export default {
   // barcode strip out of its front slot, holds it a moment and lets it drop; the light blinks amber while it prints.
   label_printer: {
     icon: 'labelprinter', size: 0.4,
+    edit: [{ field: 'printed', kind: 'slider', step: 1, label: 'printed' }],
     format: (s) => { const n = Math.max(0, whole(s.printed)); return n === 0 ? 'no labels yet' : `${n} label${n === 1 ? '' : 's'} printed`; },
     control: false,
     model({ THREE, P, M }) {

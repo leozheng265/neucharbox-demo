@@ -25,6 +25,7 @@ export default {
   // it runs. The beacon on the end post is blue while the belt moves.
   conveyor: {
     icon: 'conveyor', size: 1.6,
+    edit: [{ field: 'speed', kind: 'slider', step: 0.005, scale: 200, unit: '%', label: 'speed' }],
     format: (s) => (num(s.speed) > 0.05 ? `running · ${num(s.speed).toFixed(1)} m/s` : 'stopped'),
     active: (s) => num(s.speed) > 0.05,
     control: { kind: 'bar', field: 'speed', min: 0, max: 0.5 },
@@ -61,6 +62,7 @@ export default {
   // the posts and the beacon on top glows amber.
   scanner_arch: {
     icon: 'scanner', size: 1.2,
+    edit: [{ field: 'armed', kind: 'switch' }, { field: 'scanned', kind: 'slider', step: 1, label: 'scanned' }],
     format: (s) => `${s.armed ? 'armed' : 'idle'} · ${Math.round(num(s.scanned))} scanned`,
     active: (s) => !!s.armed,
     control: { kind: 'switch', field: 'armed' },
@@ -166,6 +168,7 @@ export default {
   // The door rolls up into its housing over 3 s; parcels pile up in the doorway as they arrive.
   loading_dock: {
     icon: 'dock', size: 1.6, mountY: 1.05,
+    edit: [{ field: 'open', kind: 'switch' }, { field: 'parcels', kind: 'slider', step: 1, label: 'parcels' }],
     format: (s) => { const n = Math.round(num(s.parcels)); return `${s.open ? 'open' : 'closed'} · ${n} ${n === 1 ? 'parcel' : 'parcels'}`; },
     active: (s) => !!s.open,
     control: { kind: 'switch', field: 'open' },

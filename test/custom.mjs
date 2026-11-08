@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { env, stubRenderer } from './build.mjs';
 import { ICONS } from '../js/engine/icons.js';
-import { controlFor } from '../js/engine/controls.js';
+import { controlFor, editsFor } from '../js/engine/controls.js';
 
 // Every state the catalog can reach for a type, as store slices: the initial state; each edit field at its min and
 // max (a bool both ways); each value an action's effects can write (a constant, every enum value of the argument it
@@ -216,6 +216,39 @@ export async function customChecks({ report, guardHits }) {
 
   await check('ui · icons exist', need(ui)(({ ok }) => {
     for (const [type, u] of Object.entries(ui.DEVICE_UI)) ok(typeof u.icon === 'string' && u.icon in ICONS, `${type}: icon "${u.icon}" is not in ICONS`);
+  }));
+
+  // Editable cards (live mode): each catalog `edit` field is a slider (number) or a switch (bool) on the card. The range
+  // is the catalog's; DEVICE_UI only says how to show it.
+  await check('ui · every catalog edit field has a presentation', need(ui)(({ eq, ok }) => {
+    let fields = 0;
+    for (const t of types()) {
+      const u = ui.DEVICE_UI[t.type]; if (!u) continue;
+      const pres = u.edit ?? [], cat = t.edit || [];
+      ok(Array.isArray(pres), `${t.type}: edit is a list`); if (!Array.isArray(pres)) continue;
+      eq(pres.map((p) => p.field), cat.map((e) => e.field), `${t.type}: the presented fields, in the catalog's order`);
+      for (const e of cat) {
+        const p = pres.find((x) => x.field === e.field), at = `${t.type}.${e.field}`; if (!p) continue;
+        fields++;
+        ok(Object.keys(p).every((k) => ['field', 'kind', 'step', 'scale', 'unit', 'label'].includes(k)), `${at}: only field, kind, step, scale, unit, label (the range is the catalog's)`);
+        if (e.kind === 'bool') { eq(p.kind, 'switch', `${at} kind`); ok(p.step == null && p.scale == null && p.unit == null, `${at}: a switch has no step, scale or unit`); continue; }
+        eq(p.kind, 'slider', `${at} kind`);
+        const scale = p.scale ?? 1, n = (e.max - e.min) / p.step;
+        ok(Number.isFinite(scale) && scale > 0, `${at}: scale ${p.scale}`);
+        ok(Number.isFinite(p.step) && p.step > 0 && n <= 1000 && Math.abs(n - Math.round(n)) < 1e-6, `${at}: step ${p.step} divides ${e.min}–${e.max} in at most 1000 steps`);
+        if (e.min === 0 && e.max === 1) eq([p.scale, p.unit], [100, '%'], `${at}: a 0–1 field shows as a percent`);
+        ok(p.unit == null || typeof p.unit === 'string', `${at}: unit is text`);
+      }
+      for (const p of pres) for (const s of [p.label, p.unit]) if (s != null) {
+        ok(typeof s === 'string' && s.length <= 14, `${t.type}.${p.field}: "${s}" is short text`);
+        for (const g of guardHits(String(s))) ok(false, `${t.type}.${p.field}: "${s}" ${g}`);
+      }
+      // Two sliders, or two switches, on one card are told apart by their labels.
+      const sliders = pres.filter((p) => p.kind === 'slider'), switches = pres.filter((p) => p.kind === 'switch');
+      if (sliders.length > 1) ok(sliders.every((p) => p.label), `${t.type}: each of its sliders has a label`);
+      for (const list of [sliders, switches]) eq(new Set(list.map((p) => p.label ?? p.field)).size, list.length, `${t.type}: distinct labels`);
+    }
+    eq(fields, types().reduce((a, t) => a + (t.edit || []).length, 0), 'every catalog edit field');
   }));
 
   // A device's world bounding box (its meshes, no highlight shells or unseen tap boxes): inside the room.
@@ -430,6 +463,26 @@ export async function customChecks({ report, guardHits }) {
     for (const g of guardHits(`${s.title}`)) ok(false, `title ${g}`);
   }));
 
+  await check('scene · editsFor on a custom scene matches the catalog', need(ui, sc)(({ eq, ok }) => {
+    const all = types().map((t) => t.type);
+    let seen = 0, numbered = 0;
+    for (let i = 0; i < all.length; i += 19) { // 19 types and a second floor lamp: at most 20 devices a room
+      let L = lay.emptyLayout();
+      for (const type of all.slice(i, i + 19)) L = lay.addDevice(L, type).layout;
+      if (i === 0) L = lay.addDevice(L, 'floor_lamp').layout;
+      const s = sc.sceneFor(L), init = sc.initialFor(s);
+      for (const id of s.deviceOrder) {
+        const t = cat.typeOf(s.devices[id].type);
+        const got = editsFor(id, s.devices[id], init[id]).map((e) => ({ path: e.path, kind: e.kind, min: e.min, max: e.max, value: e.value }));
+        const want = (t.edit || []).map((e) => ({ path: `${id}.${e.field}`, kind: e.kind === 'bool' ? 'switch' : 'slider', min: e.min, max: e.max, value: t.initial[e.field] }));
+        eq(got, want, id); seen++;
+        for (const e of editsFor(id, s.devices[id], init[id])) if (e.kind === 'slider') ok(Number.isFinite(e.step) && e.step > 0 && e.scale > 0, `${e.path}: step ${e.step}, scale ${e.scale}`);
+        if (id === 'floor_lamp_2') numbered++;
+      }
+    }
+    eq([seen, numbered], [all.length + 1, 1], 'every type, and a numbered device on its own id');
+  }));
+
   // ---- Task 7: the mode controller, the code gate and the live hooks (real createLive against the contract mock) ----
   const ctl = await import('../js/custom/controller.js').catch((e) => ({ err: e }));
   const gate = await import('../js/custom/gate.js').catch((e) => ({ err: e }));
@@ -473,7 +526,7 @@ export async function customChecks({ report, guardHits }) {
     const makeLive = (scene, devices) => {
       const p = liveParts(log), store = stm.createStore(sc.initialFor(scene));
       const live = lv.createLive({ scene, store, view: p.view, panel: p.panel, ui: p.ui, base: 'http://mock', fetch: spy, codes, sessionExtra: () => ({ devices }) });
-      lives.push({ live, parts: p, devices }); return live;
+      lives.push({ live, parts: p, devices, store }); return live;
     };
     const c = ctl.createCustomController({ storage, makeLive, ui: { mode: (m) => modes.push(m), layout: (l) => layouts.push(l), notice: (k) => notices.push(k) } });
     return { c, mock, codes, storage, log, lives, seen, notices, modes, layouts, last: () => lives.at(-1) };
@@ -687,6 +740,52 @@ export async function customChecks({ report, guardHits }) {
     ui.offerGuided('x'); eq(mounted.length, 1, 'one card');
     const h = mounted[0].innerHTML; ok(h.includes(cpy.CUSTOM_COPY.toBuilding) && h.includes(cpy.CUSTOM_COPY.otherScenes) && /<a [^>]*href="#"/.test(h), 'both buttons, the link to #');
     mounted[0].parts.button.onclick(); eq([toB, mounted[0].parts.button.disabled], [1, true], 'Back to building runs and disables the button');
+  }));
+
+  await check('run · liveUiFor wires editing and the clock as main.js does', runMods(({ eq, ok }) => {
+    const calls = [], classes = new Set(), edits = [], text = { textContent: '' };
+    const statusEl = { textContent: '', classList: { toggle: (k, v) => calls.push(['bad', !!v]) } };
+    let onEdit = null;
+    const panel = { editable: (on, o) => { calls.push(['editable', on]); onEdit = o?.onEdit ?? null; }, track() {}, rewind() {} };
+    const ui = lu.liveUiFor({ statusEl, statusTextEl: text, getPanel: () => panel, room3d: { reset() {} }, R: { clearMarkers() {} }, baselineRef: { current: null },
+      onBackToBuilding: () => true, chat: { mount() {} }, alive: () => true, doc: fakeDoc(),
+      editRoot: { classList: { toggle: (k, v) => (v ? classes.add(k) : classes.delete(k)) } },
+      clockCtl: { active: (on) => calls.push(['clock active', on]), render: (c) => calls.push(['clock render', c]) },
+      getLive: () => ({ edit: (p, v) => edits.push([p, v]) }) });
+    ok(typeof ui.editing === 'function' && typeof ui.clock === 'function', 'the ui has editing and clock');
+    ui.editing(true);
+    eq(calls.splice(0), [['editable', true], ['clock active', true]], 'editing on: the panel takes edits, the clock control shows');
+    ok(classes.has('live-edit'), 'the page is marked live-edit (the phone layout makes room for the controls)');
+    onEdit?.('soil_sensor.moisture', 25); eq(edits, [['soil_sensor.moisture', 25]], 'a card edit goes to the current live');
+    const c = { label: 'Fri 16:30', enabled: true, reason: null };
+    ui.clock(c); eq(calls.splice(0), [['clock render', c]], 'the clock control renders the controller\'s clock');
+    ui.status('Fri 16:30'); eq(text.textContent, '', 'a status line that is only the clock\'s label is dropped while the clock shows');
+    ui.status('Live AI · 2 devices · waiting for your request', true); eq([text.textContent, calls.splice(0)], ['Live AI · 2 devices · waiting for your request', [['bad', true]]], 'other status text shows, in the text span');
+    eq(statusEl.textContent, '', 'the row keeps its children (the clock control)');
+    ui.editing(false);
+    eq(calls.splice(0), [['editable', false], ['clock active', false]], 'editing off: display-only cards, no clock control');
+    ok(!classes.has('live-edit'), 'live-edit off');
+    ui.status('Fri 16:30'); eq(text.textContent, 'Fri 16:30', 'with the clock control hidden, the label shows again');
+  }));
+
+  await check('run · a custom room\'s hand edits post set on catalog paths, and the mock checks them against the catalog', live2(ctl)(async ({ eq, ok }) => {
+    const t = rig(); t.c.gated(); t.c.add('soil_sensor'); t.c.add('water_pump'); await t.c.done();
+    const L = t.last(); await waitFor(() => L.live.phase === 'idle', 'idle');
+    await L.live.edit('soil_sensor.moisture', 25);
+    eq(L.store.get('soil_sensor.moisture'), 25, 'the store moves at once and stays (the mock took it)');
+    eq(postsTo(t.mock, /\/set$/).map((c) => c.body), [{ path: 'soil_sensor.moisture', value: 25 }], 'one set, on the catalog path');
+    await L.live.edit('soil_sensor.status', 'fault'); await L.live.edit('soil.moisture', 25); await L.live.edit('water_pump.seconds', 5);
+    eq(postsTo(t.mock, /\/set$/).length, 1, 'paths outside the catalog\'s edit post nothing');
+    await L.live.edit('water_pump.running', true);
+    await waitFor(() => L.store.get('water_pump.running') === true, 'the switch edit');
+    eq(L.parts.h.accessCount, 0, 'no access card');
+    ok(!t.log.some((x) => x[0] === 'view' && x[1] === 'ncb' && x[2] === lv.LIVE_COPY.editRejected), 'no edit was refused');
+    const api = lapi.createLiveApi({ base: 'http://mock', fetch: t.mock.fetch, getCode: () => mk.MOCK_CODE }), sid = L.live.sessionId;
+    for (const [path, value] of [['soil_sensor.moisture', 101], ['soil_sensor.status', 'fault'], ['soil.moisture', 25], ['water_pump.running', 1]]) {
+      let got = 'no error'; try { await api.set(sid, path, value); } catch (e) { got = [e.status, e.kind]; }
+      eq(got, [400, 'bad_value'], `mock: ${path} = ${JSON.stringify(value)}`);
+    }
+    t.c.teardown();
   }));
 
   // The stand-in panel reads EVERY device of its scene on each store write, as the real one does (a TypeError on a

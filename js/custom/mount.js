@@ -14,6 +14,7 @@ import { createPanel } from '../engine/panel.js';
 import { createLive, codeStore } from '../engine/live.js';
 import { createLiveView } from '../engine/livechat.js';
 import { createLiveApi } from '../engine/liveapi.js';
+import { createClockCtl } from '../engine/clockctl.js';
 import { socialLinks } from '../engine/social.js';
 import { liveApiBase } from '../live-config.js';
 import { CUSTOM_COPY as C } from './copy.js';
@@ -36,14 +37,14 @@ const safeStorage = () => { try { return globalThis.localStorage ?? null; } catc
 
 export async function mountCustom({ app, isCurrent, setCurrent }) {
   if (!isCurrent()) return; // this module arrived after the visitor routed elsewhere: their page stays as it is
-  app.classList.remove('picker-mode', 'failed');
+  app.classList.remove('picker-mode', 'failed', 'live-edit');
   app.innerHTML = `
     <header class="top custom-top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(C.cardTitle)}</div>
       <div class="modebar"><div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="build" aria-pressed="false" disabled>${esc(C.build)}</button><button type="button" data-mode="run" aria-pressed="false" disabled>${esc(C.run)}</button></div><button class="btn small primary done" type="button" disabled>${esc(C.done)}</button></div>
       <div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a><nav class="social" aria-label="Follow NeuCharBox"><span class="social-label">Follow</span>${socialLinks()}</nav></header>
     <div class="stage custom" data-mode="gate">
       <div class="room"><canvas id="room"></canvas><div class="hint" id="hint">${esc(ORBIT_HINT)}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button><div class="selbar" id="selbar" role="toolbar" aria-label="Selected device" hidden></div><div class="notice" id="notice" role="status" hidden></div><p class="empty-note" id="emptyNote" hidden></p><p class="changed-note" id="changedNote" role="status" hidden>${esc(C.changed)}</p></div>
-      <div class="status" id="status" role="status" hidden></div>
+      <div class="status" id="status" hidden><span class="stext" id="statusText" role="status"></span><span class="clockctl" id="clockctl" hidden></span></div>
       <div class="side">
         <div class="inventory" id="inventory" hidden></div>
         <div class="panel" id="panel" hidden></div>
@@ -51,7 +52,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       </div>
     </div>`;
   const $ = (id) => document.getElementById(id);
-  const stage = app.querySelector('.stage.custom'), statusEl = $('status'), hintEl = $('hint'), noticeEl = $('notice'), changedEl = $('changedNote'), chatEl = $('chat'), invEl = $('inventory');
+  const stage = app.querySelector('.stage.custom'), statusEl = $('status'), statusTextEl = $('statusText'), hintEl = $('hint'), noticeEl = $('notice'), changedEl = $('changedNote'), chatEl = $('chat'), invEl = $('inventory');
   let panelEl = $('panel');
   const buildBtn = app.querySelector('.seg [data-mode="build"]'), runBtn = app.querySelector('.seg [data-mode="run"]'), doneBtn = app.querySelector('.top .done');
 
@@ -72,6 +73,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     controller?.teardown(); placement?.dispose(); inventory?.dispose();
     wiring?.dispose();
     R.dispose();
+    app.classList.remove('live-edit');
     if (window.__ncb === hooks) window.__ncb = null;
   };
   setCurrent({ scene: null, teardown });
@@ -162,9 +164,12 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       replaceEl: () => { const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh; },
       makePanel: (sc, scoped) => createPanel(panelEl, sc, scoped, { onSelect: ping }),
     });
+    // The clock control beside the status line: shown while a live session's cards are editable, usable between requests.
+    const clockCtl = createClockCtl($('clockctl'), { onAdvance: (h) => controller?.live?.advance(h) });
     liveUi = liveUiFor({
-      statusEl, getPanel: () => wiring.panel, room3d, R, baselineRef, chat, alive: () => isCurrent() && !torn,
+      statusEl, statusTextEl, getPanel: () => wiring.panel, room3d, R, baselineRef, chat, alive: () => isCurrent() && !torn,
       onBackToBuilding: () => controller.toBuild(),
+      clockCtl, editRoot: app, getLive: () => controller?.live,
     });
     room3d.sync(controller.layout);
     R.onFrame((t) => {

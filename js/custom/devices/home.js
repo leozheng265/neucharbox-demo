@@ -7,6 +7,7 @@ export default {
   // Off and full at the ends of the dimmer, never "0%" or "100%".
   floor_lamp: {
     icon: 'lamp', size: 0.6,
+    edit: [{ field: 'brightness', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : r >= 100 ? 'full' : `on · ${r}%`; },
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },
@@ -37,6 +38,7 @@ export default {
   // "open" and "closed" at the ends of the travel, as in Home.
   blinds: {
     icon: 'blinds', size: 1.2, mountY: 1.5, plural: true,
+    edit: [{ field: 'closed', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: (s) => { const r = pct(s.closed); return r <= 0 ? 'open' : r >= 100 ? 'closed' : `${r}% closed`; },
     control: { kind: 'bar', field: 'closed', min: 0, max: 1 },
     model({ THREE, P, M }) {
@@ -79,6 +81,7 @@ export default {
   // Soil moisture probe in a potted plant; the soil darkens as it takes up water (20% reads dry and pale, 45% dark).
   soil_sensor: {
     icon: 'moisture', size: 0.8,
+    edit: [{ field: 'moisture', kind: 'slider', step: 1, unit: '%' }],
     format: (s) => { const m = Math.round(num(s.moisture)); return m >= 100 ? 'saturated' : `${Math.max(0, m)}% moisture`; },
     control: false,
     model({ THREE, P, M }) {
@@ -107,6 +110,7 @@ export default {
   // hose runs out along the floor.
   water_pump: {
     icon: 'pump', size: 0.5,
+    edit: [{ field: 'running', kind: 'switch' }],
     format: (s) => (s.running ? 'running' : 'idle'),
     active: (s) => !!s.running,
     control: { kind: 'switch', field: 'running' },
@@ -136,6 +140,7 @@ export default {
   // armed, amber motion (blinking while armed), as in Home.
   door_camera: {
     icon: 'camera', size: 0.3, mountY: 2.0,
+    edit: [{ field: 'armed', kind: 'switch', label: 'armed' }, { field: 'motion', kind: 'switch', label: 'motion' }],
     format: (s) => (s.armed ? (s.motion ? 'motion at door' : 'armed · no motion') : s.motion ? 'standby · motion' : 'standby'),
     active: (s) => !!s.armed,
     control: { kind: 'switch', field: 'armed' },
@@ -159,6 +164,7 @@ export default {
   // screen red so it reads as an alarm from across the room, and offline shows dashes.
   thermostat: {
     icon: 'thermostat', size: 0.3, mountY: 1.45,
+    edit: [{ field: 'target', kind: 'slider', step: 0.5, unit: '°C', label: 'set' }, { field: 'current', kind: 'slider', step: 0.5, unit: '°C', label: 'now' }],
     format: (s) => `${oneDecimal(s.target)}°C set · ${num(s.current).toFixed(1)}°C now`,
     control: { kind: 'bar', field: 'target', min: 10, max: 28 }, // the set point on the thermostat's 10–28 °C range
     model({ THREE, P, M }) {
