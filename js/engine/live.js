@@ -630,6 +630,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     get available() { return available; },
     get active() { return active; },
     get phase() { return phase; },
+    get advancing() { return advancing; },
     get sessionId() { return sessionId; },
   };
 }

@@ -4,6 +4,7 @@ export const CUSTOM_COPY = {
   cardPromise: 'Pick your devices, place them, then ask the live AI.',
   cardTag: 'live AI',
   back: 'Back to scenes',
+  offline: 'Build your own needs the live AI, which is offline right now. Try one of the other scenes, or follow NeuCharBox for updates.',
   build: 'Build',
   run: 'Run',
   done: 'Done building →',

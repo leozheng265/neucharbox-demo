@@ -180,11 +180,11 @@ export function createLiveView({ chat, scene }) {
   }
 
   // ---- access: invite code, application, or offline ----
-  function access({ mode, note, backLabel }, { onCode, onApply, onBack }) {
+  function access({ mode, note, backLabel, offlineText }, { onCode, onApply, onBack }) {
     const offline = mode === 'offline';
     const labelled = (text, control) => `<label class="fld"><span>${esc(text)}</span>${control}</label>`;
     const body = offline
-      ? `<p class="intro">${esc(LIVE_COPY.offline)}</p><div class="follow">${socialLinks({ labels: true })}</div>`
+      ? `<p class="intro">${esc(offlineText ?? LIVE_COPY.offline)}</p><div class="follow">${socialLinks({ labels: true })}</div>`
       : `<p class="intro">${esc(LIVE_COPY.accessIntro)}</p>${note ? `<p class="anote">${esc(note)}</p>` : ''}
          <form class="code" novalidate><input name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" aria-label="Invite code" placeholder="Invite code"><button class="btn primary go" type="submit">Enter</button></form>
          <button class="lnk apply-open" type="button" aria-expanded="false">Apply for access</button>

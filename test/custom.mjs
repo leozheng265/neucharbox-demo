@@ -636,6 +636,19 @@ export async function customChecks({ report, guardHits }) {
     }
   }));
 
+  await check('gate · no API base shows the offline card without fetching; cancel() settles it', live2(gate, cpy)(async ({ eq }) => {
+    const calls = [], codes = lv.codeStore(mem()), p = liveParts([]); codes.set(mk.MOCK_CODE);
+    const api = lapi.createLiveApi({ base: '', fetch: (u) => { calls.push(String(u)); throw new Error('no fetch expected'); }, getCode: () => codes.get() });
+    const g = gate.passGate({ api, codes, view: p.view, onBack() {}, offline: true });
+    await waitFor(() => p.h.lastAccess, 'the offline card');
+    eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.offlineText, calls], ['offline', cpy.CUSTOM_COPY.offline, []], 'offline, the custom copy, no request');
+    g.cancel(); eq(await g, false, 'cancel resolves false');
+    const mock = mk.createMockLive({ scenes: ['custom'] }), c2 = lv.codeStore(mem()), q = liveParts([]);
+    const g2 = gate.passGate({ api: lapi.createLiveApi({ base: 'http://mock', fetch: mock.fetch, getCode: () => c2.get() }), codes: c2, view: q.view, onBack() {} });
+    g2.cancel(); eq(await g2, false, 'cancel before /health answers'); await new Promise((r) => setTimeout(r, 10));
+    eq(q.h.accessCount, 0, 'a late /health mounts no card');
+  }));
+
   await check('controller · done posts the device list', live2(ctl, cpy)(async ({ eq }) => {
     const t = rig(); t.c.gated(); eq(t.c.mode, 'build', 'gated');
     t.c.add('floor_lamp'); t.c.add('soil_sensor');
@@ -723,6 +736,27 @@ export async function customChecks({ report, guardHits }) {
     const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done(); t.c.toBuild();
     t.c.add('blinds'); t.c.add('soil_sensor'); t.c.remove('blinds'); eq(t.notices, ['changed'], 'one changed notice');
     eq(t.c.layout.hub.x, 0, 'the hub stays'); t.c.teardown();
+  }));
+
+  await check('controller · removing a session device and adding it back starts a new session; a device added and taken out again does not', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); t.c.add('soil_sensor'); await t.c.done();
+    const first = t.c.live; t.c.toBuild();
+    t.c.add('blinds'); t.c.remove('blinds'); eq(t.c.changedSinceRun, false, 'added and taken out: no change');
+    await t.c.done(); eq([t.c.live === first, postsTo(t.mock, /^sessions$/).length], [true, 1], 'same session');
+    t.c.toBuild(); t.c.remove('soil_sensor'); t.c.add('soil_sensor');
+    eq([t.c.layout.devices.map((d) => d.id), t.c.changedSinceRun], [['floor_lamp', 'soil_sensor'], true], 'the same list, but a change');
+    await t.c.done(); eq([t.c.live !== first, postsTo(t.mock, /^sessions$/).length], [true, 2], 'a new session');
+    const second = t.c.live; t.c.toBuild(); t.c.clear(); t.c.add('floor_lamp'); t.c.add('soil_sensor');
+    await t.c.done(); eq([t.c.live !== second, postsTo(t.mock, /^sessions$/).length], [true, 3], 'clear and the same devices again: a new session');
+    t.c.teardown();
+  }));
+
+  await check('controller · Build waits for a clock advance', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
+    const a = t.c.live.advance(1);
+    eq([t.c.live.advancing, t.c.canBuild, t.c.toBuild(), t.c.mode], [true, false, false, 'run'], 'refused mid-advance');
+    await a; eq([t.c.live.advancing, t.c.canBuild], [false, true], 'allowed once it ends');
+    t.c.teardown();
   }));
 
   // ---- Task 8: placement's pure helpers (the QA page test/custom-build.html runs them in a browser too) ----
@@ -869,6 +903,21 @@ export async function customChecks({ report, guardHits }) {
     c.toBuild(); c.remove('soil_sensor'); await c.done(); // the old panel's render would throw on the dropped soil slice if it were still subscribed
     eq(postsTo(mock, /^sessions$/).length, 2, 'a second POST sessions'); eq(Object.keys(t.store.state).sort(), ['env', 'floor_lamp', 'hub', 'plan'], 'the store holds only the new room');
     eq(c.live.phase, 'idle', 'the new live is idle'); c.teardown();
+  }));
+
+  await check('run · remove a device, add it back, done: a new session whose store and panel have it (through dropGone)', live2(ctl, lu)(async ({ eq, ok }) => {
+    const t = sessionRig(), mock = mk.createMockLive({ scenes: ['home', 'custom'] }), codes = lv.codeStore(mem()); codes.set(mk.MOCK_CODE);
+    const makeLive = (scene, devices) => { t.w.begin(scene); const p = liveParts([]); return lv.createLive({ scene, store: t.store, view: p.view, panel: p.panel, ui: p.ui, base: 'http://mock', fetch: mock.fetch, codes, sessionExtra: () => ({ devices }) }); };
+    const c = ctl.createCustomController({ storage: mem(), makeLive, ui: { mode() {}, layout: (l) => lu.dropGone(t.store, l), notice() {} } });
+    c.gated(); c.add('floor_lamp'); c.add('soil_sensor'); await c.done();
+    c.toBuild(); c.move('floor_lamp', { x: 1, z: 1 });
+    ok(t.store.state.plan && t.store.state.soil_sensor, 'a move drops nothing (plan and every device stay)');
+    c.remove('soil_sensor'); eq(t.store.state.soil_sensor, undefined, 'the removed device state goes');
+    c.add('soil_sensor'); await c.done();
+    eq(postsTo(mock, /^sessions$/).length, 2, 'a second POST sessions');
+    eq(t.store.state.soil_sensor?.moisture, 34, 'the re-added device starts from the catalog');
+    t.store.set('soil_sensor.moisture', 50); eq(t.store.state.soil_sensor.moisture, 50, 'a write to it lands, and the panel renders it');
+    c.teardown();
   }));
 
   await check('run · the mock\'s reset returns a custom room\'s own state', runMods(async ({ eq }) => {
