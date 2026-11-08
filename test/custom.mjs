@@ -330,6 +330,13 @@ export async function customChecks({ report, guardHits }) {
     eq(meshes, 0, 'no device meshes left in the scene');
   }));
 
+  await check('mount · no line hides code behind a trailing // comment (the build → run thumbnail timer once did)', async ({ ok }) => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../js/custom/mount.js', import.meta.url), 'utf8');
+    const bad = src.split('\n').filter((l) => /\} \/\/ .*\belse\b/.test(l));
+    ok(bad.length === 0, `an else after a // on: ${bad.join(' | ').slice(0, 200)}`);
+    ok(/\} else if \(thumbs && !thumbTimer\) thumbTimer = setTimeout\(/.test(src), 'the idle thumbnail timer is armed on leaving build');
+  });
   await check('room3d · a small wall device has an unseen tap box at least 40 cm across, flush with its wall', need(ui, r3)(async ({ ok }) => {
     const { THREE, R, room } = await room3dOn();
     const { emptyLayout, addDevice, moveDevice } = lay;

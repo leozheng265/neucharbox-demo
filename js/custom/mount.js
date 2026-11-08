@@ -130,7 +130,8 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       invEl.hidden = m !== 'build'; panelEl.hidden = m !== 'run'; chatEl.hidden = m === 'build'; statusEl.hidden = m !== 'run';
       hintEl.textContent = m === 'build' ? C.hint : ORBIT_HINT;
       if (m !== 'build') placement?.clear();
-      if (m === 'build') { inventory?.open(false); inventory?.refresh(); fillThumbs(); } // the phone sheet starts folded, so the room shows else if (thumbs && !thumbTimer) thumbTimer = setTimeout(() => { thumbTimer = 0; thumbs.dispose(); }, THUMB_IDLE_MS);
+      // build: the phone sheet starts folded, so the room shows; leaving it arms the timer that frees the thumbnails' WebGL context
+      if (m === 'build') { inventory?.open(false); inventory?.refresh(); fillThumbs(); } else if (thumbs && !thumbTimer) thumbTimer = setTimeout(() => { thumbTimer = 0; thumbs.dispose(); }, THUMB_IDLE_MS);
       updateBar();
     }
 
