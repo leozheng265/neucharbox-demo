@@ -201,7 +201,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
         const state = { env: { hour: CLOCK.hour } };
         for (const d of list) state[d.id] = { ...clone(typeOf(d.type).initial), status: 'online' };
         const id = `sess-${++nSession}`;
-        sessions.set(id, { id, events: [], streams: new Set(), state, clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
+        sessions.set(id, { id, initial: clone(state), events: [], streams: new Set(), state, clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
         return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: ["Check each device and tell me what it's doing"] });
       }
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
@@ -227,7 +227,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     }
     if (sub === 'reset' && method === 'POST') {
       if (sess.active) return fail(409, 'busy', 'A request is still running.');
-      sess.state = homeState(); sess.clock = { ...CLOCK }; sess.last = null;
+      sess.state = sess.initial ? clone(sess.initial) : homeState(); sess.clock = { ...CLOCK }; sess.last = null;
       return json(200, { state: clone(sess.state), clock: { ...sess.clock } });
     }
     if (sub !== 'requests' || method !== 'POST') return fail(404, 'bad_request', 'No such route.');

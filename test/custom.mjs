@@ -561,4 +561,66 @@ export async function customChecks({ report, guardHits }) {
       try { await a2.createSession('custom', { devices: bad }); eq('no error', 'bad_room'); } catch (e) { eq([e.status, e.kind], [400, 'bad_room'], 'bad room'); }
     }
   }));
+
+  // ---- Task 9: run mode: the ui createLive gets, and the per-session reset (js/custom/liveui.js) ----
+  const lu = await import('../js/custom/liveui.js').catch((e) => ({ err: e }));
+  const runMods = (fn) => live2(lu)(fn);
+  // A DOM-free stand-in for the card: createElement gives a node whose innerHTML is parsed for its buttons and links.
+  const fakeDoc = () => ({ createElement: () => { const n = { className: '', _h: '', mounted: false, parts: {}, querySelector(sel) { return this.parts[sel] ?? null; }, get innerHTML() { return this._h; },
+    set innerHTML(h) { this._h = h; this.parts = { button: { onclick: null, disabled: false } }; } }; return n; } });
+
+  await check('run · liveUiFor: the card, the baseline and the no-op beats', runMods(({ eq, ok }) => {
+    const ref = { current: { env: { hour: 16.5 } } }, mounted = [], calls = [], statusEl = { textContent: '', classList: { toggle: (k, v) => calls.push(['bad', k, v]) } };
+    let toB = 0, torn = false, tracked = [];
+    const ui = lu.liveUiFor({ statusEl, getPanel: () => ({ track: (on) => tracked.push(on), rewind: () => tracked.push('rewind') }), room3d: { reset: () => calls.push('reset') }, R: { clearMarkers: () => calls.push('clear') },
+      baselineRef: ref, onBackToBuilding: () => { toB++; return true; }, chat: { mount: (n) => mounted.push(n) }, alive: () => !torn, doc: fakeDoc() });
+    eq(ui.baseline(), ref.current, 'baseline is the ref'); eq(ui.beats('x'), undefined, 'beats is a no-op');
+    ui.status('hi', true); eq([statusEl.textContent, calls[0]], ['hi', ['bad', 'bad', true]], 'status'); ui.track(true); ui.rewind(); eq(tracked, [true, 'rewind'], 'track and rewind go to the panel');
+    ui.resetRoom(); eq(calls.slice(1), ['reset', 'clear'], 'resetRoom clears the room and the markers');
+    eq(ui.alive(), true); torn = true; eq(ui.alive(), false, 'alive follows the page');
+    ui.offerGuided('x'); eq(mounted.length, 1, 'one card');
+    const h = mounted[0].innerHTML; ok(h.includes(cpy.CUSTOM_COPY.toBuilding) && h.includes(cpy.CUSTOM_COPY.otherScenes) && /<a [^>]*href="#"/.test(h), 'both buttons, the link to #');
+    mounted[0].parts.button.onclick(); eq([toB, mounted[0].parts.button.disabled], [1, true], 'Back to building runs and disables the button');
+  }));
+
+  // The stand-in panel reads EVERY device of its scene on each store write, as the real one does (a TypeError on a
+  // device the store no longer has: the Task 8 crash).
+  function sessionRig() {
+    const store = stm.createStore(sc.initialFor(sc.sceneFor(lay.emptyLayout()))), ref = { current: null }, order = [];
+    const w = lu.createSessionWiring({ store, baselineRef: ref, replaceEl: () => order.push('el'), clearRoom: () => order.push('room'),
+      makePanel: (scene, st) => { const render = (state) => { for (const id of scene.deviceOrder) void state[id].status; }; st.subscribe(render); render(st.state); order.push('panel'); return { scene, render }; } });
+    return { store, ref, order, w };
+  }
+  await check('run · rebuilding resets the room to the new devices\' initials', runMods(({ eq }) => {
+    const t = sessionRig(); let L = lay.emptyLayout(); L = lay.addDevice(L, 'floor_lamp').layout;
+    t.w.begin(sc.sceneFor(L)); t.store.set('floor_lamp.brightness', 0.4); eq(t.store.state.floor_lamp.brightness, 0.4);
+    L = lay.addDevice(L, 'soil_sensor').layout; t.w.begin(sc.sceneFor(L));
+    eq([t.store.state.floor_lamp.brightness, t.store.state.soil_sensor.moisture], [0, 34], 'fresh initials');
+    eq(t.ref.current, t.store.snapshot(), 'the baseline is the fresh snapshot'); eq(t.order.slice(-3), ['el', 'room', 'panel'], 'the panel is made last');
+  }));
+
+  await check('run · done, remove a device, done: a second session, no throw (through the real reset)', live2(ctl, lu)(async ({ eq, ok }) => {
+    const t = sessionRig(), mock = mk.createMockLive({ scenes: ['home', 'custom'] }), codes = lv.codeStore(mem()); codes.set(mk.MOCK_CODE);
+    const makeLive = (scene, devices) => { t.w.begin(scene); const p = liveParts([]); return lv.createLive({ scene, store: t.store, view: p.view, panel: p.panel, ui: p.ui, base: 'http://mock', fetch: mock.fetch, codes, sessionExtra: () => ({ devices }) }); };
+    const c = ctl.createCustomController({ storage: mem(), makeLive, ui: { mode() {}, layout() {}, notice() {} } });
+    c.gated(); c.add('floor_lamp'); c.add('soil_sensor'); await c.done();
+    c.toBuild(); c.remove('soil_sensor'); await c.done(); // the old panel's render would throw on the dropped soil slice if it were still subscribed
+    eq(postsTo(mock, /^sessions$/).length, 2, 'a second POST sessions'); eq(Object.keys(t.store.state).sort(), ['env', 'floor_lamp', 'hub', 'plan'], 'the store holds only the new room');
+    eq(c.live.phase, 'idle', 'the new live is idle'); c.teardown();
+  }));
+
+  await check('run · the mock\'s reset returns a custom room\'s own state', runMods(async ({ eq }) => {
+    const mock = mk.createMockLive({ scenes: ['custom'] }), api = lapi.createLiveApi({ base: 'http://mock', fetch: mock.fetch, getCode: () => mk.MOCK_CODE });
+    const r = await api.createSession('custom', { devices: [{ type: 'floor_lamp', id: 'floor_lamp' }] });
+    const body = await api.reset(r.sessionId); eq(Object.keys(body.state).sort(), ['env', 'floor_lamp'], 'the room, not Home'); eq(body.state.floor_lamp, { brightness: 0, status: 'online' });
+  }));
+
+  await check('live copy · a one-device room reads singular; Home reads as before', live2()(({ eq }) => {
+    const L = lv.LIVE_COPY;
+    eq(L.intro(1), 'Live AI is on. Type what you want this device to do. A real model plans it, and nothing runs until you approve.', 'intro 1');
+    eq(L.placeholder(1), 'Type your own request for this device…', 'placeholder 1'); eq(L.statusWaiting(1), 'Live AI · 1 device · waiting for your request', 'status 1');
+    eq(L.intro(6), 'Live AI is on. Type what you want these 6 devices to do. A real model plans it, and nothing runs until you approve.', 'intro 6');
+    eq([L.placeholder(6), L.statusWaiting(6)], ['Type your own request for these 6 devices…', 'Live AI · 6 devices · waiting for your request'], 'home unchanged');
+    eq([guardHits(L.intro(1)), guardHits(L.placeholder(1)), guardHits(L.statusWaiting(1))], [[], [], []], 'guards');
+  }));
 }

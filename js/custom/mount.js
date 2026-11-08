@@ -4,7 +4,7 @@
 //   mountCustom({ app, gen, isCurrent, setCurrent }) → Promise<void>
 //     isCurrent() is false once the visitor has routed elsewhere; setCurrent({ teardown }) hands main.js the teardown.
 // Markup: the header (logo, name, Build | Run, Done building →, Scenes, social links) and .stage.custom[data-mode] with
-// .room (canvas, hint, #selbar, #notice, #emptyNote) and .side (#inventory, #panel, #chat). The mode decides what shows:
+// .room (canvas, hint, #selbar, #notice, #changedNote, #emptyNote) and .side (#inventory, #panel, #chat). The mode decides what shows:
 //   gate  the chat (the access card)        build  the inventory        run  the device cards and the chat
 // Every live session (controller.done with a new device list) gets a fresh store state (initialFor), a fresh panel and
 // a cleared chat: a new room is a new conversation. The window.__ncb hooks are for QA in the browser.
@@ -23,6 +23,7 @@ import { sceneFor, initialFor, CAMERA } from './scene.js';
 import { createRoom3d } from './room3d.js';
 import { createInventory } from './inventory.js';
 import { createPlacement } from './placement.js';
+import { liveUiFor, createSessionWiring } from './liveui.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -39,7 +40,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       <div class="modebar"><div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="build" aria-pressed="false" disabled>${esc(C.build)}</button><button type="button" data-mode="run" aria-pressed="false" disabled>${esc(C.run)}</button></div><button class="btn small primary done" type="button" disabled>${esc(C.done)}</button></div>
       <div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a><nav class="social" aria-label="Follow NeuCharBox"><span class="social-label">Follow</span>${socialLinks()}</nav></header>
     <div class="stage custom" data-mode="gate">
-      <div class="room"><canvas id="room"></canvas><div class="hint" id="hint">${esc(ORBIT_HINT)}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button><div class="selbar" id="selbar" role="toolbar" aria-label="Selected device" hidden></div><div class="notice" id="notice" role="status" hidden></div><p class="empty-note" id="emptyNote" hidden></p></div>
+      <div class="room"><canvas id="room"></canvas><div class="hint" id="hint">${esc(ORBIT_HINT)}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button><div class="selbar" id="selbar" role="toolbar" aria-label="Selected device" hidden></div><div class="notice" id="notice" role="status" hidden></div><p class="empty-note" id="emptyNote" hidden></p><p class="changed-note" id="changedNote" role="status" hidden>${esc(C.changed)}</p></div>
       <div class="status" id="status" role="status" hidden></div>
       <div class="side">
         <div class="inventory" id="inventory" hidden></div>
@@ -48,7 +49,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       </div>
     </div>`;
   const $ = (id) => document.getElementById(id);
-  const stage = app.querySelector('.stage.custom'), statusEl = $('status'), hintEl = $('hint'), noticeEl = $('notice'), chatEl = $('chat'), invEl = $('inventory');
+  const stage = app.querySelector('.stage.custom'), statusEl = $('status'), hintEl = $('hint'), noticeEl = $('notice'), changedEl = $('changedNote'), chatEl = $('chat'), invEl = $('inventory');
   let panelEl = $('panel');
   const buildBtn = app.querySelector('.seg [data-mode="build"]'), runBtn = app.querySelector('.seg [data-mode="run"]'), doneBtn = app.querySelector('.top .done');
 
@@ -58,13 +59,14 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   const storage = safeStorage(), codes = codeStore(), base = liveApiBase();
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots)
   const R = createRenderer($('room'), { camera: CAMERA, ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let controller = null, placement = null, inventory = null, panel = null, scene = null, baseline = null, hooks = null;
-  let panelSubs = [], noticeTimer = 0, doneBusy = false, shownCanBuild = null, torn = false;
+  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null;
+  const baselineRef = { current: null };
+  let noticeTimer = 0, doneBusy = false, shownCanBuild = null, torn = false;
   const teardown = () => {
     if (torn) return; torn = true;
     clearTimeout(noticeTimer);
     controller?.teardown(); placement?.dispose(); inventory?.dispose();
-    for (const off of panelSubs) off(); panelSubs = [];
+    wiring?.dispose();
     R.dispose();
     if (window.__ncb === hooks) window.__ncb = null;
   };
@@ -75,7 +77,6 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     const chat = createChat(chatEl, { onPromptText: (text) => controller?.live?.submit(text) });
     const chatLog = chatEl.querySelector('.chat-log');
 
-    const setStatus = (text, bad) => { statusEl.textContent = text; statusEl.classList.toggle('bad', !!bad); };
     const say = (text) => {
       if (!text) return;
       noticeEl.textContent = text; noticeEl.hidden = false;
@@ -93,6 +94,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       if (!controller) return;
       const m = controller.mode, has = controller.layout.devices.length > 0, busy = m === 'run' && !controller.canBuild;
       buildBtn.setAttribute('aria-pressed', String(m === 'build')); runBtn.setAttribute('aria-pressed', String(m === 'run'));
+      changedEl.hidden = !(m === 'build' && controller.changedSinceRun); // the persistent note: the conversation restarts at Done building
       buildBtn.disabled = m === 'gate' || busy; buildBtn.title = busy ? C.buildBusy : '';
       runBtn.disabled = m !== 'build' || doneBusy || !has || !controller.live;
       doneBtn.hidden = m === 'run'; doneBtn.disabled = m !== 'build' || doneBusy || !has;
@@ -116,43 +118,17 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       updateBar();
     }
 
-    // Live mode ended under the visitor (a limit, live switched off, an error making the session): back to building,
-    // or another scene. (An access card's "Back to scenes" goes straight to the picker.)
-    function offerBack() {
-      const node = document.createElement('div'); node.className = 'card end custom-exit';
-      node.innerHTML = `<div class="row"><button class="btn primary" type="button">${esc(C.toBuilding)}</button><a class="btn" href="#">${esc(C.otherScenes)}</a></div>`;
-      const b = node.querySelector('button');
-      b.onclick = () => { if (controller?.toBuild()) b.disabled = true; };
-      chat.mount(node);
-    }
-    const liveUi = {
-      alive: () => isCurrent() && !torn,
-      status: setStatus,
-      beats: () => {}, // no beat bar in this scene
-      track: (on) => panel?.track(on),
-      rewind: () => panel?.rewind(),
-      resetRoom: () => { room3d.reset(); R.clearMarkers(); },
-      baseline: () => baseline,
-      offerGuided: () => offerBack(),
-    };
+    let liveUi = null;
     // A live session for this room (controller.done with a new device list).
     function makeLive(sc, devices) {
-      // The last panel goes first, before the store changes: its render reads every device it was made for, and restore
-      // drops the slices of devices that left (a TypeError in it would leave done() with no live). Its DOM listeners go
-      // with its element, which a fresh one replaces.
-      for (const off of panelSubs) off(); panelSubs = []; panel = null;
-      const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh;
       scene = sc;
-      R.clearMarkers(); room3d.reset();
-      store.restore(initialFor(sc)); baseline = store.snapshot();
-      const scoped = { ...store, subscribe: (fn) => { const off = store.subscribe(fn); panelSubs.push(off); return off; } };
-      panel = createPanel(panelEl, sc, scoped, { onSelect: ping });
+      wiring.begin(sc); // the old panel's subscriptions go before the store changes (liveui.js)
       chatLog.replaceChildren(); chat.enableInput(false); chat.live(false);
       const view = createLiveView({ chat, scene: sc });
       // live.js's own access card (a saved code that died at Done building) says "Back to scenes" here, and goes there
       // (the route's teardown closes the live).
       const wrapped = { ...view, access: (spec, h) => view.access({ ...spec, backLabel: C.back }, { ...h, onBack: toScenes }) };
-      return createLive({ scene: sc, store, panel, base, codes, view: wrapped, ui: liveUi, sessionExtra: () => ({ devices }) });
+      return createLive({ scene: sc, store, panel: wiring.panel, base, codes, view: wrapped, ui: liveUi, sessionExtra: () => ({ devices }) });
     }
 
     controller = createCustomController({
@@ -160,16 +136,25 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       ui: {
         mode: (m) => showMode(m),
         layout: (l) => { room3d.sync(l); placement?.sync(l); inventory?.refresh(); updateBar(); },
-        notice: (kind) => say(C[kind]),
+        notice: (kind) => { if (kind !== 'changed') say(C[kind]); }, // 'changed' shows as the persistent #changedNote
       },
     });
     const store = createStore(initialFor(sceneFor(controller.layout)));
+    wiring = createSessionWiring({
+      store, baselineRef, clearRoom: () => { R.clearMarkers(); room3d.reset(); },
+      replaceEl: () => { const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh; },
+      makePanel: (sc, scoped) => createPanel(panelEl, sc, scoped, { onSelect: ping }),
+    });
+    liveUi = liveUiFor({
+      statusEl, getPanel: () => wiring.panel, room3d, R, baselineRef, chat, alive: () => isCurrent() && !torn,
+      onBackToBuilding: () => controller.toBuild(),
+    });
     room3d.sync(controller.layout);
     R.onFrame((t) => {
       store.tick(performance.now()); room3d.update(store.state, t);
       if (controller.mode === 'run' && controller.canBuild !== shownCanBuild) updateBar(); // a request started or ended
     });
-    R.onPick((id) => { if (controller.mode === 'run' && scene) { panel?.select(scene.devices[id] ? id : null); ping(id); } });
+    R.onPick((id) => { if (controller.mode === 'run' && scene) { wiring.panel?.select(scene.devices[id] ? id : null); ping(id); } });
     $('resetView').onclick = () => R.resetView();
     R.start();
 
