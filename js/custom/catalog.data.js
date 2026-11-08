@@ -46,6 +46,27 @@ export default {
     },
     {
       "needs": [
+        "laser",
+        "power_meter"
+      ],
+      "text": "Open the shutter of {laser} and read {power_meter}"
+    },
+    {
+      "needs": [
+        "conveyor",
+        "scanner_arch"
+      ],
+      "text": "Arm {scanner_arch}, then run {conveyor} at half speed"
+    },
+    {
+      "needs": [
+        "cart",
+        "loading_dock"
+      ],
+      "text": "Send {cart} to the dock and open {loading_dock}"
+    },
+    {
+      "needs": [
         "thermostat"
       ],
       "text": "Keep {thermostat} at 19 °C overnight"
@@ -61,6 +82,12 @@ export default {
         "floor_lamp"
       ],
       "text": "Dim {floor_lamp} to 30% at 19:00"
+    },
+    {
+      "needs": [
+        "linear_stage"
+      ],
+      "text": "Move {linear_stage} to 15 mm"
     },
     {
       "needs": [],
@@ -1305,6 +1332,656 @@ export default {
             },
             {
               "text": "{name} → {brightness}%"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "laser",
+      "name": "Laser & shutter",
+      "ref": "the laser",
+      "category": "Lab",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "open": false,
+        "mW": 5
+      },
+      "faultText": "not answering",
+      "edit": [
+        {
+          "field": "open",
+          "kind": "bool"
+        },
+        {
+          "field": "mW",
+          "kind": "number",
+          "min": 0,
+          "max": 20
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Open or close the shutter of {ref} (true opens it), and optionally set its power from 0.5 to 20 mW.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "open": {
+                "type": "boolean"
+              },
+              "mW": {
+                "type": "number",
+                "minimum": 0.5,
+                "maximum": 20
+              }
+            },
+            "required": [
+              "open"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "open": false
+          },
+          "effects": [
+            {
+              "set": "open",
+              "arg": "open",
+              "ms": 600
+            },
+            {
+              "set": "mW",
+              "arg": "mW",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "open": true
+              },
+              "text": "{name} → shutter open"
+            },
+            {
+              "text": "{name} → shutter closed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "mirror",
+      "name": "Mirror",
+      "ref": "the mirror",
+      "category": "Lab",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "yaw": 0,
+        "pitch": 0
+      },
+      "faultText": "controller offline",
+      "edit": [
+        {
+          "field": "yaw",
+          "kind": "number",
+          "min": -5,
+          "max": 5
+        },
+        {
+          "field": "pitch",
+          "kind": "number",
+          "min": -5,
+          "max": 5
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Tilt {ref}: set its yaw and its pitch, each from -5 to 5 degrees.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "yaw": {
+                "type": "number",
+                "minimum": -5,
+                "maximum": 5
+              },
+              "pitch": {
+                "type": "number",
+                "minimum": -5,
+                "maximum": 5
+              }
+            },
+            "required": [
+              "yaw",
+              "pitch"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "yaw",
+              "arg": "yaw",
+              "ms": 800
+            },
+            {
+              "set": "pitch",
+              "arg": "pitch",
+              "ms": 800
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → yaw {yaw}, pitch {pitch}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "linear_stage",
+      "name": "Linear stage",
+      "ref": "the linear stage",
+      "category": "Lab",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "x": 10
+      },
+      "faultText": "controller offline",
+      "edit": [
+        {
+          "field": "x",
+          "kind": "number",
+          "min": 0,
+          "max": 25
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "move",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Move {ref} to a position from 0 to 25 mm.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "x_mm": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 25
+              }
+            },
+            "required": [
+              "x_mm"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "x",
+              "arg": "x_mm",
+              "ms": 2000
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → {x_mm} mm"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "power_meter",
+      "name": "Power meter",
+      "ref": "the power meter",
+      "category": "Lab",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "mW": 0
+      },
+      "faultText": "no reading",
+      "edit": [
+        {
+          "field": "mW",
+          "kind": "number",
+          "min": 0,
+          "max": 20
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read the optical power that {ref} measures, in mW.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "mW",
+              "round": 2,
+              "unit": " mW"
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "conveyor",
+      "name": "Conveyor",
+      "ref": "the conveyor",
+      "category": "Warehouse",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "speed": 0
+      },
+      "faultText": "motor fault",
+      "edit": [
+        {
+          "field": "speed",
+          "kind": "number",
+          "min": 0,
+          "max": 0.5
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set the belt speed of {ref} from 0 (stopped) to 100 (full speed).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "speed_percent": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "speed_percent"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "speed_percent": 0
+          },
+          "effects": [
+            {
+              "set": "speed",
+              "arg": "speed_percent",
+              "scale": 0.005,
+              "ms": 1500
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "speed_percent": 0
+              },
+              "text": "{name} → stopped"
+            },
+            {
+              "when": {
+                "speed_percent": 100
+              },
+              "text": "{name} → full speed"
+            },
+            {
+              "text": "{name} → {speed_percent}% speed"
+            }
+          ]
+        },
+        {
+          "verb": "stop",
+          "kind": "Safe",
+          "outcome": "confirmed",
+          "description": "Stop the belt of {ref} right away.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "speed",
+              "value": 0,
+              "ms": 1500
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → stopped"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "scanner_arch",
+      "name": "Scanner arch",
+      "ref": "the scanner arch",
+      "category": "Warehouse",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "armed": false,
+        "scanned": 0
+      },
+      "faultText": "reads not trusted",
+      "edit": [
+        {
+          "field": "armed",
+          "kind": "bool"
+        },
+        {
+          "field": "scanned",
+          "kind": "number",
+          "min": 0,
+          "max": 999
+        }
+      ],
+      "drift": [
+        {
+          "field": "scanned",
+          "perHour": 120,
+          "while": {
+            "armed": true
+          }
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Arm or disarm {ref} (true arms it, so it scans every parcel that passes).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "armed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "armed"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "armed",
+              "arg": "armed",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "armed": true
+              },
+              "text": "{name} → armed"
+            },
+            {
+              "text": "{name} → disarmed"
+            }
+          ]
+        },
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read how many parcels {ref} has scanned.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "scanned",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sorter_gate",
+      "name": "Sorter gate",
+      "ref": "the sorter gate",
+      "category": "Warehouse",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "lane": "A"
+      },
+      "faultText": "controller offline",
+      "edit": [],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Send parcels from {ref} down lane A (straight through) or lane B.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "lane": {
+                "type": "string",
+                "enum": [
+                  "A",
+                  "B"
+                ]
+              }
+            },
+            "required": [
+              "lane"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "lane",
+              "arg": "lane",
+              "ms": 800
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → lane {lane}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "cart",
+      "name": "Cart",
+      "ref": "the cart",
+      "category": "Warehouse",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "driving": false,
+        "at": "dock"
+      },
+      "faultText": "off the network",
+      "edit": [],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "send",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Send {ref} to the dock, the aisle or the charger; it drives there and stops.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string",
+                "enum": [
+                  "dock",
+                  "aisle",
+                  "charger"
+                ]
+              }
+            },
+            "required": [
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "driving",
+              "value": true
+            },
+            {
+              "set": "at",
+              "arg": "to",
+              "delayMs": 4000
+            },
+            {
+              "set": "driving",
+              "value": false,
+              "delayMs": 4000
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → {to}"
+            }
+          ]
+        },
+        {
+          "verb": "stop",
+          "kind": "Safe",
+          "outcome": "confirmed",
+          "description": "Stop {ref} where it is, right away.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "driving",
+              "value": false
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → stopped"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "loading_dock",
+      "name": "Loading dock",
+      "ref": "the loading dock",
+      "category": "Warehouse",
+      "mount": "wall",
+      "new": false,
+      "initial": {
+        "open": false,
+        "parcels": 0
+      },
+      "faultText": "door fault",
+      "edit": [
+        {
+          "field": "open",
+          "kind": "bool"
+        },
+        {
+          "field": "parcels",
+          "kind": "number",
+          "min": 0,
+          "max": 500
+        }
+      ],
+      "drift": [
+        {
+          "field": "parcels",
+          "perHour": 30,
+          "while": {
+            "open": true
+          },
+          "max": 500
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Open or close the roller door of {ref} (true opens it, and parcels start to arrive).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "open": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "open"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "open",
+              "arg": "open",
+              "ms": 3000
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "open": true
+              },
+              "text": "{name} → open"
+            },
+            {
+              "text": "{name} → closed"
             }
           ]
         }
