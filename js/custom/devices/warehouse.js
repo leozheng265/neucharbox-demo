@@ -25,7 +25,7 @@ export default {
   // it runs. The beacon on the end post is blue while the belt moves.
   conveyor: {
     icon: 'conveyor', size: 1.6,
-    edit: [{ field: 'speed', kind: 'slider', step: 0.005, scale: 200, unit: '%', label: 'speed' }],
+    edit: [{ field: 'speed', kind: 'slider', step: 0.05, unit: ' m/s', label: 'speed' }],
     format: (s) => (num(s.speed) > 0.05 ? `running · ${num(s.speed).toFixed(1)} m/s` : 'stopped'),
     active: (s) => num(s.speed) > 0.05,
     control: { kind: 'bar', field: 'speed', min: 0, max: 0.5 },

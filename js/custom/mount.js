@@ -140,6 +140,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     let liveUi = null;
     // A live session for this room (controller.done with a new device list).
     function makeLive(sc, devices) {
+      liveUi.editing(false); // the old room's edit mode, clock control and live-edit go now, not when the new session answers
       scene = sc;
       wiring.begin(sc); // the old panel's subscriptions go before the store changes (liveui.js)
       chatLog.replaceChildren(); chat.enableInput(false); chat.live(false);

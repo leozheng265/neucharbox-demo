@@ -7,9 +7,10 @@
 //   mountY    a wall mount's centre height (default 1.4)
 //   plural    true for a name that takes a plural verb ("the blinds fail")
 //   edit      how the card shows each of the catalog type's `edit` fields in live mode, in the catalog's order:
-//             [{ field, kind: 'slider'|'switch', step?, scale?, unit?, label? }]. A number is a slider (step in store
-//             units; scale × value is what it shows, 100 with '%' for a 0–1 field), a bool a switch. The range is the
-//             catalog's: sceneFor (scene.js) adds min and max. Types with no edit fields leave it out.
+//             [{ field, kind: 'slider'|'switch', step?, scale?, unit?, label?, top? }]. A number is a slider (step in
+//             store units; scale × value is what it shows, 100 with '%' for a 0–1 field), a bool a switch. `top` is a
+//             percent slider's readout at 100 (default "full"; never "100%"), the word the card itself uses there. The
+//             range is the catalog's: sceneFor (scene.js) adds min and max. Types with no edit fields leave it out.
 //   format    the card's status line for a slice: "full" and "closed" at the ends, never "100%" (copy guardrails)
 //   active    optional; true lights the card as on (panel.js guesses from the state without it)
 //   control   the card control, as js/engine/controls.js reads it: { kind: 'bar', field, min, max } · { kind: 'switch',

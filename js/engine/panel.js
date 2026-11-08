@@ -9,6 +9,13 @@ const now = () => performance.now();
 const shape = (v) => v.replace(/[+\-−]?\d[\d.,:]*/g, '#'); // a value's kind, numbers aside: "14 scanned" ~ "15 scanned"
 const qs = typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get('speed')) : NaN;
 const DWELL = Math.max(450, 900 / (Number.isFinite(qs) && qs > 0 ? Math.min(qs, 6) : 1)); // the strip holds still this long before its next jump (?speed= as in the player)
+// A slider's readout (the edit controls' value text and aria-valuetext): round(value × scale), one decimal when a step
+// shows finer than 1, then the unit. A percent that rounds to 100 reads as its top word instead (the spec's `top`,
+// default "full"): the copy guardrails keep "100%" out of every visitor-facing text.
+export function editValueText(e, v) {
+  const d = e.step * e.scale < 1 ? 1 : 0, n = Math.round(v * e.scale * 10 ** d) / 10 ** d;
+  return e.unit === '%' && n >= 100 ? e.top || 'full' : `${n.toFixed(d)}${e.unit || ''}`;
+}
 const PAD = 12; // margin kept around a tile brought into view: the panel's own padding
 
 export function createPanel(root, scene, store, { onSelect } = {}) {
@@ -137,8 +144,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   let onEditCb = null, editing = false;
   const OFFTONES = ['offline', 'bad', 'busy'];
   const KEY_MS = 400;
-  const decimals = (e) => (e.step * e.scale < 1 ? 1 : 0);
-  const showVal = (e, v) => `${(Math.round(v * e.scale * 10 ** decimals(e)) / 10 ** decimals(e)).toFixed(decimals(e))}${e.unit || ''}`;
+  const showVal = editValueText;
   const fieldOf = (e) => e.label || e.path.split('.').slice(1).join('.');
   function buildEdits(id) {
     const c = cards[id], d = scene.devices[id], list = editsFor(id, d, store.state[id]);

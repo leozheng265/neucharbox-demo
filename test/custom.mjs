@@ -230,7 +230,8 @@ export async function customChecks({ report, guardHits }) {
       for (const e of cat) {
         const p = pres.find((x) => x.field === e.field), at = `${t.type}.${e.field}`; if (!p) continue;
         fields++;
-        ok(Object.keys(p).every((k) => ['field', 'kind', 'step', 'scale', 'unit', 'label'].includes(k)), `${at}: only field, kind, step, scale, unit, label (the range is the catalog's)`);
+        ok(Object.keys(p).every((k) => ['field', 'kind', 'step', 'scale', 'unit', 'label', 'top'].includes(k)), `${at}: only field, kind, step, scale, unit, label, top (the range is the catalog's)`);
+        ok(p.top == null || (p.kind === 'slider' && p.unit === '%'), `${at}: a top word only on a percent slider`);
         if (e.kind === 'bool') { eq(p.kind, 'switch', `${at} kind`); ok(p.step == null && p.scale == null && p.unit == null, `${at}: a switch has no step, scale or unit`); continue; }
         eq(p.kind, 'slider', `${at} kind`);
         const scale = p.scale ?? 1, n = (e.max - e.min) / p.step;
@@ -239,7 +240,7 @@ export async function customChecks({ report, guardHits }) {
         if (e.min === 0 && e.max === 1) eq([p.scale, p.unit], [100, '%'], `${at}: a 0–1 field shows as a percent`);
         ok(p.unit == null || typeof p.unit === 'string', `${at}: unit is text`);
       }
-      for (const p of pres) for (const s of [p.label, p.unit]) if (s != null) {
+      for (const p of pres) for (const s of [p.label, p.unit, p.top]) if (s != null) {
         ok(typeof s === 'string' && s.length <= 14, `${t.type}.${p.field}: "${s}" is short text`);
         for (const g of guardHits(String(s))) ok(false, `${t.type}.${p.field}: "${s}" ${g}`);
       }
@@ -481,6 +482,33 @@ export async function customChecks({ report, guardHits }) {
       }
     }
     eq([seen, numbered], [all.length + 1, 1], 'every type, and a numbered device on its own id');
+  }));
+
+  // The slider readout (panel.js) is visitor text too: a percent at the top reads as a word, never "100%".
+  await check('ui · slider readouts pass the guardrails at min and max (Home and every custom slider, through panel.js)', need(ui, sc)(async ({ eq, ok }) => {
+    const { editValueText } = await import('../js/engine/panel.js');
+    const home = (await import('../js/scenes/home.js')).default;
+    const sliders = [], homeSliders = [];
+    for (const [id, d] of Object.entries(home.devices)) homeSliders.push(...editsFor(id, d, d.initial).filter((e) => e.kind === 'slider'));
+    sliders.push(...homeSliders);
+    const all = types().map((t) => t.type);
+    for (let i = 0; i < all.length; i += 20) {
+      let L = lay.emptyLayout(); for (const type of all.slice(i, i + 20)) L = lay.addDevice(L, type).layout;
+      const s = sc.sceneFor(L), init = sc.initialFor(s);
+      for (const id of s.deviceOrder) sliders.push(...editsFor(id, s.devices[id], init[id]).filter((e) => e.kind === 'slider'));
+    }
+    eq(sliders.length, 5 + types().reduce((a, t) => a + (t.edit || []).filter((e) => e.kind === 'number').length, 0), 'Home\'s 5 sliders and one per catalog number field');
+    for (const e of sliders) for (const v of [e.min, e.max]) {
+      const text = editValueText(e, v);
+      ok(typeof text === 'string' && text && !/undefined|NaN|null/.test(text), `${e.path} at ${v}: "${text}"`);
+      for (const g of guardHits(text)) ok(false, `${e.path} at ${v}: "${text}" ${g}`);
+    }
+    const E = (path) => sliders.slice(homeSliders.length).find((e) => e.path === path), H = (path) => homeSliders.find((e) => e.path === path);
+    eq([['floor_lamp.brightness', 1], ['floor_lamp.brightness', 0.43], ['blinds.closed', 1], ['soil_sensor.moisture', 100], ['soil_sensor.moisture', 34], ['robot_vacuum.battery', 100],
+      ['printer_3d.progress', 100], ['humidifier.humidity', 100], ['conveyor.speed', 0.5], ['conveyor.speed', 0]].map(([p, v]) => editValueText(E(p), v)),
+    ['full', '43%', 'closed', 'saturated', '34%', 'full', 'done', 'saturated', '0.5 m/s', '0.0 m/s'], 'custom spot readouts');
+    eq([['lamp.brightness', 1], ['lamp.brightness', 0.3], ['blinds.closed', 1], ['soil.moisture', 100], ['thermostat.target', 28]].map(([p, v]) => editValueText(H(p), v)),
+      ['full', '30%', 'full', 'full', '28.0°C'], 'Home spot readouts (the default top word; below the top as before)');
   }));
 
   // ---- Task 7: the mode controller, the code gate and the live hooks (real createLive against the contract mock) ----

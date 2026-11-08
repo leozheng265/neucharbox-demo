@@ -22,7 +22,7 @@ function editOf(t, ui) {
   for (const e of t.edit || []) {
     const p = (ui.edit || []).find((x) => x.field === e.field); if (!p) continue;
     out.push(e.kind === 'number'
-      ? { field: e.field, kind: 'slider', min: e.min, max: e.max, step: p.step, scale: p.scale ?? 1, unit: p.unit, label: p.label }
+      ? { field: e.field, kind: 'slider', min: e.min, max: e.max, step: p.step, scale: p.scale ?? 1, unit: p.unit, label: p.label, top: p.top }
       : { field: e.field, kind: 'switch', label: p.label });
   }
   return out;
