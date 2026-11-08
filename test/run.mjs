@@ -850,7 +850,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const files = readdirSync(new URL('../js/scenes/', import.meta.url)).filter((f) => f.endsWith('.js') && f !== 'index.js');
   const scenes = [];
   for (const f of files) { const { default: scene } = await import(`../js/scenes/${f}`); if (!ONLY || ONLY === scene.id) scenes.push({ scene, f }); }
-  if (ONLY && !['fixture', 'live'].includes(ONLY) && !scenes.length) { console.log(`No scene "${ONLY}" (have: fixture, ${files.map((f) => f.replace(/\.js$/, '')).join(', ')})`); process.exit(1); }
+  if (ONLY && !['fixture', 'live', 'custom'].includes(ONLY) && !scenes.length) { console.log(`No scene "${ONLY}" (have: fixture, live, custom, ${files.map((f) => f.replace(/\.js$/, '')).join(', ')})`); process.exit(1); }
   for (const { scene, f } of scenes) await sceneChecks(scene, { src: readFileSync(new URL(`../js/scenes/${f}`, import.meta.url), 'utf8'), meta: SCENES.find((m) => m.id === scene.id) || {} });
   let fixture = null;
   if (!ONLY || ONLY === 'fixture') {
@@ -863,6 +863,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (scenes.length) { const { controlChecks } = await import('./controls.mjs'); controlChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
   // 18. the live client against the contract mock
   if (!ONLY || ONLY === 'live') { const { liveChecks } = await import('./live.mjs'); await liveChecks({ report, initialOf, guardHits }); }
+  // 19. the custom-room catalog copy and layout model
+  if (!ONLY || ONLY === 'custom') { const { customChecks } = await import('./custom.mjs'); await customChecks({ report, guardHits }); }
   // 7. room builds (and every what-if through update())
   await buildChecks({ scenes: [...scenes.map(({ scene }) => scene), ...(fixture ? [fixture] : [])] });
 
