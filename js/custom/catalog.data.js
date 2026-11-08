@@ -32,9 +32,29 @@ export default {
     },
     {
       "needs": [
+        "bed_sensor",
+        "night_light"
+      ],
+      "text": "Turn on {night_light} when {bed_sensor} shows someone got up"
+    },
+    {
+      "needs": [
+        "key_light",
+        "on_air_sign"
+      ],
+      "text": "Turn on {on_air_sign} and {key_light} when I go live"
+    },
+    {
+      "needs": [
         "thermostat"
       ],
       "text": "Keep {thermostat} at 19 °C overnight"
+    },
+    {
+      "needs": [
+        "kettle_plug"
+      ],
+      "text": "Tell me if {kettle_plug} is still on after 10 minutes"
     },
     {
       "needs": [
@@ -447,6 +467,844 @@ export default {
           "label": [
             {
               "text": "{name} → {celsius} °C"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "bed_sensor",
+      "name": "Bed sensor",
+      "ref": "the bed sensor",
+      "category": "Sensors",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "occupied": true
+      },
+      "faultText": "no signal",
+      "edit": [
+        {
+          "field": "occupied",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether someone is in bed, from the pressure mat under {ref}.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "occupied",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "bedroom_door",
+      "name": "Bedroom door",
+      "ref": "the bedroom door sensor",
+      "category": "Sensors",
+      "mount": "wall",
+      "new": false,
+      "initial": {
+        "open": false
+      },
+      "faultText": "no signal",
+      "edit": [
+        {
+          "field": "open",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether the bedroom door is open or closed, from {ref}.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "open",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "hallway_motion",
+      "name": "Hallway motion",
+      "ref": "the hallway motion sensor",
+      "category": "Sensors",
+      "mount": "wall",
+      "new": false,
+      "initial": {
+        "motion": false
+      },
+      "faultText": "offline",
+      "edit": [
+        {
+          "field": "motion",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether {ref} sees movement right now.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "motion",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "kettle_plug",
+      "name": "Kettle plug",
+      "ref": "the kettle plug",
+      "category": "Appliances",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "on": false,
+        "watts": 0
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on, false is off). It reports its power draw but can't tell whether the kettle is actually heating.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            },
+            {
+              "set": "watts",
+              "value": 2200,
+              "if": {
+                "on": true
+              },
+              "ms": 600
+            },
+            {
+              "set": "watts",
+              "value": 0,
+              "if": {
+                "on": false
+              },
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "night_light",
+      "name": "Night light",
+      "ref": "the night light",
+      "category": "Lights",
+      "mount": "wall",
+      "new": false,
+      "initial": {
+        "brightness": 0
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "brightness",
+          "kind": "number",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set {ref} brightness from 0 (off) to 100.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "brightness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "brightness"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "brightness": 0
+          },
+          "effects": [
+            {
+              "set": "brightness",
+              "arg": "brightness",
+              "scale": 0.01,
+              "ms": 1000
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "brightness": 0
+              },
+              "text": "{name} → off"
+            },
+            {
+              "when": {
+                "brightness": 100
+              },
+              "text": "{name} → full"
+            },
+            {
+              "text": "{name} → {brightness}%"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "hall_light",
+      "name": "Hall light",
+      "ref": "the hall light",
+      "category": "Lights",
+      "mount": "ceiling",
+      "new": false,
+      "initial": {
+        "brightness": 0
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "brightness",
+          "kind": "number",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set {ref} brightness from 0 (off) to 100.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "brightness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "brightness"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "brightness": 0
+          },
+          "effects": [
+            {
+              "set": "brightness",
+              "arg": "brightness",
+              "scale": 0.01,
+              "ms": 1200
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "brightness": 0
+              },
+              "text": "{name} → off"
+            },
+            {
+              "when": {
+                "brightness": 100
+              },
+              "text": "{name} → full"
+            },
+            {
+              "text": "{name} → {brightness}%"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "key_light",
+      "name": "Key light",
+      "ref": "the key light",
+      "category": "Studio",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "brightness": 0,
+        "kelvin": 5600
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "brightness",
+          "kind": "number",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set {ref} brightness from 0 (off) to 100, and optionally its colour temperature in kelvin, from 2700 (warm) to 6500 (cool).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "brightness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "kelvin": {
+                "type": "integer",
+                "minimum": 2700,
+                "maximum": 6500
+              }
+            },
+            "required": [
+              "brightness"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "brightness": 0
+          },
+          "effects": [
+            {
+              "set": "brightness",
+              "arg": "brightness",
+              "scale": 0.01,
+              "ms": 800
+            },
+            {
+              "set": "kelvin",
+              "arg": "kelvin",
+              "ms": 800
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "brightness": 0
+              },
+              "text": "{name} → off"
+            },
+            {
+              "when": {
+                "brightness": 100
+              },
+              "text": "{name} → full"
+            },
+            {
+              "text": "{name} → {brightness}%"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "main_camera",
+      "name": "Main camera",
+      "ref": "the main camera",
+      "category": "Studio",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "on": false
+      },
+      "faultText": "on, but no picture",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on, false is off).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "mic",
+      "name": "Mic",
+      "ref": "the mic",
+      "category": "Studio",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "muted": true
+      },
+      "faultText": "no input",
+      "edit": [
+        {
+          "field": "muted",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Mute or unmute {ref} (true mutes it, false makes it live).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "muted": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "muted"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "muted": true
+          },
+          "effects": [
+            {
+              "set": "muted",
+              "arg": "muted",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "muted": true
+              },
+              "text": "{name} → muted"
+            },
+            {
+              "text": "{name} → live"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "capture_card",
+      "name": "Capture card",
+      "ref": "the capture card",
+      "category": "Studio",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "input": "HDMI 1",
+        "signal": false
+      },
+      "faultText": "signal with camera off",
+      "edit": [
+        {
+          "field": "signal",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Choose which input {ref} takes: HDMI 1, HDMI 2 or USB.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "string",
+                "enum": [
+                  "HDMI 1",
+                  "HDMI 2",
+                  "USB"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "input",
+              "arg": "input",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → {input}"
+            }
+          ]
+        },
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether {ref} is receiving a signal.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "signal",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "overlay",
+      "name": "Overlay",
+      "ref": "the overlay app",
+      "category": "Studio",
+      "mount": "floor",
+      "new": false,
+      "initial": {
+        "scene": "idle"
+      },
+      "faultText": "unreachable",
+      "edit": [],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch the stream scene shown by {ref}: idle, starting, live, ending or recording.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "scene": {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "starting",
+                  "live",
+                  "ending",
+                  "recording"
+                ]
+              }
+            },
+            "required": [
+              "scene"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "scene",
+              "arg": "scene",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → {scene}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "on_air_sign",
+      "name": "On-air sign",
+      "ref": "the on-air sign",
+      "category": "Studio",
+      "mount": "wall",
+      "new": false,
+      "initial": {
+        "on": false
+      },
+      "faultText": "no response",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true lights it, false turns it off).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on air"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "led_strip",
+      "name": "LED strip",
+      "ref": "the LED strip",
+      "category": "Studio",
+      "mount": "wall",
+      "new": false,
+      "initial": {
+        "brightness": 0.5,
+        "color": "blue"
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "brightness",
+          "kind": "number",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set {ref} brightness from 0 (off) to 100, and optionally its colour: white, warm, blue, purple, red or green.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "brightness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "white",
+                  "warm",
+                  "blue",
+                  "purple",
+                  "red",
+                  "green"
+                ]
+              }
+            },
+            "required": [
+              "brightness"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "brightness": 0
+          },
+          "effects": [
+            {
+              "set": "brightness",
+              "arg": "brightness",
+              "scale": 0.01,
+              "ms": 800
+            },
+            {
+              "set": "color",
+              "arg": "color",
+              "ms": 800
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "brightness": 0
+              },
+              "text": "{name} → off"
+            },
+            {
+              "when": {
+                "brightness": 100
+              },
+              "text": "{name} → full"
+            },
+            {
+              "text": "{name} → {brightness}%"
             }
           ]
         }
