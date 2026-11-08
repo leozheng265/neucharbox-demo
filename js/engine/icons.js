@@ -38,6 +38,12 @@ export const ICONS = {
   heater:     S('<rect x="5" y="4" width="14" height="14" rx="2"/><path d="M8 8v6M12 8v6M16 8v6"/><path d="M7 21h2M15 21h2"/>'),
   humidifier: S('<path d="M8 21h8l1-8H7z"/><path d="M12 3s3.5 3 3.5 5.5a3.5 3.5 0 0 1-7 0C8.5 6 12 3 12 3z"/>'),
   purifier:   S('<rect x="6" y="3" width="12" height="18" rx="3"/><path d="M9 8h6M9 12h6M9 16h6"/>'),
+  lock:       S('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><circle cx="12" cy="16" r="1.2"/>'),
+  doorbell:   S('<rect x="5" y="3" width="8" height="18" rx="2.5"/><circle cx="9" cy="8.5" r="1.8"/><circle cx="9" cy="16" r="1.2"/><path d="M16.5 9a4 4 0 0 1 0 6M19.5 7a7 7 0 0 1 0 10"/>'),
+  windowsensor: S('<rect x="3" y="9" width="10" height="6" rx="1.5"/><rect x="17" y="9" width="4" height="6" rx="1.5"/><path d="M15 6v12"/>'),
+  smoke:      S('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2"/>'),
+  siren:      S('<path d="M7 19v-6a5 5 0 0 1 10 0v6"/><path d="M5 19h14"/><path d="M12 3v2M4.5 6l1.5 1.5M19.5 6L18 7.5M2.5 12h2M19.5 12h2"/>'),
+  garage:     S('<path d="M3 21V9l9-5 9 5v12"/><path d="M7 21V12h10v9"/><path d="M7 15h10M7 18h10"/>'),
   hub:        S('<rect x="3" y="9" width="18" height="7" rx="2.5"/><path d="M7 16v2M17 16v2"/><path d="M8 12.5h8"/>'),
   generic:    S('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'),
   whatif:     S('<path d="M10.3 4.3a2 2 0 0 1 3.4 0l7.4 12.8a2 2 0 0 1-1.7 3H4.6a2 2 0 0 1-1.7-3z"/><path d="M12 9.5v4"/><path d="M12 16.8v.2"/>'), // "What if something fails?": a warning sign

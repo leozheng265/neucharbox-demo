@@ -70,7 +70,7 @@ export default {
         "air_conditioner",
         "ceiling_fan"
       ],
-      "text": "Turn on {air_conditioner} and {ceiling_fan} when it gets hot"
+      "text": "Turn on {air_conditioner} and {ceiling_fan} at 14:00"
     },
     {
       "needs": [
@@ -78,6 +78,20 @@ export default {
         "air_purifier"
       ],
       "text": "Run {robot_vacuum}, then switch on {air_purifier} for an hour"
+    },
+    {
+      "needs": [
+        "smoke_co_alarm",
+        "siren"
+      ],
+      "text": "Check {smoke_co_alarm}, and sound {siren} if it is alarming"
+    },
+    {
+      "needs": [
+        "video_doorbell",
+        "smart_lock"
+      ],
+      "text": "Check {video_doorbell}, then lock {smart_lock}"
     },
     {
       "needs": [
@@ -111,9 +125,21 @@ export default {
     },
     {
       "needs": [
+        "garage_door"
+      ],
+      "text": "Close {garage_door} at 21:00"
+    },
+    {
+      "needs": [
+        "door_window_sensor"
+      ],
+      "text": "Tell me if {door_window_sensor} is open"
+    },
+    {
+      "needs": [
         "smart_plug"
       ],
-      "text": "Switch {smart_plug} off if it draws power after midnight"
+      "text": "Switch {smart_plug} off at midnight"
     },
     {
       "needs": [],
@@ -2037,7 +2063,7 @@ export default {
           "verb": "set",
           "kind": "Write",
           "outcome": "confirmed",
-          "description": "Switch {ref} on or off (true is on, false is off). It reports its power draw but cannot tell what is plugged in.",
+          "description": "Switch {ref} on or off (true is on, false is off).",
           "parameters": {
             "type": "object",
             "properties": {
@@ -2893,6 +2919,328 @@ export default {
             },
             {
               "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "smart_lock",
+      "name": "Smart lock",
+      "ref": "the smart lock",
+      "category": "Security",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "locked": true
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "locked",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Lock or unlock {ref} (true locks the bolt, false unlocks it).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "locked": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "locked"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "locked": true
+          },
+          "effects": [
+            {
+              "set": "locked",
+              "arg": "locked",
+              "ms": 1500
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "locked": true
+              },
+              "text": "{name} → locked"
+            },
+            {
+              "text": "{name} → unlocked"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "video_doorbell",
+      "name": "Video doorbell",
+      "ref": "the video doorbell",
+      "category": "Security",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "ringing": false,
+        "motion": false
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "ringing",
+          "kind": "bool"
+        },
+        {
+          "field": "motion",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether someone is ringing {ref} and whether it sees motion at the door.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "ringing",
+              "round": 0,
+              "unit": ""
+            },
+            {
+              "field": "motion",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "door_window_sensor",
+      "name": "Door/window sensor",
+      "ref": "the door/window sensor",
+      "category": "Sensors",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "open": false
+      },
+      "faultText": "no signal",
+      "edit": [
+        {
+          "field": "open",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether the door or window fitted with {ref} is open or closed.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "open",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "smoke_co_alarm",
+      "name": "Smoke/CO alarm",
+      "ref": "the smoke/CO alarm",
+      "category": "Security",
+      "mount": "ceiling",
+      "new": true,
+      "initial": {
+        "alarm": false
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "alarm",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether {ref} is sounding an alarm.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "alarm",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "siren",
+      "name": "Siren",
+      "ref": "the siren",
+      "category": "Security",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "sounding": false
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "sounding",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Start or stop the loud alarm of {ref} (true sounds it, false silences it).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "sounding": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sounding"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "sounding": false
+          },
+          "effects": [
+            {
+              "set": "sounding",
+              "arg": "sounding",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "sounding": true
+              },
+              "text": "{name} → sounding"
+            },
+            {
+              "text": "{name} → silent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "garage_door",
+      "name": "Garage door",
+      "ref": "the garage door",
+      "category": "Security",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "open": false
+      },
+      "faultText": "door fault",
+      "edit": [
+        {
+          "field": "open",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Open or close {ref} (true opens it, false closes it); it takes about 8 seconds to move.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "open": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "open"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "open",
+              "arg": "open",
+              "ms": 8000
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "open": true
+              },
+              "text": "{name} → opening"
+            },
+            {
+              "text": "{name} → closing"
             }
           ]
         }
