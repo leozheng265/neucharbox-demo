@@ -132,6 +132,58 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     m.set({ off: 'live_off' }); eq((await post(`sessions/${sid}/requests`, { text: 'again' }))[0], 503);
   });
 
+  await check('rig · set and advance follow the contract', async () => {
+    const { m, post, kinds, settle, session } = rig(), sid = await session();
+    const frames = async (after = 0) => { const r = await m.fetch(`${BASE}sessions/${sid}/events?after=${after}`, { headers: { authorization: `Bearer ${MOCK_CODE}` } }); const rd = r.body.getReader(), dec = new TextDecoder(); let b = ''; for (;;) { const x = await Promise.race([rd.read(), new Promise((res) => setTimeout(() => res({ done: true }), 5))]); if (x.done) break; b += dec.decode(x.value); } await rd.cancel(); return [...b.matchAll(/event: (\w+)\ndata: (.*)\n/g)].map((a) => [a[1], JSON.parse(a[2])]); };
+    eq(await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: 20 }), [202, {}], 'set ok');
+    const fr = await frames();
+    eq(fr, [['state', { path: 'soil.moisture', value: 20, ms: 0, src: 'edit' }]], 'idle edit frame has src and no rid');
+    ok(!('rid' in fr[0][1]), 'no rid key');
+    eq((await post(`sessions/${sid}/set`, { path: 'lamp.on', value: true }))[1].error, 'bad_value', 'path not editable');
+    eq((await post(`sessions/${sid}/set`, { path: 'lamp.brightness', value: 2 }))[0], 400, 'out of range');
+    eq((await post(`sessions/${sid}/set`, { path: 'pump.running', value: 1 }))[0], 400, 'wrong type');
+    eq((await post(`sessions/${sid}/set`, { path: 'lamp.status', value: 'fault' }))[0], 400, 'status not editable');
+    eq((await post(`sessions/${sid}/set`, { path: 'lamp.brightness', value: 0.5 }))[0], 202); eq((await frames(1)).map((f) => f[0]), ['state', 'state'], 'lamp.on follows brightness');
+    await new Promise((r) => setTimeout(r, 5001)); // the rate window (10 per 5 s) is shared by set and advance
+    for (const h of [0, -1, 169, '2']) eq((await post(`sessions/${sid}/advance`, { hours: h }))[1].error, 'bad_value', `hours ${h}`);
+    const n = (await frames()).length;
+    const [st, body] = await post(`sessions/${sid}/advance`, { hours: 3 });
+    eq(st, 200); eq(body.clock.hour, 19.5, 'end clock'); eq(body.clock.label, 'Fri 19:30');
+    const cf = (await frames(n)).filter((f) => f[0] === 'clock');
+    ok(cf.length >= 1 && cf.every((f) => f[1].src === 'edit' && !('rid' in f[1])), 'clock frames src edit, no rid');
+    eq(cf.at(-1)[1].hour, 19.5);
+    const [, { requestId: rid }] = await post(`sessions/${sid}/requests`, { text: 'Movie night' }); await settle();
+    eq((await post(`sessions/${sid}/advance`, { hours: 1 }))[1].error, 'busy', 'advance mid-request');
+    eq((await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: 10 }))[0], 202); await settle();
+    const ev = (await frames()).filter((f) => f[0] === 'state' && f[1].src === 'edit').at(-1);
+    eq(ev[1].rid, rid, 'edit during a request carries its rid');
+  });
+
+  await check('rig · edit rate limit and faults', async () => {
+    const { m, post, session } = rig(), sid = await session();
+    for (let i = 0; i < 10; i++) eq((await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: i }))[0], 202, `set ${i}`);
+    eq(await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: 1 }), [429, { error: 'rate', message: (await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: 1 }))[1].message }], '11th is rate');
+    eq((await post(`sessions/${sid}/advance`, { hours: 1 }))[1].error, 'rate', 'shared with advance');
+    await new Promise((r) => setTimeout(r, 5001));
+    eq((await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: 5 }))[0], 202, 'window passed');
+    m.push(sid, 'state', { path: 'pump.status', value: 'fault', ms: 0 });
+    await new Promise((r) => setTimeout(r, 5001));
+    eq((await post(`sessions/${sid}/set`, { path: 'pump.running', value: true }))[1].error, 'device_unavailable', 'fault');
+    eq((await post(`sessions/${sid}/set`, 'x'.repeat(1)))[1].error, 'bad_request', 'malformed body');
+    ok(typeof m.edit === 'function', 'edit helper');
+  });
+
+  await check('api · set and advance post to the contract routes', async () => {
+    const m = createMockLive(), api = createLiveApi({ base: 'http://mock', fetch: m.fetch, getCode: () => MOCK_CODE });
+    const { sessionId } = await api.createSession('home');
+    eq(await api.set(sessionId, 'soil.moisture', 12), {}, 'set resolves');
+    const c = m.calls.at(-1); eq([c.method, c.path, c.body], ['POST', `sessions/${sessionId}/set`, { path: 'soil.moisture', value: 12 }]);
+    const a = await api.advance(sessionId, 2); eq(a.clock.hour, 18.5);
+    eq(m.calls.at(-1).body, { hours: 2 });
+    let err; try { await api.set(sessionId, 'lamp.on', true); } catch (e) { err = e; }
+    ok(err instanceof LiveError && err.kind === 'bad_value' && err.status === 400, 'LiveError bad_value');
+  });
+
   await check('mock · contract: what-if order, declined runs', async () => {
     const { post, kinds, settle, session } = rig(), sid = await session();
     let [, { requestId: rid }] = await post(`sessions/${sid}/requests`, { text: 'Movie night' }); await settle();
