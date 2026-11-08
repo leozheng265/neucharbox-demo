@@ -235,6 +235,22 @@ export async function customChecks({ report, guardHits }) {
     return { THREE, R, room: r3.createRoom3d({ R, P, M, THREE, store: null }) };
   };
 
+  await check('ui · screens in the room never print "100%" (every text drawn on a model canvas, at every edit max)', need(ui, r3)(async ({ ok }) => {
+    const { THREE, R } = await room3dOn(), { parts } = await env();
+    const drawn = [], real = document.createElement;
+    document.createElement = (...a) => { const c = real.apply(document, a); const gc = c.getContext; c.getContext = (...b) => { const g = gc.apply(c, b); return new Proxy(g, { get: (t, k) => (k === 'fillText' ? (txt, ...r) => { drawn.push(String(txt)); return t.fillText(txt, ...r); } : t[k]) }); }; return c; };
+    try {
+      for (const type of ['temp_humidity_sensor', 'energy_meter', 'printer_3d', 'robot_arm', 'label_printer', 'ev_charger']) {
+        const t = cat.typeOf(type), M = parts.materials(), P = parts.parts(R.scene, M);
+        const m = ui.DEVICE_UI[type].model({ THREE, P, M });
+        for (const s of reachableStates(t)) { if (s.status === 'online') m.update(s, 1); }
+        for (const e of t.edit || []) if (e.kind === 'number') for (const v of [e.min, e.max]) m.update({ ...t.initial, [e.field]: v, status: 'online' }, 2);
+      }
+    } finally { document.createElement = real; }
+    ok(drawn.length > 0, 'the screens drew some text');
+    ok(!drawn.some((x) => /100\s*%/.test(x)), `a screen printed 100%: ${drawn.filter((x) => /100\s*%/.test(x)).join(', ')}`);
+  }));
+
   await check('room3d · builds and animates every type', need(ui, r3)(async ({ ok }) => {
     const { THREE, R, room } = await room3dOn();
     const { emptyLayout, addDevice, moveDevice, rotateDevice } = lay, { DEVICE_UI } = ui;

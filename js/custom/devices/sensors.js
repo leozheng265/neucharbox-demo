@@ -52,7 +52,7 @@ export default {
             shown = key;
             if (key === 'off') draw('--', '--', '#9FE3F0');
             else if (key === 'fault') draw('!!', 'no reply', '#fff', true);
-            else draw(`${oneDecimal(s.temperature)}°`, `${Math.max(0, hm)}%`, tn < 180 ? '#8FD0FF' : tn > 270 ? '#FFC48A' : '#9FE3F0');
+            else draw(`${oneDecimal(s.temperature)}°`, percent(s.humidity), tn < 180 ? '#8FD0FF' : tn > 270 ? '#FFC48A' : '#9FE3F0');
           }
           led.set(s, t, HEX.green, 2);
         },
