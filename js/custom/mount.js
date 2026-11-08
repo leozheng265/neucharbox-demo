@@ -100,7 +100,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       if (!controller) return;
       const m = controller.mode, has = controller.layout.devices.length > 0, busy = m === 'run' && !controller.canBuild;
       buildBtn.setAttribute('aria-pressed', String(m === 'build')); runBtn.setAttribute('aria-pressed', String(m === 'run'));
-      changedEl.hidden = !(m === 'build' && controller.changedSinceRun); // the persistent note: the conversation restarts at Done building
+      changedEl.hidden = !(m === 'build' && !!controller.live); // the persistent note: while a live session exists, a device change restarts the conversation at Done building
       buildBtn.disabled = m === 'gate' || busy; buildBtn.title = busy ? C.buildBusy : '';
       runBtn.disabled = m !== 'build' || doneBusy || !has || !controller.live;
       doneBtn.hidden = m === 'run'; doneBtn.disabled = m !== 'build' || doneBusy || !has;
@@ -155,11 +155,13 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       storage, makeLive,
       ui: {
         mode: (m) => showMode(m),
-        layout: (l) => { room3d.sync(l); placement?.sync(l); inventory?.refresh(); updateBar(); },
+        layout: (l) => { dropGone(l); room3d.sync(l); placement?.sync(l); inventory?.refresh(); updateBar(); },
         notice: (kind) => { if (kind !== 'changed') say(C[kind]); }, // 'changed' shows as the persistent #changedNote
       },
     });
     const store = createStore(initialFor(sceneFor(controller.layout)));
+    // A removed device's state goes with it, so one added later under the same id starts from the catalog, not the old run.
+    const dropGone = (l) => { const ids = new Set(['hub', 'env', ...l.devices.map((d) => d.id)]); for (const k of Object.keys(store.state)) if (!ids.has(k)) delete store.state[k]; };
     wiring = createSessionWiring({
       store, baselineRef, clearRoom: () => { R.clearMarkers(); room3d.reset(); },
       replaceEl: () => { const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh; },

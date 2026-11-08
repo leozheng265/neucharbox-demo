@@ -1692,7 +1692,7 @@ export default {
           "verb": "set",
           "kind": "Write",
           "outcome": "confirmed",
-          "description": "Set the belt speed of {ref} from 0 (stopped) to 100 (full speed).",
+          "description": "Set the belt speed of {ref} from 0 (stopped) to 100 (full speed, which is 0.5 m/s). The state's speed field is in m/s, so speed 0.25 is half speed.",
           "parameters": {
             "type": "object",
             "properties": {

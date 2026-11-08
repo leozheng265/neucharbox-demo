@@ -35,10 +35,14 @@ export function clampPos(mount, pos, size = 0.5) {
 }
 const wallRot = (p) => (p.x === -HX ? 90 : 0);
 
-// The first spot on a 0.5 m grid at least `size` from every device and the hub, else the room centre.
-export function freeSpot(layout, mount, size = 0.5) {
-  const taken = [{ x: layout.hub.x, z: layout.hub.z, s: HUB_SIZE }, ...layout.devices.map((d) => ({ x: d.x, z: d.z, s: 0 }))];
-  const free = (p) => taken.every((t) => Math.hypot(p.x - t.x, p.z - t.z) >= size - 1e-9);
+// The first spot on a 0.5 m grid whose footprint clears every device and the hub (centre distance >= (size + other size) / 2),
+// else the candidate with the most clearance. sizeOf(type) gives a device's footprint (default: the new device's own).
+// A floor and a ceiling device may share a spot; a wall device never falls back to a spot off its wall.
+export function freeSpot(layout, mount, size = 0.5, sizeOf = () => size) {
+  const taken = [{ x: layout.hub.x, z: layout.hub.z, s: HUB_SIZE, m: 'hub' },
+    ...layout.devices.map((d) => ({ x: d.x, z: d.z, s: sizeOf(d.type) ?? size, m: mountOf(d.type) }))]
+    .filter((t) => !((mount === 'ceiling' && t.m === 'floor') || (mount === 'floor' && t.m === 'ceiling')));
+  const clearance = (p) => taken.reduce((c, t) => Math.min(c, Math.hypot(p.x - t.x, p.z - t.z) - (size + t.s) / 2), Infinity);
   const cands = [];
   if (mount === 'wall') {
     for (let x = -HX + GRID; x <= HX - size / 2 + 1e-9; x += GRID) cands.push({ x, z: -HZ });
@@ -46,17 +50,23 @@ export function freeSpot(layout, mount, size = 0.5) {
   } else {
     for (let z = -HZ + size / 2; z <= HZ - size / 2 + 1e-9; z += GRID) for (let x = -HX + size / 2; x <= HX - size / 2 + 1e-9; x += GRID) cands.push({ x, z });
   }
-  for (const c of cands) { const p = clampPos(mount, c, size); if (free(p)) return { x: r4(p.x), z: r4(p.z) }; }
-  return { x: 0, z: 0 };
+  let best = null, bestC = -Infinity;
+  for (const c of cands) {
+    const p = clampPos(mount, c, size), cl = clearance(p);
+    if (cl >= -1e-9) return { x: r4(p.x), z: r4(p.z) };
+    if (cl > bestC) { best = p; bestC = cl; }
+  }
+  const p = clampPos(mount, best ?? { x: 0, z: mount === 'wall' ? -HZ : 0 }, size);
+  return { x: r4(p.x), z: r4(p.z) };
 }
 
-export function addDevice(layout, type, size = 0.5) {
+export function addDevice(layout, type, size = 0.5, sizeOf) {
   const t = typeOf(type);
   if (!t) return { layout, error: 'unknown' };
   if (layout.devices.length >= MAX_DEVICES) return { layout, error: 'full' };
   const used = new Set(layout.devices.map((d) => d.id));
   let n = 1; while (used.has(idFor(type, n))) n++;
-  const id = idFor(type, n), p = freeSpot(layout, t.mount, size);
+  const id = idFor(type, n), p = freeSpot(layout, t.mount, size, sizeOf);
   const dev = { id, type, x: p.x, z: p.z, rot: t.mount === 'wall' ? wallRot(p) : 0 };
   return { layout: { ...layout, hub: { ...layout.hub }, devices: [...layout.devices.map((d) => ({ ...d })), dev] }, id };
 }

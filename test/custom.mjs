@@ -121,7 +121,36 @@ export async function customChecks({ report, guardHits }) {
     ok(W.devices.every((d) => d.z === -3 || d.x === -4), 'wall devices sit on a wall');
     const dense = { ...emptyLayout(), devices: [] };
     for (let x = -4; x <= 4; x += 0.25) for (let z = -3; z <= 3; z += 0.25) dense.devices.push({ id: 'x', type: 'floor_lamp', x, z, rot: 0 });
-    eq(freeSpot(dense, 'floor', 0.5), { x: 0, z: 0 }, 'centre fallback');
+    const fb = freeSpot(dense, 'floor', 0.5);
+    ok(Math.abs(fb.x) <= 3.75 && Math.abs(fb.z) <= 2.75, 'a full room falls back to the spot with the most clearance, inside the room');
+    const fw = freeSpot(dense, 'wall', 0.5); ok(fw.z === -3 || fw.x === -4, 'and a wall device still lands on a wall');
+  }));
+
+  const devUi = await import('../js/custom/devices/index.js').catch((e) => ({ err: e }));
+  await check('freeSpot · every wall type lands on a wall plane, in either order', mods(({ ok }) => {
+    if (devUi.err) throw devUi.err;
+    const { emptyLayout, addDevice } = lay, { DEVICE_UI } = devUi, { CATALOG } = cat;
+    const walls = CATALOG.types.filter((t) => t.mount === 'wall').map((t) => t.type).slice(0, 20);
+    ok(walls.length >= 20, `${walls.length} wall types`);
+    for (const order of [walls, [...walls].reverse()]) {
+      let L = emptyLayout(); for (const t of order) L = addDevice(L, t, DEVICE_UI[t].size, (x) => DEVICE_UI[x]?.size).layout;
+      const bad = L.devices.filter((d) => !(d.z === -3 || d.x === -4));
+      ok(bad.length === 0, `off the walls: ${bad.map((d) => `${d.id}@${d.x},${d.z}`).join(' ')}`);
+    }
+  }));
+
+  await check('freeSpot · big devices then small ones: no footprint overlap', mods(({ ok }) => {
+    if (devUi.err) throw devUi.err;
+    const { emptyLayout, addDevice } = lay, { DEVICE_UI } = devUi, sizeOf = (x) => DEVICE_UI[x]?.size;
+    let L = emptyLayout();
+    for (const t of ['conveyor', 'bed_sensor', 'scanner_arch', ...Array(10).fill('floor_lamp')]) L = addDevice(L, t, sizeOf(t), sizeOf).layout;
+    const all = [{ id: 'hub', x: L.hub.x, z: L.hub.z, s: 0.5 }, ...L.devices.map((d) => ({ ...d, s: sizeOf(d.type) }))];
+    let worst = Infinity, who = '';
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+      const m = Math.hypot(all[i].x - all[j].x, all[i].z - all[j].z) - (all[i].s + all[j].s) / 2;
+      if (m < worst) { worst = m; who = `${all[i].id}/${all[j].id}`; }
+    }
+    ok(worst >= -1e-9, `${who} overlap by ${(-worst).toFixed(3)} m`);
   }));
 
   await check('loadLayout · survives junk', mods(({ eq, ok }) => {
