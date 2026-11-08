@@ -96,6 +96,20 @@ export async function customChecks({ report, guardHits }) {
     eq(lay.clearDevices(F).devices, [], 'clear'); eq(lay.clearDevices(H).hub, H.hub, 'clear keeps hub');
   }));
 
+  await check('clampPos · wall devices keep off the window', mods(({ eq, ok }) => {
+    const { clampPos, WINDOW, addDevice, emptyLayout, moveDevice } = lay;
+    eq(WINDOW, { x: 2.2, y: 1.55, ww: 1.8, wh: 1.36 }, 'WINDOW');
+    const lo = WINDOW.x - WINDOW.ww / 2, hi = WINDOW.x + WINDOW.ww / 2, off = (p, s) => p.x + s / 2 <= lo || p.x - s / 2 >= hi;
+    for (const s of [0.3, 0.5, 0.9]) for (let x = 1; x <= 3.5; x += 0.05) { const p = clampPos('wall', { x, z: -3 }, s); ok(p.z === -3 && off(p, s), `size ${s} at x ${x.toFixed(2)} → ${p.x}`); }
+    eq(clampPos('wall', { x: 2.1, z: -3 }, 0.5).x, 1.01, 'left of the window when nearer the left');
+    eq(clampPos('wall', { x: 2.3, z: -3 }, 0.5).x, 3.39, 'right of it when nearer the right');
+    ok(clampPos('wall', { x: 2.9, z: -3 }, 1.2).x + 0.6 <= lo, 'too wide for the right side: the left');
+    eq(clampPos('wall', { x: -3.9, z: 0.2 }, 0.5), { x: -4, z: 0.2 }, 'the left wall has no window');
+    let L = emptyLayout(); for (let i = 0; i < 14; i++) L = addDevice(L, 'thermostat', 0.3).layout;
+    ok(L.devices.every((d) => d.x === -4 || off(d, 0.3)), 'freeSpot never puts one on the window');
+    L = moveDevice(L, 'thermostat', { x: 2.2, z: -3 }, 0.3); ok(off(L.devices[0], 0.3), 'nor does a move');
+  }));
+
   await check('freeSpot · no overlaps until full', mods(({ eq, ok }) => {
     const { emptyLayout, addDevice, freeSpot } = lay;
     let L = emptyLayout();
@@ -481,6 +495,16 @@ export async function customChecks({ report, guardHits }) {
     eq(t.c.live.phase, 'idle'); t.c.teardown();
   }));
 
+  await check('controller · an access card at Done building still lets the visitor build', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
+    t.c.toBuild(); t.c.add('soil_sensor'); t.mock.set({ code: 'OTHER' }); await t.c.done();
+    const live = t.c.live; eq(live.phase, 'access', 'the access card is up');
+    eq([t.c.canBuild, t.c.toBuild(), t.c.mode], [true, true, 'build'], 'back to building');
+    t.c.move('soil_sensor', { x: 1, z: 1 }); await t.c.done();
+    eq([t.c.mode, t.c.live === live, postsTo(t.mock, /^sessions$/).length], ['run', true, 1], 'the same live, still at its card');
+    t.c.teardown();
+  }));
+
   await check('controller · full and empty', live2(ctl, cpy)(async ({ eq, ok }) => {
     const t = rig(); t.c.gated();
     await t.c.done(); eq([postsTo(t.mock, /^sessions$/).length, t.c.mode, t.c.live], [0, 'build', null], 'done with no devices does nothing');
@@ -494,6 +518,31 @@ export async function customChecks({ report, guardHits }) {
     const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done(); t.c.toBuild();
     t.c.add('blinds'); t.c.add('soil_sensor'); t.c.remove('blinds'); eq(t.notices, ['changed'], 'one changed notice');
     eq(t.c.layout.hub.x, 0, 'the hub stays'); t.c.teardown();
+  }));
+
+  // ---- Task 8: placement's pure helpers (the QA page test/custom-build.html runs them in a browser too) ----
+  const pl = await import('../js/custom/placement.js').catch((e) => ({ err: e }));
+  await check('placement · rays, grab offsets and the selection bar', need(pl)(({ eq, ok }) => {
+    const { hitOn, grabOffset, dragTo, isTap, selection } = pl;
+    const v = (x, y, z) => ({ x, y, z }), cam = v(7, 4.2, 6.2);
+    const toward = (p) => { const d = v(p.x - cam.x, p.y - cam.y, p.z - cam.z), l = Math.hypot(d.x, d.y, d.z); return v(d.x / l, d.y / l, d.z / l); };
+    const r = (p) => p && Object.fromEntries(Object.entries(p).map(([k, x]) => [k, typeof x === 'number' ? Math.round(x * 1e6) / 1e6 : x]));
+    eq(r(hitOn('floor', cam, toward(v(1.5, 0, -0.5)))), { x: 1.5, z: -0.5 }, 'floor');
+    eq(r(hitOn('ceiling', cam, toward(v(-1, 2.8, 1)))), { x: -1, z: 1 }, 'ceiling');
+    eq(r(hitOn('wall', cam, toward(v(0.5, 1.4, -3)))), { x: 0.5, z: -3, wall: 'back' }, 'back wall');
+    eq(r(hitOn('wall', cam, toward(v(-4, 1.4, 1)))), { x: -4, z: 1, wall: 'left' }, 'left wall');
+    eq(r(hitOn('wall', cam, toward(v(-1, 0, 1)))), { x: -1, z: 1, wall: 'left' }, 'over the floor: the nearer wall');
+    eq(hitOn('floor', cam, v(0, 1, 0)), null, 'the sky');
+    eq(r(hitOn('floor', cam, toward(v(-3.7, 1.65, -2.7)), 1.65)), { x: -3.7, z: -2.7 }, 'the plane at the grab height');
+    eq(r(dragTo('floor', { x: 2.2, z: 0.2 }, grabOffset('floor', { x: 1, z: 1, rot: 0 }, { x: 1.2, z: 0.7 }))), { x: 2, z: 0.5 }, 'floor offset kept');
+    const gw = grabOffset('wall', { x: -1, z: -3, rot: 0 }, { x: -0.8, z: -3, wall: 'back' });
+    eq(r(dragTo('wall', { x: 0.2, z: -3, wall: 'back' }, gw)), { x: 0, z: -3 }, 'along the wall');
+    eq(dragTo('wall', { x: -4, z: 1, wall: 'left' }, gw), { x: -4, z: 1 }, 'round the corner');
+    ok(isTap({ x: 0, y: 0 }, { x: 4, y: 4 }) && !isTap({ x: 0, y: 0 }, { x: 7, y: 0 }), 'tap slop');
+    let L = lay.emptyLayout(); for (const t of ['floor_lamp', 'blinds']) L = lay.addDevice(L, t).layout;
+    eq([selection(L, 'hub'), selection(L, 'floor_lamp'), selection(L, 'blinds'), selection(L, 'x')], [
+      { id: 'hub', name: 'NeuCharBox', rotate: false, remove: false }, { id: 'floor_lamp', name: 'Floor lamp', rotate: true, remove: true },
+      { id: 'blinds', name: 'Blinds', rotate: false, remove: true }, null], 'selection');
   }));
 
   await check('copy · CUSTOM_COPY passes the guardrails', live2(cpy)(({ eq, ok }) => {

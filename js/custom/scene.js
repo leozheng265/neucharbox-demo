@@ -6,8 +6,9 @@ import { DEVICE_UI } from './devices/index.js';
 
 export const START_HOUR = 16.5;
 // Seen from outside the front-right corner (the front and right walls are cut away), the 8 × 6 m room fits at aspect 1.5;
-// the renderer widens the vertical FOV on narrower canvases (fitAspect).
-export const CAMERA = { position: [7.0, 4.2, 6.2], target: [-0.4, 0.8, -0.6], fov: 42, fitAspect: 1.5, azimuth: [0.62, 1.0], minDistance: 2, maxDistance: 12 };
+// the renderer widens the vertical FOV on narrower canvases (fitAspect). Looking down at the floor's middle, so the room
+// sits mid-frame on the near-square desktop canvas instead of under a band of sky (browser check, Task 8).
+export const CAMERA = { position: [6.8, 4.7, 6.0], target: [-0.4, 0.25, -0.6], fov: 42, fitAspect: 1.5, azimuth: [0.62, 1.0], minDistance: 2, maxDistance: 12 };
 
 export function sceneFor(layout) {
   const devices = {}, deviceOrder = [];

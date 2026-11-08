@@ -1,12 +1,16 @@
 // The room layout model: where each device stands. Pure data, no DOM and no THREE. Every function returns a new layout.
 //   layout = { v: 1, hub: {x, z}, devices: [{ id, type, x, z, rot }] }
-//   The floor is centred at the origin (x -4..4, z -3..3). Wall devices sit on a back wall: z = -3 (rot 0) or x = -4 (rot 90).
+//   The floor is centred at the origin (x -4..4, z -3..3). Wall devices sit on a back wall: z = -3 (rot 0) or x = -4 (rot 90),
+//   never across the window (WINDOW, in the back wall).
 import { typeOf, validId, idFor, MAX_DEVICES } from './catalog.js';
 
 export const ROOM = { w: 8, d: 6, h: 2.8 };
 export const HUB_HOME = { x: 0, z: -2.4 };
 export const STORAGE_KEY = 'ncb.customRoom';
+// The room's one window, in the back wall (z = -3): centre x and y, width and height (room3d.js builds it from this).
+export const WINDOW = { x: 2.2, y: 1.55, ww: 1.8, wh: 1.36 };
 const HX = ROOM.w / 2, HZ = ROOM.d / 2, HUB_SIZE = 0.5, GRID = 0.5;
+const WIN_MARGIN = 0.04; // the window's casing stands 2.5 cm past its opening
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -15,12 +19,17 @@ const mountOf = (type) => typeOf(type)?.mount ?? 'floor';
 
 export const emptyLayout = () => ({ v: 1, hub: { ...HUB_HOME }, devices: [] });
 
-// Inside the room with a size/2 margin. A wall mount snaps to the nearer back wall (z = -3 or x = -4) and slides along it.
+// Inside the room with a size/2 margin. A wall mount snaps to the nearer back wall (z = -3 or x = -4) and slides along it;
+// on the back wall it keeps off the window, on whichever side of it is nearer (the left when the right is too narrow).
 export function clampPos(mount, pos, size = 0.5) {
   const h = size / 2, x = num(pos?.x) ? pos.x : 0, z = num(pos?.z) ? pos.z : 0;
   if (mount === 'wall') {
     const toBack = Math.abs(z + HZ), toLeft = Math.abs(x + HX);
-    return toLeft < toBack ? { x: -HX, z: clamp(z, -HZ + h, HZ - h) } : { x: clamp(x, -HX + h, HX - h), z: -HZ };
+    if (toLeft < toBack) return { x: -HX, z: clamp(z, -HZ + h, HZ - h) };
+    let bx = clamp(x, -HX + h, HX - h);
+    const lo = WINDOW.x - WINDOW.ww / 2 - WIN_MARGIN - h, hi = WINDOW.x + WINDOW.ww / 2 + WIN_MARGIN + h;
+    if (bx > lo && bx < hi) bx = r4(bx >= WINDOW.x && hi <= HX - h ? hi : lo);
+    return { x: bx, z: -HZ };
   }
   return { x: clamp(x, -HX + h, HX - h), z: clamp(z, -HZ + h, HZ - h) };
 }

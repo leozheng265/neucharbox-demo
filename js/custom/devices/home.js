@@ -11,7 +11,9 @@ export default {
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },
     // P.floorLamp unshaded: no point-light shadows (six cube renders a frame each, and a light added after the renderer
-    // starts would keep them on every tier). A smart dimmer module on the pole carries the status LED.
+    // starts would keep them on every tier). A smart dimmer module on the pole carries the status LED. With no shade
+    // shadow the bulb lights the wall behind it at full strength: 2.8 at full keeps that wall from blowing out (and
+    // blooming over the wall top) at night, and still lights the floor around it.
     model({ THREE, P, M }) {
       const lamp = P.floorLamp(0, 0);
       lamp.bulb.castShadow = false; lamp.bulb.userData.wantsShadow = false; lamp.bulb.distance = 6;
@@ -23,14 +25,15 @@ export default {
         root,
         update(s, t) {
           const b = clamp01(s.brightness);
-          if (b !== shown) { shown = b; lamp.bulb.intensity = b * 5; lamp.bulbMesh.material.emissiveIntensity = b * 3; lamp.shadeMat.emissiveIntensity = b * 0.35; }
+          if (b !== shown) { shown = b; lamp.bulb.intensity = b * 2.8; lamp.bulbMesh.material.emissiveIntensity = b * 3; lamp.shadeMat.emissiveIntensity = b * 0.35; }
           led.set(s, t); // the light follows the brightness in a fault too: dark, or lit and stuck on
         },
       };
     },
   },
 
-  // A window blind on its own window (frame and a pale pane), so open slats show daylight and closed ones block it.
+  // A window blind on its own window (frame and a pane), so open slats show daylight and closed ones block it. The pane
+  // shows the sky (env.sky): pale by day, a dark night blue after dusk.
   // "open" and "closed" at the ends of the travel, as in Home.
   blinds: {
     icon: 'blinds', size: 1.2, mountY: 1.5, plural: true,
@@ -45,6 +48,7 @@ export default {
       ], M.trim, { consume: true });
       const pane = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.1, H - 0.1), new THREE.MeshStandardMaterial({ color: 0xCFE3EE, emissive: 0xBFDDEE, emissiveIntensity: 0.45, roughness: 0.3 }));
       pane.position.z = 0.004; pane.receiveShadow = true;
+      const DAY = new THREE.Color(0xCFE3EE), NIGHT = new THREE.Color(0x1E2A3A);
       // 16 slats at a 7 cm pitch, as Home's: tilted to 1.3 rad a 7.5 cm slat covers more than the pitch, so "closed" closes.
       // P.blinds returns the slats; its headrail is the next object it added, right after the last slat.
       const slats = P.blinds(0, H / 2 - 0.04, Z, W - 0.06, 16, 0.07);
@@ -58,12 +62,14 @@ export default {
       for (const s of slats) { s.geometry.dispose(); s.geometry = geo; s.material = slatMat; }
       const root = P.group(frame, pane, ...slats, rail);
       const led = statusLed(THREE, root, { at: [-W / 2 + 0.07, H / 2 + 0.02, Z + 0.044], r: 0.006 }); // motor LED, headrail front
-      let shown = -1;
+      let shown = -1, sky = -1;
       return {
         root,
-        update(s, t) {
+        update(s, t, env) {
           const a = clamp01(s.closed) * 1.3;
           if (a !== shown) { shown = a; for (const sl of slats) sl.rotation.x = a; }
+          const k = Math.round(clamp01(env?.sky ?? 1) * 50) / 50; // in 2% steps: no material write every frame
+          if (k !== sky) { sky = k; pane.material.color.lerpColors(NIGHT, DAY, k); pane.material.emissiveIntensity = 0.45 * k; }
           led.set(s, t);
         },
       };
