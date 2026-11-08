@@ -1,6 +1,7 @@
 // Run mode's glue between the page and the engine (no renderer or DOM imports at the top, so Node can test it):
 //   liveUiFor(...) → the `ui` object createLive drives (status line, panel, room, the card when live mode ends);
 //   createSessionWiring(...) → what every new live session resets: the panel, the store and the baseline.
+//   dropGone(store, layout) → a removed device's state goes with it (the controller then starts a new session at Done).
 import { CUSTOM_COPY as C } from './copy.js';
 import { initialFor } from './scene.js';
 
@@ -49,6 +50,12 @@ export function liveUiFor({ statusEl, statusTextEl = statusEl, getPanel, room3d,
 // device it was made for, and restore drops the slices of devices that left (a TypeError in it would leave done() with
 // no live). Its DOM listeners go with its element, which replaceEl() swaps for a fresh one.
 //   begin(scene) → the new panel; dispose() drops the subscriptions (the page's teardown).
+// A removed device's state goes with it, so one added later under the same id starts from the catalog, not the old run.
+export function dropGone(store, layout) {
+  const ids = new Set(['hub', 'env', 'plan', ...layout.devices.map((d) => d.id)]);
+  for (const k of Object.keys(store.state)) if (!ids.has(k)) delete store.state[k];
+}
+
 export function createSessionWiring({ store, baselineRef, replaceEl, makePanel, clearRoom }) {
   let subs = [], panel = null;
   const drop = () => { for (const off of subs) off(); subs = []; };

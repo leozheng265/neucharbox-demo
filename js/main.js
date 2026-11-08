@@ -25,6 +25,10 @@ const follow = () => `<nav class="social" aria-label="Follow NeuCharBox"><span c
 // A thumbnail gradient is dark when its first colour is (lab, creator): the index number and icons then go light.
 const darkThumb = (g) => { const m = /#([0-9a-f]{6})/i.exec(g || ''); if (!m) return false; const n = parseInt(m[1], 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 110; };
 
+// "Build your own" needs the live AI: without an API base (the public site until the live server is hosted) its card
+// isn't shown and #custom opens the picker.
+const customOn = () => !!liveApiBase();
+
 function renderPicker() {
   app.classList.remove('failed', 'live-edit'); app.classList.add('picker-mode');
   app.innerHTML = `
@@ -32,7 +36,7 @@ function renderPicker() {
     <main class="picker">
       <h1>Try NeuCharBox before it ships.</h1>
       <p class="lede">Pick a place. Plug in the hub, connect what's there, say what you want — or give exact instructions — approve the plan, and watch it run. Then make something fail, and see what it does.</p>
-      <div class="scene-grid">${[...SCENES, CUSTOM].map((s, i) => `
+      <div class="scene-grid">${(customOn() ? [...SCENES, CUSTOM] : SCENES).map((s, i) => `
         <a class="scene-card" href="#${s.id}" style="--thumb:${s.thumb}"><div class="thumb${darkThumb(s.thumb) ? ' dark' : ''}" data-n="0${i + 1}"><span class="icons" aria-hidden="true">${['hub', ...(THUMB_ICONS[s.id] || [])].map(icon).join('')}</span></div><div class="body"><h3>${esc(s.title)}</h3><p>${esc(s.promise)}</p>${s.tag ? `<span class="tag">${esc(s.tag)}</span>` : ''}</div></a>`).join('')}
       </div>
       <p class="foot">Everything here is a simulation running in your browser. No account, no data leaves the page. Scenes marked illustrative are typical setups, not a specific customer's.</p>
@@ -228,8 +232,11 @@ function route() {
   const meta = SCENES.find((s) => s.id === id);
   const failed = (e) => { console.error(e); if (gen === mountGen) showLoadFailure(e); };
   if (meta) mountScene(meta, gen).catch(failed);
-  else if (id === CUSTOM.id) CUSTOM.load().then((m) => m.mountCustom({ app, gen, isCurrent: () => gen === mountGen, setCurrent: (c) => { current = c; } })).catch(failed);
-  else renderPicker();
+  else if (id === CUSTOM.id && customOn()) CUSTOM.load().then((m) => m.mountCustom({ app, gen, isCurrent: () => gen === mountGen, setCurrent: (c) => { current = c; } })).catch(failed);
+  else {
+    if (id === CUSTOM.id) history.replaceState(null, '', location.pathname + location.search); // a shared #custom link lands on the picker
+    renderPicker();
+  }
   window.scrollTo(0, 0);
 }
 addEventListener('hashchange', route);

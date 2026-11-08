@@ -1,6 +1,7 @@
 // Scene registry: metadata for the picker plus a lazy loader per scene.
 import { CUSTOM_COPY } from '../custom/copy.js';
 // V busts stale caches of lazily loaded scene modules on hosts without no-cache headers; bump it when scenes change.
+// Only the entry modules carry it: what they import (js/engine/*, and js/custom/* under mount.js) is unversioned.
 const V = 'v=13';
 export const SCENES = [
   { id: 'home', title: 'Home, away for a week', promise: 'Say what you want. Never name a device.', thumb: 'linear-gradient(135deg,#F6E7C9,#D9B88C)', load: () => import(`./home.js?${V}`) },

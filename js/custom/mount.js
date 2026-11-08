@@ -28,7 +28,7 @@ import { createRoom3d } from './room3d.js';
 import { createInventory, tileOrder } from './inventory.js';
 import { createThumbs } from './thumbs.js';
 import { createPlacement } from './placement.js';
-import { liveUiFor, createSessionWiring } from './liveui.js';
+import { liveUiFor, createSessionWiring, dropGone } from './liveui.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -66,12 +66,13 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   const storage = safeStorage(), codes = codeStore(), base = liveApiBase();
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots)
   const R = createRenderer($('room'), { camera: cameraFor(innerWidth, innerHeight), ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0;
+  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0, gate = null;
   const thumbsDone = new Set();
   const baselineRef = { current: null };
   let noticeTimer = 0, doneBusy = false, shownCanBuild = null, torn = false;
   const teardown = () => {
     if (torn) return; torn = true;
+    gate?.cancel(); // a gate still waiting on /health settles now, so a late answer mounts nothing
     clearTimeout(noticeTimer); clearTimeout(thumbTimer);
     thumbs?.dispose();
     controller?.teardown(); placement?.dispose(); inventory?.dispose();
@@ -152,7 +153,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       const view = createLiveView({ chat, scene: sc });
       // live.js's own access card (a saved code that died at Done building) says "Back to scenes" here, and goes there
       // (the route's teardown closes the live).
-      const wrapped = { ...view, access: (spec, h) => view.access({ ...spec, backLabel: C.back }, { ...h, onBack: toScenes }) };
+      const wrapped = { ...view, access: (spec, h) => view.access({ ...spec, backLabel: C.back, offlineText: C.offline }, { ...h, onBack: toScenes }) };
       return createLive({ scene: sc, store, panel: wiring.panel, base, codes, view: wrapped, ui: liveUi, sessionExtra: () => ({ devices }) });
     }
 
@@ -160,13 +161,11 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       storage, makeLive,
       ui: {
         mode: (m) => showMode(m),
-        layout: (l) => { dropGone(l); room3d.sync(l); placement?.sync(l); inventory?.refresh(); updateBar(); },
+        layout: (l) => { dropGone(store, l); room3d.sync(l); placement?.sync(l); inventory?.refresh(); updateBar(); },
         notice: (kind) => { if (kind !== 'changed') say(C[kind]); }, // 'changed' shows as the persistent #changedNote
       },
     });
     const store = createStore(initialFor(sceneFor(controller.layout)));
-    // A removed device's state goes with it, so one added later under the same id starts from the catalog, not the old run.
-    const dropGone = (l) => { const ids = new Set(['hub', 'env', ...l.devices.map((d) => d.id)]); for (const k of Object.keys(store.state)) if (!ids.has(k)) delete store.state[k]; };
     wiring = createSessionWiring({
       store, baselineRef, clearRoom: () => { R.clearMarkers(); room3d.reset(); },
       replaceEl: () => { const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh; },
@@ -205,9 +204,11 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     window.__ncb = hooks;
     showMode(controller.mode);
 
-    // The gate: the access card in the chat until a code works ("Back to scenes" leaves the page).
+    // The gate: the access card in the chat until a code works ("Back to scenes" leaves the page). With no API base
+    // (main.js doesn't route here then) it shows the offline card without asking anything.
     const api = createLiveApi({ base, getCode: () => codes.get() });
-    const passed = await passGate({ api, codes, view: createLiveView({ chat, scene: sceneFor(controller.layout) }), onBack: toScenes });
+    gate = passGate({ api, codes, view: createLiveView({ chat, scene: sceneFor(controller.layout) }), onBack: toScenes, offline: !base });
+    const passed = await gate;
     if (!passed || !isCurrent() || torn) return;
     chatLog.replaceChildren(); // the spent access card goes; run mode starts its own conversation
     controller.gated();

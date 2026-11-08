@@ -77,6 +77,8 @@
   .stage.custom .inventory { flex: 1; }
 }
 @media (min-width: 960px) and (max-width: 1180px) { .custom-top .social-label { display: none; } }
+/* 521–640 px: the header's mode bar and Done building leave no room for the social links (≤ 520 px app.css hides them) */
+@media (max-width: 640px) { .custom-top .social { display: none; } }
 
 /* ---------- phones and tablets ---------- */
 @media (max-width: 959px) {
