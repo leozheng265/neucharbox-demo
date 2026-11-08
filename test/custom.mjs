@@ -508,7 +508,7 @@ export async function customChecks({ report, guardHits }) {
       ['printer_3d.progress', 100], ['humidifier.humidity', 100], ['conveyor.speed', 0.5], ['conveyor.speed', 0]].map(([p, v]) => editValueText(E(p), v)),
     ['full', '43%', 'closed', 'saturated', '34%', 'full', 'done', 'saturated', '0.5 m/s', '0.0 m/s'], 'custom spot readouts');
     eq([['lamp.brightness', 1], ['lamp.brightness', 0.3], ['blinds.closed', 1], ['soil.moisture', 100], ['thermostat.target', 28]].map(([p, v]) => editValueText(H(p), v)),
-      ['full', '30%', 'full', 'full', '28.0°C'], 'Home spot readouts (the default top word; below the top as before)');
+      ['full', '30%', 'closed', 'saturated', '28.0°C'], 'Home spot readouts (the default top word for the lamp, their own for the blinds and the soil; below the top as before)');
   }));
 
   // ---- Task 7: the mode controller, the code gate and the live hooks (real createLive against the contract mock) ----
