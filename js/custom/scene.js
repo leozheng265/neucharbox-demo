@@ -9,6 +9,11 @@ export const START_HOUR = 16.5;
 // the renderer widens the vertical FOV on narrower canvases (fitAspect). Looking down at the floor's middle, so the room
 // sits mid-frame on the near-square desktop canvas instead of under a band of sky (browser check, Task 8).
 export const CAMERA = { position: [6.8, 4.7, 6.0], target: [-0.4, 0.25, -0.6], fov: 42, fitAspect: 1.5, azimuth: [0.62, 1.0], minDistance: 2, maxDistance: 12 };
+// Portrait phones (the room is taller than wide): the same corner, but looking down more steeply and from closer in, so
+// the floor fills the tall canvas instead of sitting in a band between sky and lawn (browser check, Task 16). Chosen once, when the page loads.
+export const CAMERA_PHONE = { ...CAMERA, position: [5.2, 7.6, 4.5], target: [-0.3, 0, -0.5], fitAspect: 1.45, maxDistance: 12 };
+export const isPhonePortrait = (w, h) => w <= 600 && h > w * 1.15;
+export const cameraFor = (w, h) => (isPhonePortrait(w, h) ? CAMERA_PHONE : CAMERA);
 
 export function sceneFor(layout) {
   const devices = {}, deviceOrder = [];

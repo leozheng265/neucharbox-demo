@@ -19,7 +19,7 @@ import { liveApiBase } from '../live-config.js';
 import { CUSTOM_COPY as C } from './copy.js';
 import { createCustomController } from './controller.js';
 import { passGate } from './gate.js';
-import { sceneFor, initialFor, CAMERA } from './scene.js';
+import { sceneFor, initialFor, cameraFor } from './scene.js';
 import { createRoom3d } from './room3d.js';
 import { createInventory, tileOrder } from './inventory.js';
 import { createThumbs } from './thumbs.js';
@@ -60,7 +60,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
 
   const storage = safeStorage(), codes = codeStore(), base = liveApiBase();
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots)
-  const R = createRenderer($('room'), { camera: CAMERA, ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
+  const R = createRenderer($('room'), { camera: cameraFor(innerWidth, innerHeight), ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
   let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0;
   const thumbsDone = new Set();
   const baselineRef = { current: null };
@@ -130,7 +130,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       invEl.hidden = m !== 'build'; panelEl.hidden = m !== 'run'; chatEl.hidden = m === 'build'; statusEl.hidden = m !== 'run';
       hintEl.textContent = m === 'build' ? C.hint : ORBIT_HINT;
       if (m !== 'build') placement?.clear();
-      if (m === 'build') { inventory?.refresh(); fillThumbs(); } else if (thumbs && !thumbTimer) thumbTimer = setTimeout(() => { thumbTimer = 0; thumbs.dispose(); }, THUMB_IDLE_MS);
+      if (m === 'build') { inventory?.open(false); inventory?.refresh(); fillThumbs(); } // the phone sheet starts folded, so the room shows else if (thumbs && !thumbTimer) thumbTimer = setTimeout(() => { thumbTimer = 0; thumbs.dispose(); }, THUMB_IDLE_MS);
       updateBar();
     }
 

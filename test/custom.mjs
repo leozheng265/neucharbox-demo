@@ -218,12 +218,12 @@ export async function customChecks({ report, guardHits }) {
     for (const [type, u] of Object.entries(ui.DEVICE_UI)) ok(typeof u.icon === 'string' && u.icon in ICONS, `${type}: icon "${u.icon}" is not in ICONS`);
   }));
 
-  // A device's world bounding box (its meshes, no highlight shells): inside the room.
+  // A device's world bounding box (its meshes, no highlight shells or unseen tap boxes): inside the room.
   const ROOM_EPS = 1e-3;
   const outside = (THREE, obj) => {
     obj.updateWorldMatrix(true, true);
     const b = new THREE.Box3(), mb = new THREE.Box3();
-    obj.traverse((m) => { if (!m.isMesh || m.userData.isShell) return; if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); b.union(mb.copy(m.geometry.boundingBox).applyMatrix4(m.matrixWorld)); });
+    obj.traverse((m) => { if (!m.isMesh || m.userData.isShell || m.userData.proxy) return; if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); b.union(mb.copy(m.geometry.boundingBox).applyMatrix4(m.matrixWorld)); });
     if (b.isEmpty()) return 'no meshes';
     const f = (v) => v.toFixed(3);
     return b.min.y >= -ROOM_EPS && b.max.y <= 2.8 + ROOM_EPS && b.min.x >= -4 - ROOM_EPS && b.max.x <= 4 + ROOM_EPS && b.min.z >= -3 - ROOM_EPS && b.max.z <= 3 + ROOM_EPS
@@ -330,6 +330,20 @@ export async function customChecks({ report, guardHits }) {
     eq(meshes, 0, 'no device meshes left in the scene');
   }));
 
+  await check('room3d · a small wall device has an unseen tap box at least 40 cm across, flush with its wall', need(ui, r3)(async ({ ok }) => {
+    const { THREE, R, room } = await room3dOn();
+    const { emptyLayout, addDevice, moveDevice } = lay;
+    let L = addDevice(emptyLayout(), 'door_window_sensor', ui.DEVICE_UI.door_window_sensor.size).layout;
+    L = moveDevice(L, 'door_window_sensor', { x: 1, z: -3 }, ui.DEVICE_UI.door_window_sensor.size); room.sync(L);
+    const o = room.objectFor('door_window_sensor'); o.updateWorldMatrix(true, true);
+    let proxy = null; o.traverse((x) => { if (x.userData.proxy) proxy = x; });
+    ok(proxy && proxy.visible === false, 'a hidden proxy box');
+    const b = new THREE.Box3().setFromObject(proxy), sz = b.getSize(new THREE.Vector3());
+    ok(sz.x >= 0.399 && sz.y >= 0.399, `proxy ${sz.x.toFixed(2)} x ${sz.y.toFixed(2)}`);
+    ok(b.min.z >= -3 - 1e-6, `the proxy stays on the room side of the wall (z from ${b.min.z.toFixed(3)})`);
+    const near = new THREE.Raycaster(new THREE.Vector3(1.17, o.position.y + 0.15, 2), new THREE.Vector3(0, 0, -1));
+    ok(near.intersectObject(o, true).some((h) => h.object.userData.proxy), 'a ray 17 cm beside the sensor hits the proxy');
+  }));
   await check('room3d · a removed device frees its own materials and textures, never the shared ones, and asks the renderer to prune its shadow twins', need(ui, r3)(async ({ eq, ok }) => {
     const { THREE, parts } = await env(), R = stubRenderer(), M = parts.materials(), P = parts.parts(R.scene, M);
     const room = r3.createRoom3d({ R, P, M, THREE, store: null });
