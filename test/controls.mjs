@@ -1,5 +1,5 @@
 // Card controls: which control (bar or switch) a device's tile shows, decided from the device's state.
-import { controlFor } from '../js/engine/controls.js';
+import { controlFor, editsFor } from '../js/engine/controls.js';
 export function controlChecks({ report, scenes }) {
   const p = [];
   const eq = (got, want, what) => { if (JSON.stringify(got) !== JSON.stringify(want)) p.push(`${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); };
@@ -16,6 +16,19 @@ export function controlChecks({ report, scenes }) {
   eq(controlFor({ control: { kind: 'bar', field: 'target', min: 10, max: 28 } }, { target: 19 }), { kind: 'bar', field: 'target', value: 0.5 }, 'ranged bar');
   eq(controlFor({ control: { kind: 'switch', field: 'open' } }, { open: 0.7 }), { kind: 'switch', field: 'open', on: true }, 'switch override');
   eq(controlFor({ control: (s) => ({ kind: 'switch', field: 'muted', on: !s.muted }) }, { muted: true }), { kind: 'switch', field: 'muted', on: false }, 'function override');
+  const E = (id, f) => { const d = scenes.home?.devices[id]; return d ? editsFor(id, d, f) : null; };
+  if (scenes.home) {
+    const sum = (id, f) => (E(id, f) || []).map((e) => `${e.kind}:${e.path}:${e.value}:${e.min}-${e.max}/${e.step}x${e.scale}${e.unit}:${e.label}`);
+    eq(sum('lamp', { brightness: 0.3 }), ['slider:lamp.brightness:0.3:0-1/0.01x100%:undefined'], 'lamp edits');
+    eq(sum('blinds', { closed: 1 }), ['slider:blinds.closed:1:0-1/0.01x100%:undefined'], 'blinds edits');
+    eq(sum('soil', { moisture: 34 }), ['slider:soil.moisture:34:0-100/1x1%:undefined'], 'soil edits');
+    eq(sum('pump', { running: true }), ['switch:pump.running:true:undefined-undefined/undefinedx1undefined:undefined'], 'pump edits');
+    eq(sum('camera', { armed: true, motion: false }).map((x) => x.split(':').slice(0, 3).join(':')), ['switch:camera.armed:true', 'switch:camera.motion:false'], 'camera has 2 entries');
+    eq((E('camera', { armed: true, motion: false }) || []).map((e) => e.label), ['armed', 'motion'], 'camera labels');
+    eq(sum('thermostat', { current: 21.4, target: 21 }), ['slider:thermostat.current:21.4:5-35/0.5x1°C:now', 'slider:thermostat.target:21:10-28/0.5x1°C:set'], 'thermostat edits');
+    eq(E('lamp', undefined), [], 'no slice'); eq(E('lamp', 'x'), [], 'slice not an object');
+    eq(editsFor('x', {}, { a: 1 }), [], 'no edit array');
+  }
   report('engine · card controls follow the device state', p);
   const WANT = {
     home:      { lamp: 'bar:brightness', blinds: 'bar:closed', soil: '—', pump: 'switch:running', camera: 'switch:armed', thermostat: 'bar:target' },

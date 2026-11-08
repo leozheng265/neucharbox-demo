@@ -115,18 +115,28 @@ export const SCRIPT_PICK = [[/pizza/i, 'cannot'], [/movie/i, 'movie'], [/limit/i
 // ---------------- the server ----------------
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
 const mergeSteps = (steps, more) => { const out = steps.map((s) => ({ ...s })); for (const s of more) { const i = out.findIndex((x) => x.id === s.id); if (i >= 0) out[i] = { ...s }; else out.push({ ...s }); } return out; };
+// What a hand edit may change (the same table as the server): path → 'bool' or [min, max].
+const EDITABLE = { 'lamp.brightness': [0, 1], 'blinds.closed': [0, 1], 'soil.moisture': [0, 100], 'pump.running': 'bool', 'camera.armed': 'bool', 'camera.motion': 'bool', 'thermostat.target': [10, 28], 'thermostat.current': [5, 35] };
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const pad = (n) => String(n).padStart(2, '0');
+// The room clock `hours` later (the mock reads the ISO time as UTC, which is only arithmetic here).
+const clockAfter = (c, hours) => {
+  const d = new Date(Date.parse(`${c.iso}Z`) + Math.round(hours * 3600000));
+  return { iso: d.toISOString().slice(0, 19), label: `${DAYS[d.getUTCDay()]} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`, hour: c.hour + hours };
+};
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_CODE, liveEnabled = true, off = null, remaining = 20, mode = 'json', pace = 0, scripts = SCRIPTS } = {}) {
   const cfg = { scene, scenes, code, liveEnabled, off, remaining, mode, pace };
-  const calls = [], sessions = new Map(), enc = new TextEncoder();
+  const calls = [], editTimes = new Map(), sessions = new Map(), enc = new TextEncoder();
   let nSession = 0;
 
   const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const fail = (status, error, message) => json(status, { error, message });
 
   // Add an event to a session's list and to every open stream; keep the room (state, clock) and the run in step.
-  function emit(sess, kind, data, rid = sess.curRid) {
+  // A null or undefined `rid` leaves the key out (an edit outside a request has none).
+  function emit(sess, kind, data, rid) {
     const run = sess.run;
     if (kind === 'state') { const [d, ...f] = data.path.split('.'); if (sess.state[d]) sess.state[d][f.join('.')] = data.value; }
     else if (kind === 'clock') { sess.clock = { iso: data.iso, label: data.label, hour: data.hour }; sess.state.env.hour = data.hour; }
@@ -142,7 +152,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       if (run && !run.whatif && (data.outcome === 'ok' || data.outcome === 'failed') && run.steps.length) sess.last = run; // the latest replayable request (contract): a declined, cannot_do, expired or limit one never replaces it
     }
     if (kind === 'cannot_do' || kind === 'declined') sess.pending = null;
-    const seq = sess.events.length + 1, ev = { seq, kind, data: { ...out, rid } };
+    const seq = sess.events.length + 1, ev = { seq, kind, data: rid == null ? { ...out } : { ...out, rid } };
     sess.events.push(ev);
     const frame = enc.encode(`id: ${seq}\nevent: ${kind}\ndata: ${JSON.stringify(ev.data)}\n\n`);
     for (const s of sess.streams) { try { s.controller.enqueue(frame); } catch { sess.streams.delete(s); } }
@@ -230,6 +240,29 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       sess.state = sess.initial ? clone(sess.initial) : homeState(); sess.clock = { ...CLOCK }; sess.last = null;
       return json(200, { state: clone(sess.state), clock: { ...sess.clock } });
     }
+    if ((sub === 'set' || sub === 'advance') && method === 'POST') {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(400, 'bad_request', 'Bad request.');
+      const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
+      if (recent.length >= 10) { editTimes.set(sid, recent); return fail(429, 'rate', 'Too many changes at once. Wait a moment.'); }
+      recent.push(now); editTimes.set(sid, recent);
+      if (sub === 'set') {
+        const { path, value } = body, rule = Object.hasOwn(EDITABLE, path) ? EDITABLE[path] : null;
+        const good = rule === 'bool' ? typeof value === 'boolean' : !!rule && typeof value === 'number' && Number.isFinite(value) && value >= rule[0] && value <= rule[1];
+        if (!good) return fail(400, 'bad_value', "That value isn't allowed for this device.");
+        const [dev] = path.split('.');
+        if (sess.state[dev].status === 'fault' || sess.state[dev].status === 'busy') return fail(409, 'device_unavailable', "That device can't be changed right now.");
+        const rid = sess.active;
+        emit(sess, 'state', { path, value, ms: 0, src: 'edit' }, rid);
+        if (path === 'lamp.brightness') emit(sess, 'state', { path: 'lamp.on', value: value > 0, ms: 0, src: 'edit' }, rid);
+        return json(202, {});
+      }
+      const hours = body.hours;
+      if (typeof hours !== 'number' || !Number.isFinite(hours) || hours <= 0 || hours > 168) return fail(400, 'bad_value', "That value isn't allowed.");
+      if (sess.active) return fail(409, 'busy', 'A request is already running.');
+      let left = hours;
+      while (left > 0) { const step = Math.min(6, left); emit(sess, 'clock', { ...clockAfter(sess.clock, step), src: 'edit' }); left -= step; }
+      return json(200, { clock: { ...sess.clock } });
+    }
     if (sub !== 'requests' || method !== 'POST') return fail(404, 'bad_request', 'No such route.');
     if (!rid) { // new request
       const text = body?.text;
@@ -308,6 +341,8 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     fetch: mockFetch,
     calls,
     push(sid, kind, data = {}) { const s = sessions.get(sid); if (!s) throw new Error(`no session ${sid}`); return emit(s, kind, data, data.rid ?? s.curRid ?? 'r0'); },
+    // An event as a hand edit would stream it: src 'edit' and no rid key.
+    edit(sid, kind, data = {}) { const s = sessions.get(sid); if (!s) throw new Error(`no session ${sid}`); return emit(s, kind, { ...data, src: 'edit' }); },
     drop(sid) { const s = sessions.get(sid); if (!s) return; for (const e of s.streams) { try { e.controller.close(); } catch { /* closed */ } } s.streams.clear(); },
     openStreams(sid) { return sessions.get(sid)?.streams.size ?? 0; }, // read-only: how many event streams are open on a session
     expire(sid) { const s = sessions.get(sid); if (!s) return; this.drop(sid); sessions.delete(sid); },

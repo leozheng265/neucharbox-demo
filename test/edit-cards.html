@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Editable cards QA</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+  body { height: auto; overflow-y: auto; }
+  #qaResult { font: 12px/1.4 monospace; padding: 8px 14px; background: #fff; border-bottom: 1px solid var(--line); }
+  #qaResult.bad { color: var(--red); white-space: pre-wrap; }
+  .qa { max-width: 440px; margin: 0 auto; }
+  .qa .panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px 12px; overflow: visible; }
+  .qa .ent { min-width: 0; max-width: none; }
+  .qa .status { margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="qaResult">running…</div>
+<div class="qa">
+  <div class="panel" id="panel"></div>
+  <div class="status" id="status"><span class="stext" id="statusText">Fri 16:30</span><span class="clockctl" id="clockctl" hidden></span></div>
+</div>
+<script type="module">
+import { createStore } from '../js/engine/store.js';
+import { createPanel } from '../js/engine/panel.js';
+import { createClockCtl } from '../js/engine/clockctl.js';
+import { createLiveView } from '../js/engine/livechat.js';
+import home from '../js/scenes/home.js';
+
+const problems = [];
+const ok = (cond, what) => { if (!cond) problems.push(what); };
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const card = (id) => $(`.ent[data-id="${id}"]`);
+const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+
+try {
+  const initial = { env: { hour: 16.5 }, hub: { status: 'off', led: 0 }, plan: {} };
+  for (const [id, d] of Object.entries(home.devices)) initial[id] = { status: 'online', ...d.initial };
+  const store = createStore(initial);
+  const selected = [];
+  const panel = createPanel($('#panel'), home, store, { onSelect: (id) => selected.push(id) });
+  const calls = [];
+
+  // display-only (guided) mode: no controls; card roots are divs with role=button
+  ok($$('#panel .ent').length === 6, 'six cards');
+  ok($$('#panel .ent').every((c) => c.tagName === 'DIV' && c.getAttribute('role') === 'button' && c.tabIndex === 0), 'card root is div[role=button][tabindex=0]');
+  ok(!$('#panel input, #panel .edits'), 'no controls before editable(true)');
+
+  panel.editable(true, { onEdit: (p, v) => calls.push([p, v]) });
+  const sliders = (id) => $$('input.edit-range', card(id)), switches = (id) => $$('button.edit-sw', card(id));
+  ok(sliders('lamp').length === 1 && sliders('blinds').length === 1 && sliders('soil').length === 1, 'lamp, blinds, soil: one slider each');
+  ok(sliders('thermostat').length === 2 && switches('thermostat').length === 0, 'thermostat: 2 sliders');
+  ok(switches('camera').length === 2 && sliders('camera').length === 0, 'camera: 2 switches');
+  ok(switches('pump').length === 1, 'pump: 1 switch');
+  ok($$('#panel button').every((b) => b.getAttribute('role') === 'switch' && b.hasAttribute('aria-checked') && b.dataset.path && b.getAttribute('aria-label')), 'every button is a labelled switch');
+  ok($$('#panel .ent').every((c) => c.tagName !== 'BUTTON') && !$('#panel button button, #panel button input, #panel button select, #panel button a, #panel button [role=button]') && !$('#panel [role=button] [role=button]'), 'no card is a button; nothing interactive nested in a button');
+  ok($$('#panel input.edit-range').every((i) => i.dataset.path && /\S\s\S/.test(i.getAttribute('aria-label'))), 'sliders carry data-path and "{name} {label}"');
+  ok(sliders('thermostat').map((i) => i.dataset.path).join() === 'thermostat.current,thermostat.target', 'thermostat sliders: now then set');
+  ok($('.eval', card('lamp')).textContent === '0%', `lamp value text "${$('.eval', card('lamp')).textContent}"`);
+
+  // slider: display units in, store units out
+  const lamp = sliders('lamp')[0];
+  lamp.value = '30'; fire(lamp, 'input'); fire(lamp, 'change');
+  ok(calls.length === 1 && calls[0][0] === 'lamp.brightness' && calls[0][1] === 0.3, `lamp slider 30 -> onEdit('lamp.brightness', 0.3), got ${JSON.stringify(calls)}`);
+  ok($('.eval', card('lamp')).textContent === '30%', 'lamp value text follows the slider');
+  ok(selected.length === 0 && !$('.ent.selected'), 'a slider change does not select the card');
+  // a click on a slider or its card's controls does not select the card either
+  lamp.click(); ok(selected.length === 0 && !$('.ent.selected'), 'a slider click does not select the card');
+
+  // switch
+  const arm = switches('camera')[0];
+  arm.click();
+  ok(calls.at(-1)[0] === 'camera.armed' && calls.at(-1)[1] === true, 'switch click -> onEdit(path, !on)');
+  ok(!$('.ent.selected') && selected.length === 0, 'a switch click does not select the card');
+  store.set('camera.armed', true);
+  ok(arm.getAttribute('aria-checked') === 'true' && arm.classList.contains('on'), 'switch follows the store');
+  arm.click(); ok(calls.at(-1)[1] === false, 'switch on -> onEdit(path, false)');
+  // pointer and key events from a control never reach the card
+  let leaked = 0; const spy = () => { leaked++; };
+  card('camera').addEventListener('keydown', spy); card('camera').addEventListener('pointerdown', spy);
+  arm.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })); arm.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+  ok(leaked === 0, 'key and pointer events from a control stop at the controls');
+
+  // the card itself: click and Enter/Space select it
+  card('soil').click(); ok(card('soil').classList.contains('selected') && selected.at(-1) === 'soil', 'card click selects');
+  card('blinds').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); ok(card('blinds').classList.contains('selected'), 'Enter selects');
+  card('lamp').dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })); ok(card('lamp').classList.contains('selected'), 'Space selects');
+  panel.select(null);
+
+  // store -> control
+  store.set('soil.moisture', 22);
+  ok(sliders('soil')[0].value === '22' && $('.eval', card('soil')).textContent === '22%', 'soil slider follows the store');
+  store.set('thermostat.current', 18.4);
+  ok($('.eval', card('thermostat')).textContent === '18.4°C', `thermostat text "${$('.eval', card('thermostat')).textContent}"`);
+  // a slider being dragged is left alone
+  const soil = sliders('soil')[0];
+  soil._drag = true; store.set('soil.moisture', 40); ok(soil.value === '22', 'a slider mid-drag is not moved');
+  soil._drag = false; store.set('soil.moisture', 41); ok(soil.value === '41', 'and follows again after');
+
+  // keyboard: Chrome fires `change` on every arrow press; one edit goes out ~400 ms after the last key (or on blur)
+  const kb = sliders('soil')[0], n0 = calls.length;
+  for (const v of ['29', '28', '27']) { kb.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); kb.value = v; fire(kb, 'input'); fire(kb, 'change'); }
+  ok(calls.length === n0, `arrow presses send nothing at once (got ${calls.length - n0})`);
+  await new Promise((r) => setTimeout(r, 200)); ok(calls.length === n0, 'still nothing at 200 ms');
+  await new Promise((r) => setTimeout(r, 300));
+  ok(calls.length === n0 + 1 && calls.at(-1)[0] === 'soil.moisture' && calls.at(-1)[1] === 27, `one edit with the last value after the keys stop, got ${JSON.stringify(calls.slice(n0))}`);
+  kb.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); kb.value = '30'; fire(kb, 'change'); kb.dispatchEvent(new Event('blur'));
+  ok(calls.length === n0 + 2 && calls.at(-1)[1] === 30, 'blur sends a pending key edit at once');
+  await new Promise((r) => setTimeout(r, 500)); ok(calls.length === n0 + 2, 'and nothing more later');
+  kb.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); kb.value = '12'; fire(kb, 'change'); kb.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  ok(calls.length === n0 + 3 && calls.at(-1)[1] === 12, 'a pointer release still sends at once');
+  await new Promise((r) => setTimeout(r, 50));
+
+  // a real press and release (the controls stop pointerup from bubbling): the drag ends, the store lands on the slider
+  const rel = sliders('soil')[0];
+  rel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ok(rel._drag === true, 'pointerdown starts a drag');
+  rel.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); ok(rel._drag === false, 'a real pointerup ends the drag');
+  await new Promise((r) => setTimeout(r, 30));
+  store.set('soil.moisture', 55); ok(rel.value === '55', `after a real release a store update lands (got ${rel.value})`);
+  // a rejected edit's rollback inside the 1.2 s window of use still lands once the window ends
+  rel.focus(); rel.value = '10'; fire(rel, 'input'); fire(rel, 'change'); store.set('soil.moisture', 56);
+  ok(rel.value === '10', 'a write inside the window of use leaves the slider alone');
+  await new Promise((r) => setTimeout(r, 1400));
+  ok(rel.value === '56' && $('.eval', card('soil')).textContent === '56%', `after the window the slider shows the store value (got ${rel.value})`);
+  rel.blur();
+  // roles: a group with its name while editing, a button otherwise
+  ok($$('#panel .ent').filter((c) => c.classList.contains('has-edits')).every((c) => c.getAttribute('role') === 'group' && c.getAttribute('aria-label') && c.tabIndex === 0), 'edit mode: has-edits cards are role=group with aria-label, tabbable');
+
+  // fault / offline / busy disable the controls
+  store.set('lamp.status', 'fault');
+  ok(card('lamp').classList.contains('bad') && sliders('lamp')[0].disabled, 'lamp fault disables its slider');
+  ok(!sliders('soil')[0].disabled && !switches('pump')[0].disabled, 'other cards stay enabled');
+  store.set('lamp.status', 'online'); ok(!sliders('lamp')[0].disabled, 'recovers');
+  store.set('camera.status', 'offline'); ok(switches('camera').every((b) => b.disabled), 'offline disables switches');
+  store.set('camera.status', 'busy'); ok(switches('camera').every((b) => b.disabled), 'busy disables switches');
+  store.set('camera.status', 'online');
+
+  // off again: display-only cards, as before
+  panel.editable(false);
+  ok(!$('#panel input, #panel button, #panel .edits') && !$('.has-edits'), 'editable(false) removes the controls');
+  ok(!$('#panel.editable'), 'panel class removed');
+  ok($$('#panel .ent').every((c) => c.getAttribute('role') === 'button' && !c.hasAttribute('aria-label')), 'edit off: role=button again, no aria-label');
+  ok($$('#panel .ctl').filter((c) => !c.hidden).length >= 4, 'display bars/switches are back');
+  ok($$('#panel .ent').every((c) => c.children.length === 3), 'cards have icon, text and badge again');
+
+  // clock control
+  const advanced = [];
+  const clk = createClockCtl($('#clockctl'), { onAdvance: (h) => advanced.push(h) });
+  ok($('#clockctl').hidden && getComputedStyle($('#clockctl')).display === 'none', 'clock hidden (and not displayed) before live');
+  clk.active(true); clk.render({ label: 'Fri 16:30', enabled: true, reason: null });
+  ok(!$('#clockctl').hidden && $('.clk-label').textContent.includes('Fri 16:30'), 'clock shows the label');
+  const btns = $$('#clockctl > button').map((b) => b.textContent);
+  ok(btns.join('|') === '+1 h|+6 h|Set time…', `clock buttons ${btns.join('|')}`);
+  ok($('.clk-pick').hidden && getComputedStyle($('.clk-pick')).display === 'none', 'picker closed (and not displayed) at first');
+  $('.clk-set').click(); ok(!$('.clk-pick').hidden, 'Set time… opens the picker');
+  ok($('.clk-day').options.length === 8 && $('.clk-time').step === '900', 'day select (today + 7) and time step 900');
+  const setT = (day, t) => { $('.clk-day').value = String(day); $('.clk-time').value = t; fire($('.clk-time'), 'input'); };
+  setT(0, '14:30'); ok($('.clk-go').disabled, 'Go disabled for an earlier time');
+  setT(0, '16:30'); ok($('.clk-go').disabled, 'Go disabled for now');
+  setT(0, '18:30'); ok(!$('.clk-go').disabled, 'Go enabled for +2 h');
+  setT(7, '16:30'); ok(!$('.clk-go').disabled, 'Go enabled at exactly 168 h');
+  setT(7, '16:45'); ok($('.clk-go').disabled, 'Go disabled past 168 h');
+  setT(0, '18:30'); $('.clk-go').click();
+  ok(advanced.length === 1 && advanced[0] === 2, `Go sends 2 h, got ${JSON.stringify(advanced)}`);
+  ok($('.clk-pick').hidden, 'picker closes after Go');
+  $$('#clockctl [data-h]')[0].click(); $$('#clockctl [data-h]')[1].click();
+  ok(advanced.join() === '2,1,6', `the +1 h and +6 h buttons, got ${advanced.join()}`);
+  clk.render({ label: 'Sat 09:00', enabled: true });
+  $('.clk-set').click(); setT(1, '10:30');
+  ok(!$('.clk-go').disabled && $('.clk-day').options[0].textContent.startsWith('Sat'), 'days follow the label');
+  $('.clk-go').click(); ok(advanced.at(-1) === 25.5, `next-day Go sends 25.5, got ${advanced.at(-1)}`);
+  const n = advanced.length;
+  clk.render({ label: 'Sat 09:00', enabled: false, reason: 'The clock moves again when this request is done.' });
+  ok($$('#clockctl button').every((b) => b.hidden || b.disabled), 'disabled for a request: no live button');
+  ok($('.clk-why') && !$('.clk-why').hidden && $('.clk-why').textContent.startsWith('The clock moves again') && $('.clk-why').offsetWidth > 0, 'the reason is visible text on the row');
+  ok($$('#clockctl [data-h]').every((b) => b.offsetWidth === 0) && $('.clk-label').offsetWidth > 0, 'in place of the buttons, the label stays');
+  clk.render({ label: 'Sat 09:00', enabled: false, reason: null });
+  ok($$('#clockctl > button').every((b) => b.disabled && b.offsetWidth > 0) && $('.clk-why').hidden, 'disabled for something else (an advance, a reset): greyed buttons, no reason text');
+  clk.render({ label: 'Sat 09:00', enabled: false, reason: 'The clock moves again when this request is done.' });
+  $$('#clockctl [data-h]')[0].click(); ok(advanced.length === n, 'a disabled button sends nothing');
+  clk.render({ label: 'Sat 09:00', enabled: true });
+  ok(!$('.clk-set').disabled && $('.clk-why').hidden && $('.clk-set').offsetWidth > 0, 'enabled again: buttons back, reason gone');
+  clk.active(false); ok($('#clockctl').hidden, 'hidden when live ends');
+  ok(document.documentElement.scrollWidth <= innerWidth, `no horizontal page scroll (${document.documentElement.scrollWidth} > ${innerWidth})`);
+  // a held-back fire in a checklist: "Rule held back", no envelope
+  const host = document.createElement('div'); document.body.appendChild(host);
+  const view = createLiveView({ chat: { esc: (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])), mount: (n) => host.appendChild(n) }, scene: home });
+  const cl = view.checklist([{ id: 's1', text: 'A step', devices: [] }]);
+  cl.timeline({ at: 'Sat 07:00', text: 'It already ran 2 times today', ok: true, kind: 'notify', origin: 'held' });
+  cl.timeline({ at: 'Sat 07:05', text: 'Pump on', ok: true, kind: 'notify', origin: 'rule' });
+  const rows = $$('.trow', host).map((r) => r.textContent);
+  ok(rows[0] === 'Sat 07:00 · Rule held back · It already ran 2 times today', `held row: "${rows[0]}"`);
+  ok(rows[1].includes('📩'), `a real notification keeps its envelope: "${rows[1]}"`);
+  view.ruleLine({ at: 'Sat 07:00', text: 'Pump on', kind: 'rule', origin: 'rule' });
+  ok(!$('.msg.rule', host).hasAttribute('role'), 'a rule line has no role of its own (it sits inside the log)');
+  host.hidden = true;
+  ok(getComputedStyle(card('lamp')).userSelect === 'none', 'cards are not text-selectable');
+  panel.editable(true, { onEdit() {} }); // leave controls on screen for the eye
+  clk.active(true); clk.render({ label: 'Fri 16:30', enabled: true });
+} catch (e) {
+  problems.push(`threw: ${e.stack || e}`);
+}
+const out = $('#qaResult');
+window.__qa = { problems };
+out.textContent = problems.length ? `FAIL (${problems.length})\n${problems.join('\n')}` : 'OK: all edit-card checks passed';
+out.className = problems.length ? 'bad' : '';
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 // The contract mock (test/fixtures/live-mock.mjs) over HTTP, for browser checks of the live client.
-// Usage: node test/mock-live.mjs [port=8787] [--pace 350] [--mode json|html|down] [--code NCB-TEST-CASE] [--scenes home,elder]
+// Usage: node test/mock-live.mjs [port=8787] [--pace 350] [--mode json|html|down] [--code NCB-TEST-CASE] [--scenes home,elder] [--origin http://localhost:8765]
 // The page is served on http://localhost:8765 (serve.py; any other localhost port works too); point it here with
 // ?liveApi=http://localhost:<port>.
 import { createServer } from 'node:http';
@@ -10,7 +10,7 @@ const argv = process.argv.slice(2);
 const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : def; };
 const port = Number(argv.find((a, i) => /^\d+$/.test(a) && !argv[i - 1]?.startsWith('--')) || 8787);
 const code = opt('code', MOCK_CODE), mode = opt('mode', 'json'), pace = Number(opt('pace', 0)), scenes = opt('scenes', 'home').split(',').filter(Boolean);
-const ORIGIN = 'http://localhost:8765';
+const ORIGIN = opt('origin', 'http://localhost:8765'); // the page's origin (CORS); --origin http://localhost:8766 for a second worktree
 const mock = createMockLive({ code, mode, pace, scenes, scene: scenes[0] });
 // The page's origin when it is a local one (a second preview server, e.g. serve.py 8766), else serve.py's default.
 const corsFor = (origin) => ({ 'access-control-allow-origin': /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin || '') ? origin : ORIGIN, vary: 'Origin' });

@@ -77,12 +77,12 @@ export function createLiveView({ chat, scene }) {
         p.el.dataset.outcome = outcome ?? ''; p.el.classList.toggle('bad', ok === false);
         p.el.innerHTML = esc(text ? `${p.label} · ${text}` : p.label);
       },
-      timeline({ at, text, ok, kind }) {
+      timeline({ at, text, ok, kind, origin }) {
         if (!tl) { tl = mk('div', 'ltimeline'); node.appendChild(tl); }
         const stick = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 8; // follow new rows only from the bottom
         const row = mk('div', 'trow'); row.dataset.kind = kind ?? ''; row.dataset.ok = String(ok !== false);
         const when = at ? `${at} · ` : '';
-        const body = kind === 'notify' ? `📩 ${text}` : kind === 'fault' ? text : `${text}${ok === false ? ' ✕' : ' ✓'}`;
+        const body = origin === 'held' ? `${LIVE_COPY.ruleHeld} · ${text}` : kind === 'notify' ? `📩 ${text}` : kind === 'fault' ? text : `${text}${ok === false ? ' ✕' : ' ✓'}`;
         row.innerHTML = esc(when + body);
         tl.appendChild(row);
         if (stick) tl.scrollTop = tl.scrollHeight;
@@ -249,6 +249,12 @@ export function createLiveView({ chat, scene }) {
   return {
     user: (text) => { sayEl = null; chat.user(text); },
     ncb: (text) => chat.ncb(text),
+    // A rule or schedule that fired (or was held back) outside a request: one status line in the chat.
+    ruleLine({ at, text, kind, origin }) {
+      const head = origin === 'held' ? LIVE_COPY.ruleHeld : kind === 'notify' ? '📩' : origin === 'schedule' ? LIVE_COPY.scheduled : LIVE_COPY.ruleFired;
+      const node = parse(`<div class="msg ncb rule">${esc(`${head} · ${at} · ${text}`)}</div>`);
+      sayEl = null; mount(node);
+    },
     chips(texts, onPick, heading) {
       if (!texts.length) return;
       chat.chips(texts.map((chip) => ({ chip })), (p) => onPick(p.chip), { heading });
