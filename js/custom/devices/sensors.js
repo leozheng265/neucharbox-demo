@@ -17,6 +17,7 @@ export default {
   // when hot; a fault turns the screen red and offline shows dashes.
   temp_humidity_sensor: {
     icon: 'thermohygro', size: 0.14, mountY: 1.5,
+    edit: [{ field: 'temperature', kind: 'slider', step: 0.5, unit: '°C', label: 'temp' }, { field: 'humidity', kind: 'slider', step: 1, unit: '%', label: 'humidity' }],
     format: (s) => `${oneDecimal(s.temperature)}°C · humidity ${percent(s.humidity)}`,
     control: false,
     model({ THREE, P, M }) {
@@ -54,6 +55,7 @@ export default {
   // ring and LED turn amber; the puddle shrinks away again when it is dry.
   water_leak_sensor: {
     icon: 'leak', size: 0.3,
+    edit: [{ field: 'leak', kind: 'switch' }],
     format: (s) => (s.leak ? 'leak detected' : 'dry'),
     active: (s) => !!s.leak,
     control: { kind: 'switch', field: 'leak' },
@@ -94,6 +96,7 @@ export default {
   // the LED is a quiet green otherwise.
   presence_sensor: {
     icon: 'presence', size: 0.2,
+    edit: [{ field: 'present', kind: 'switch' }],
     format: (s) => (s.present ? 'someone is here' : 'room empty'),
     active: (s) => !!s.present,
     control: { kind: 'switch', field: 'present' },
@@ -130,6 +133,7 @@ export default {
   // the more power it reads.
   energy_meter: {
     icon: 'energy', size: 0.22, mountY: 1.4,
+    edit: [{ field: 'watts', kind: 'slider', step: 10, unit: ' W', label: 'power' }],
     format: (s) => `${watts(s.watts)} · ${oneDecimal(s.kwh_today)} kWh today`,
     control: false,
     model({ THREE, P, M }) {
@@ -170,6 +174,7 @@ export default {
   // it charges the cable and the light bar glow green and pulse and the battery lights fill up with the charge.
   ev_charger: {
     icon: 'ev', size: 0.3, mountY: 1.2,
+    edit: [{ field: 'charging', kind: 'switch' }, { field: 'battery', kind: 'slider', step: 1, unit: '%', label: 'battery' }],
     format: (s) => `${s.charging ? 'charging' : 'idle'} · battery ${percent(s.battery, 'full')}`,
     active: (s) => !!s.charging,
     control: { kind: 'switch', field: 'charging' },
@@ -208,6 +213,7 @@ export default {
   // round it and the lawn darkens. Closed: the head sinks and the lawn dries.
   sprinkler_valve: {
     icon: 'sprinkler', size: 0.5,
+    edit: [{ field: 'open', kind: 'switch' }],
     format: (s) => (s.open ? 'open · watering' : 'closed'),
     active: (s) => !!s.open,
     control: { kind: 'switch', field: 'open' },

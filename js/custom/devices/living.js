@@ -25,6 +25,7 @@ export default {
   // A smart plug on a low wall socket: a white body with a ring that glows blue while on.
   smart_plug: {
     icon: 'plug', size: 0.2, mountY: 0.4,
+    edit: [{ field: 'on', kind: 'switch' }],
     format: (s) => { const w = whole(s.watts); return s.on ? (w > 0 ? `on · ${w} W` : 'on') : 'off'; },
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },
@@ -49,6 +50,7 @@ export default {
   // A pendant ceiling light: a drum shade on a short stem, its underside a diffuser that glows with the dimmer.
   ceiling_light: {
     icon: 'bulb', size: 0.6,
+    edit: [{ field: 'brightness', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: dimmer,
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },
@@ -76,6 +78,7 @@ export default {
   // A smart bulb on a small floor stand. It shows its colour, glows with the dimmer and lights the room in that colour.
   colour_bulb: {
     icon: 'bulb', size: 0.4,
+    edit: [{ field: 'brightness', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : `${s.color} · ${r >= 100 ? 'full' : `${r}%`}`; },
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },
@@ -106,6 +109,7 @@ export default {
   // fault dims the picture under a red "no reply" pill, offline is a dead screen.
   tv: {
     icon: 'tv', size: 1.2, mountY: 1.3,
+    edit: [{ field: 'on', kind: 'switch' }, { field: 'volume', kind: 'slider', step: 1, label: 'volume' }],
     format: (s) => (s.on ? `on · volume ${whole(s.volume)}` : 'off'),
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },
@@ -150,6 +154,7 @@ export default {
   // brighter and faster with the volume.
   smart_speaker: {
     icon: 'speaker', size: 0.3,
+    edit: [{ field: 'playing', kind: 'switch' }, { field: 'volume', kind: 'slider', step: 1, label: 'volume' }],
     format: (s) => (s.playing ? `playing · volume ${whole(s.volume)}` : 'stopped'),
     active: (s) => !!s.playing,
     control: { kind: 'switch', field: 'playing' },
@@ -176,6 +181,7 @@ export default {
   // glides back to the dock.
   robot_vacuum: {
     icon: 'vacuum', size: 1.1,
+    edit: [{ field: 'cleaning', kind: 'switch' }, { field: 'battery', kind: 'slider', step: 1, unit: '%', label: 'battery' }],
     format: (s) => { const b = whole(s.battery); return `${s.cleaning ? 'cleaning' : 'docked'} · battery ${b >= 100 ? 'full' : b <= 0 ? 'empty' : `${b}%`}`; },
     active: (s) => !!s.cleaning,
     control: { kind: 'switch', field: 'cleaning' },
@@ -211,6 +217,7 @@ export default {
   // A ceiling fan: four wooden blades round a motor, turning at a rate set by its speed (0–3) and easing up and down.
   ceiling_fan: {
     icon: 'fan', size: 1.1,
+    edit: [{ field: 'speed', kind: 'slider', step: 1, label: 'speed' }],
     format: (s) => { const n = whole(s.speed); return n <= 0 ? 'off' : `speed ${n} of 3`; },
     active: (s) => whole(s.speed) > 0,
     control: { kind: 'bar', field: 'speed', min: 0, max: 3 },
@@ -242,6 +249,7 @@ export default {
   // pale air lines falling from it, while on.
   air_conditioner: {
     icon: 'ac', size: 1.0, mountY: 2.15,
+    edit: [{ field: 'on', kind: 'switch' }, { field: 'room', kind: 'slider', step: 0.5, unit: '°C', label: 'now' }],
     format: (s) => (s.on ? `on · ${oneDecimal(s.target)}°C set · ${oneDecimal(s.room)}°C now` : `off · ${oneDecimal(s.room)}°C now`),
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },
@@ -278,6 +286,7 @@ export default {
   // A panel heater on short feet: slats over a grille that glows orange while on, with a little heat haze rising.
   space_heater: {
     icon: 'heater', size: 0.5,
+    edit: [{ field: 'on', kind: 'switch' }, { field: 'room', kind: 'slider', step: 0.5, unit: '°C', label: 'now' }],
     format: (s) => `${s.on ? 'on' : 'off'} · ${oneDecimal(s.room)}°C now`,
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },
@@ -312,6 +321,7 @@ export default {
   // on top while on.
   humidifier: {
     icon: 'humidifier', size: 0.4,
+    edit: [{ field: 'on', kind: 'switch' }, { field: 'humidity', kind: 'slider', step: 1, unit: '%', label: 'humidity' }],
     format: (s) => `${s.on ? 'on' : 'off'} · humidity ${percent(s.humidity)}`,
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },
@@ -350,6 +360,7 @@ export default {
   // rises) and faint air lines rising from the top while on.
   air_purifier: {
     icon: 'purifier', size: 0.4,
+    edit: [{ field: 'on', kind: 'switch' }, { field: 'pm25', kind: 'slider', step: 1, unit: ' µg/m³', label: 'fine dust' }],
     format: (s) => `${s.on ? 'on' : 'off'} · fine dust ${whole(s.pm25)} µg/m³`,
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },

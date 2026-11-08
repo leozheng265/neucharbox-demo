@@ -12,6 +12,7 @@ export default {
   // aperture: upright while closed (no beam), folded flat once open, and the red beam brightens with the power setting.
   laser: {
     icon: 'laser', size: 0.6,
+    edit: [{ field: 'open', kind: 'switch', label: 'shutter' }, { field: 'mW', kind: 'slider', step: 0.5, unit: ' mW', label: 'power' }],
     format: (s) => `shutter ${s.open ? 'open' : 'closed'} · ${num(s.mW).toFixed(1)} mW set`,
     active: (s) => !!s.open,
     control: { kind: 'switch', field: 'open' },
@@ -51,6 +52,7 @@ export default {
   // fraction of a degree, so a change shows from across the room).
   mirror: {
     icon: 'mirror', size: 0.4,
+    edit: [{ field: 'yaw', kind: 'slider', step: 0.1, unit: '°', label: 'yaw' }, { field: 'pitch', kind: 'slider', step: 0.1, unit: '°', label: 'pitch' }],
     format: (s) => `yaw ${deg(s.yaw)} · pitch ${deg(s.pitch)}`,
     active: (s) => Math.abs(num(s.yaw)) > 0.005 || Math.abs(num(s.pitch)) > 0.005,
     control: false,
@@ -85,6 +87,7 @@ export default {
   // A motorised stage: a carriage runs along a rail beside a ruler. The motor sits at the left end.
   linear_stage: {
     icon: 'stage', size: 0.6,
+    edit: [{ field: 'x', kind: 'slider', step: 0.5, unit: ' mm' }],
     format: (s) => `${num(s.x).toFixed(1)} mm`,
     active: (s) => num(s.x) > 0.05,
     control: { kind: 'bar', field: 'x', min: 0, max: 25 },
@@ -120,6 +123,7 @@ export default {
   // reading (0–20 mW). The head's face glows red with the power.
   power_meter: {
     icon: 'meter', size: 0.4,
+    edit: [{ field: 'mW', kind: 'slider', step: 0.1, unit: ' mW' }],
     format: (s) => `${num(s.mW).toFixed(2)} mW`,
     active: (s) => num(s.mW) > 0.05,
     control: false,

@@ -12,6 +12,7 @@ export default {
   // shape lies under the blanket while occupied; the mat sits a little wider than the sleeper, so both read at once.
   bed_sensor: {
     icon: 'bed', size: 2,
+    edit: [{ field: 'occupied', kind: 'switch', label: 'in bed' }],
     format: (s) => (s.occupied ? 'in bed' : 'out of bed'),
     active: (s) => !!s.occupied,
     control: false,
@@ -43,6 +44,7 @@ export default {
   // A door in the wall with its frame; the leaf swings into the room when open. A contact sensor sits on the frame head.
   bedroom_door: {
     icon: 'door', size: 1, mountY: 1.02,
+    edit: [{ field: 'open', kind: 'switch' }],
     format: (s) => (s.open ? 'open' : 'closed'),
     active: (s) => !!s.open,
     control: { kind: 'switch', field: 'open' },
@@ -72,6 +74,7 @@ export default {
   // A small white plate with a dome; the dome glows amber with sensing rings spreading while it sees movement.
   hallway_motion: {
     icon: 'motion', size: 0.24, mountY: 2.3,
+    edit: [{ field: 'motion', kind: 'switch' }],
     format: (s) => (s.motion ? 'movement now' : 'no movement'),
     active: (s) => !!s.motion,
     control: false,
@@ -104,6 +107,7 @@ export default {
   // A kettle standing on its smart plug. Steam rises while it draws power; the LED is amber while on.
   kettle_plug: {
     icon: 'kettle', size: 0.5,
+    edit: [{ field: 'on', kind: 'switch' }],
     format: (s) => (s.on ? `on · ${Math.round(num(s.watts)).toLocaleString('en-GB')} W` : 'off'),
     active: on3,
     control: { kind: 'switch', field: 'on' },
@@ -134,6 +138,7 @@ export default {
   // A plug-in night light low on the wall: a small plate with a warm dome that glows with the dimmer.
   night_light: {
     icon: 'bulb', size: 0.12, mountY: 0.35,
+    edit: [{ field: 'brightness', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: dimmer,
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },
@@ -159,6 +164,7 @@ export default {
   // A flush ceiling light: a round base with a shallow diffuser that glows with the dimmer.
   hall_light: {
     icon: 'bulb', size: 0.4,
+    edit: [{ field: 'brightness', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
     format: dimmer,
     active: (s) => pct(s.brightness) > 0,
     control: { kind: 'bar', field: 'brightness', min: 0, max: 1 },

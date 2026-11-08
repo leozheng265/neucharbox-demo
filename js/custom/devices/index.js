@@ -1,11 +1,15 @@
 // The custom room's device UI registry: one entry per catalog type (js/custom/catalog.js), merged from the category
 // files (each `export default { [type]: ui }`). An entry:
-//   { icon, size, mountY?, plural?, format(s), active?(s), control?, model }
+//   { icon, size, mountY?, plural?, edit?, format(s), active?(s), control?, model }
 //   icon      a key of ICONS (js/engine/icons.js), for the card and the inventory tile
 //   size      the footprint in metres: along the wall for a wall mount, else its width and depth (the layout keeps it
 //             size/2 from every wall, so the model must fit in a size × size square at any turn)
 //   mountY    a wall mount's centre height (default 1.4)
 //   plural    true for a name that takes a plural verb ("the blinds fail")
+//   edit      how the card shows each of the catalog type's `edit` fields in live mode, in the catalog's order:
+//             [{ field, kind: 'slider'|'switch', step?, scale?, unit?, label? }]. A number is a slider (step in store
+//             units; scale × value is what it shows, 100 with '%' for a 0–1 field), a bool a switch. The range is the
+//             catalog's: sceneFor (scene.js) adds min and max. Types with no edit fields leave it out.
 //   format    the card's status line for a slice: "full" and "closed" at the ends, never "100%" (copy guardrails)
 //   active    optional; true lights the card as on (panel.js guesses from the state without it)
 //   control   the card control, as js/engine/controls.js reads it: { kind: 'bar', field, min, max } · { kind: 'switch',
