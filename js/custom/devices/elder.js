@@ -1,7 +1,7 @@
 // The Elder care types' card UI and 3D models for the custom room (contract: devices/index.js). Their look follows the
 // elder scene (js/scenes/elder.js): a bed with a pressure mat, a door with a contact sensor, a hallway motion dome, a
 // kettle on its smart plug, and the two lights. Each is rebuilt as a compact, self-contained model with its own status LED.
-import { HEX, num, clamp01, pct, statusLed } from './kit.js';
+import { HEX, num, clamp01, pct, statusLed, pointLight } from './kit.js';
 
 const on3 = (s) => !!s.on;
 const dimmer = (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : r >= 100 ? 'full' : `on · ${r}%`; };
@@ -148,12 +148,13 @@ export default {
       dome.rotation.x = Math.PI / 2; dome.position.z = 0.02; dome.material.roughness = 0.3;
       const root = P.group(plate, dome);
       const led = statusLed(THREE, root, { at: [0, -0.048, 0.0205], r: 0.0045 });
+      const light = pointLight(THREE, root, [0, 0, 0.08], { hex: 0xFFD9A0, distance: 3.5 }); // a night light: soft and short-reaching
       let shown = -1;
       return {
         root,
         update(s, t) {
           const b = clamp01(s.brightness);
-          if (b !== shown) { shown = b; dome.material.emissiveIntensity = b * 3; }
+          if (b !== shown) { shown = b; dome.material.emissiveIntensity = b * 3; light.intensity = b * 0.9; }
           led.set(s, t);
         },
       };
@@ -172,12 +173,13 @@ export default {
       diff.scale.y = 0.4; diff.position.y = -0.03; diff.material.roughness = 0.35;
       const root = P.group(base, diff);
       const led = statusLed(THREE, root, { at: [0.17, -0.031, 0], r: 0.006 });
+      const light = pointLight(THREE, root, [0, -0.2, 0], { hex: 0xFFE2B8 });
       let shown = -1;
       return {
         root,
         update(s, t) {
           const b = clamp01(s.brightness);
-          if (b !== shown) { shown = b; diff.material.emissiveIntensity = b * 3; }
+          if (b !== shown) { shown = b; diff.material.emissiveIntensity = b * 3; light.intensity = b * 2.2; }
           led.set(s, t);
         },
       };

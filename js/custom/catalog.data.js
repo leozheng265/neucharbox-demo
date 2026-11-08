@@ -67,6 +67,20 @@ export default {
     },
     {
       "needs": [
+        "air_conditioner",
+        "ceiling_fan"
+      ],
+      "text": "Turn on {air_conditioner} and {ceiling_fan} when it gets hot"
+    },
+    {
+      "needs": [
+        "robot_vacuum",
+        "air_purifier"
+      ],
+      "text": "Run {robot_vacuum}, then switch on {air_purifier} for an hour"
+    },
+    {
+      "needs": [
         "thermostat"
       ],
       "text": "Keep {thermostat} at 19 °C overnight"
@@ -88,6 +102,18 @@ export default {
         "linear_stage"
       ],
       "text": "Move {linear_stage} to 15 mm"
+    },
+    {
+      "needs": [
+        "tv"
+      ],
+      "text": "Switch {tv} off at 23:00"
+    },
+    {
+      "needs": [
+        "smart_plug"
+      ],
+      "text": "Switch {smart_plug} off if it draws power after midnight"
     },
     {
       "needs": [],
@@ -1982,6 +2008,891 @@ export default {
             },
             {
               "text": "{name} → closed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "smart_plug",
+      "name": "Smart plug",
+      "ref": "the smart plug",
+      "category": "Appliances",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "on": false,
+        "watts": 0
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on, false is off). It reports its power draw but cannot tell what is plugged in.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            },
+            {
+              "set": "watts",
+              "value": 60,
+              "if": {
+                "on": true
+              },
+              "ms": 600
+            },
+            {
+              "set": "watts",
+              "value": 0,
+              "if": {
+                "on": false
+              },
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ceiling_light",
+      "name": "Ceiling light",
+      "ref": "the ceiling light",
+      "category": "Lights",
+      "mount": "ceiling",
+      "new": true,
+      "initial": {
+        "brightness": 0
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "brightness",
+          "kind": "number",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set {ref} brightness from 0 (off) to 100.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "brightness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "brightness"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "brightness": 0
+          },
+          "effects": [
+            {
+              "set": "brightness",
+              "arg": "brightness",
+              "scale": 0.01,
+              "ms": 1200
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "brightness": 0
+              },
+              "text": "{name} → off"
+            },
+            {
+              "when": {
+                "brightness": 100
+              },
+              "text": "{name} → full"
+            },
+            {
+              "text": "{name} → {brightness}%"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "colour_bulb",
+      "name": "Colour bulb",
+      "ref": "the colour bulb",
+      "category": "Lights",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "brightness": 0,
+        "color": "warm"
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "brightness",
+          "kind": "number",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set {ref} brightness from 0 (off) to 100, and optionally its colour: white, warm, blue, purple, red or green.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "brightness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "white",
+                  "warm",
+                  "blue",
+                  "purple",
+                  "red",
+                  "green"
+                ]
+              }
+            },
+            "required": [
+              "brightness"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "brightness": 0
+          },
+          "effects": [
+            {
+              "set": "brightness",
+              "arg": "brightness",
+              "scale": 0.01,
+              "ms": 800
+            },
+            {
+              "set": "color",
+              "arg": "color",
+              "ms": 800
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "brightness": 0
+              },
+              "text": "{name} → off"
+            },
+            {
+              "when": {
+                "brightness": 100
+              },
+              "text": "{name} → full"
+            },
+            {
+              "text": "{name} → {brightness}%"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "tv",
+      "name": "TV",
+      "ref": "the TV",
+      "category": "Appliances",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "on": false,
+        "volume": 20
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        },
+        {
+          "field": "volume",
+          "kind": "number",
+          "min": 0,
+          "max": 100
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on), and optionally set its volume from 0 (mute) to 100.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "volume": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            },
+            {
+              "set": "volume",
+              "arg": "volume",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "smart_speaker",
+      "name": "Smart speaker",
+      "ref": "the smart speaker",
+      "category": "Appliances",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "playing": false,
+        "volume": 30
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "playing",
+          "kind": "bool"
+        },
+        {
+          "field": "volume",
+          "kind": "number",
+          "min": 0,
+          "max": 100
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Start or stop playback on {ref} (true plays, false stops), and optionally set its volume from 0 (mute) to 100.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "playing": {
+                "type": "boolean"
+              },
+              "volume": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "playing"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "playing": false
+          },
+          "effects": [
+            {
+              "set": "playing",
+              "arg": "playing",
+              "ms": 600
+            },
+            {
+              "set": "volume",
+              "arg": "volume",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "playing": true
+              },
+              "text": "{name} → playing"
+            },
+            {
+              "text": "{name} → stopped"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "robot_vacuum",
+      "name": "Robot vacuum",
+      "ref": "the robot vacuum",
+      "category": "Appliances",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "cleaning": false,
+        "battery": 100
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "cleaning",
+          "kind": "bool"
+        },
+        {
+          "field": "battery",
+          "kind": "number",
+          "min": 0,
+          "max": 100
+        }
+      ],
+      "drift": [
+        {
+          "field": "battery",
+          "perHour": -30,
+          "while": {
+            "cleaning": true
+          },
+          "min": 0
+        },
+        {
+          "field": "battery",
+          "perHour": 50,
+          "while": {
+            "cleaning": false
+          },
+          "max": 100
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Start or stop cleaning with {ref} (true cleans, false sends it back to its dock).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cleaning": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "cleaning"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "cleaning": false
+          },
+          "effects": [
+            {
+              "set": "cleaning",
+              "arg": "cleaning",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "cleaning": true
+              },
+              "text": "{name} → cleaning"
+            },
+            {
+              "text": "{name} → docked"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ceiling_fan",
+      "name": "Ceiling fan",
+      "ref": "the ceiling fan",
+      "category": "Climate",
+      "mount": "ceiling",
+      "new": true,
+      "initial": {
+        "speed": 0
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "speed",
+          "kind": "number",
+          "min": 0,
+          "max": 3
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Set the speed of {ref} from 0 (off) to 3 (fastest).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "speed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              }
+            },
+            "required": [
+              "speed"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "speed": 0
+          },
+          "effects": [
+            {
+              "set": "speed",
+              "arg": "speed",
+              "ms": 1500
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "speed": 0
+              },
+              "text": "{name} → off"
+            },
+            {
+              "text": "{name} → speed {speed}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "air_conditioner",
+      "name": "Air conditioner",
+      "ref": "the air conditioner",
+      "category": "Climate",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "on": false,
+        "target": 24,
+        "room": 27
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        },
+        {
+          "field": "room",
+          "kind": "number",
+          "min": 10,
+          "max": 40
+        }
+      ],
+      "drift": [
+        {
+          "field": "room",
+          "perHour": 1,
+          "toward": "target",
+          "while": {
+            "on": true
+          }
+        },
+        {
+          "field": "room",
+          "perHour": 0.3,
+          "toward": 27,
+          "while": {
+            "on": false
+          }
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on), and optionally set its target temperature in degrees Celsius, from 16 to 30.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "celsius": {
+                "type": "number",
+                "minimum": 16,
+                "maximum": 30
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            },
+            {
+              "set": "target",
+              "arg": "celsius",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "space_heater",
+      "name": "Space heater",
+      "ref": "the space heater",
+      "category": "Climate",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "on": false,
+        "room": 17
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        },
+        {
+          "field": "room",
+          "kind": "number",
+          "min": 0,
+          "max": 35
+        }
+      ],
+      "drift": [
+        {
+          "field": "room",
+          "perHour": 1,
+          "toward": 24,
+          "while": {
+            "on": true
+          }
+        },
+        {
+          "field": "room",
+          "perHour": 0.5,
+          "toward": 17,
+          "while": {
+            "on": false
+          }
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on, false is off), which warms the room slowly.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "humidifier",
+      "name": "Humidifier",
+      "ref": "the humidifier",
+      "category": "Climate",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "on": false,
+        "humidity": 35
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        },
+        {
+          "field": "humidity",
+          "kind": "number",
+          "min": 0,
+          "max": 100
+        }
+      ],
+      "drift": [
+        {
+          "field": "humidity",
+          "perHour": 4,
+          "toward": 55,
+          "while": {
+            "on": true
+          }
+        },
+        {
+          "field": "humidity",
+          "perHour": 2,
+          "toward": 35,
+          "while": {
+            "on": false
+          }
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on, false is off), which raises the room's humidity slowly.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "air_purifier",
+      "name": "Air purifier",
+      "ref": "the air purifier",
+      "category": "Climate",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "on": false,
+        "pm25": 18
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "on",
+          "kind": "bool"
+        },
+        {
+          "field": "pm25",
+          "kind": "number",
+          "min": 0,
+          "max": 200
+        }
+      ],
+      "drift": [
+        {
+          "field": "pm25",
+          "perHour": 10,
+          "toward": 3,
+          "while": {
+            "on": true
+          }
+        },
+        {
+          "field": "pm25",
+          "perHour": 2,
+          "toward": 18,
+          "while": {
+            "on": false
+          }
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Switch {ref} on or off (true is on, false is off), which clears fine dust from the air slowly.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "on": false
+          },
+          "effects": [
+            {
+              "set": "on",
+              "arg": "on",
+              "ms": 600
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "on": true
+              },
+              "text": "{name} → on"
+            },
+            {
+              "text": "{name} → off"
             }
           ]
         }
