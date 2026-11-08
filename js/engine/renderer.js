@@ -188,6 +188,15 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
       m.updateWorldMatrix(true, false); t.matrix.copy(m.matrixWorld); t.matrixWorldNeedsUpdate = true;
     }
   }
+  // Drop the twins of meshes that left the scene (a device taken out of a room that is edited live): each twin sits in
+  // the scene root, so without this it would stay there, hidden, for good. Cheap; called when something is removed.
+  function pruneTwins() {
+    for (let i = twins.length - 1; i >= 0; i--) {
+      let a = twins[i].m; while (a.parent) a = a.parent;
+      if (a === scene) continue;
+      twins[i].t.removeFromParent(); twins.splice(i, 1);
+    }
+  }
   function setQuality(q) {
     if (q === currentQuality) return; const first = currentQuality === null; currentQuality = q;
     if (!first) applyLightTier();
@@ -363,7 +372,7 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
     THREE, renderer, scene, camera, controls, lights: { hemi, sun, fill }, composer, gtao, bloom,
     addPickable, removePickable, onPick: (fn) => pickHandlers.push(fn), onFrame: (fn) => frameFns.push(fn), ping, unping, anchorOf, resetView,
     clearMarkers() { for (const m of markers) dropMarker(m); markers.length = 0; },
-    daylight, setQuality, resize, get quality() { return currentQuality; },
+    daylight, setQuality, resize, pruneTwins, get twinCount() { return twins.length; }, get quality() { return currentQuality; },
     // Debug/QA: render one frame on demand (works while the tab is hidden and requestAnimationFrame is paused).
     step(n = 1) { for (let k = 0; k < n; k++) { const now = performance.now(); const t = clock.getElapsedTime(); frameFns.forEach((fn, i) => guard(`frame#${i}`, () => fn(t, now))); guard('markers', () => updateMarkers(now)); controls.update(); } guard('walls', () => { applyWalls(); syncShades(); }); composer.render(); },
     start() {

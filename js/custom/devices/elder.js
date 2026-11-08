@@ -1,16 +1,11 @@
 // The Elder care types' card UI and 3D models for the custom room (contract: devices/index.js). Their look follows the
 // elder scene (js/scenes/elder.js): a bed with a pressure mat, a door with a contact sensor, a hallway motion dome, a
 // kettle on its smart plug, and the two lights. Each is rebuilt as a compact, self-contained model with its own status LED.
-import { HEX, num, clamp01, pct, statusLed, pointLight } from './kit.js';
+import { HEX, num, clamp01, pct, statusLed, pointLight, glowMesh } from './kit.js';
 
 const on3 = (s) => !!s.on;
 const dimmer = (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : r >= 100 ? 'full' : `on · ${r}%`; };
 
-// A glowing mesh: its own material (never a shared one), no shadows.
-function glowMesh(THREE, geo, hex, emissive) {
-  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hex, emissive: emissive ?? hex, emissiveIntensity: 0, roughness: 0.5 }));
-  return m;
-}
 
 export default {
   // A single bed (1 × 2 m, head at the back) with the pressure mat across the mattress. The mat lights up and a person's

@@ -1,12 +1,10 @@
 // The Security and access types' card UI and 3D models for the custom room (contract: devices/index.js): a smart lock
 // with its bolt, a video doorbell, a door/window contact sensor, a smoke/CO alarm, a siren and a garage door that
 // slides up over 8 s. Each has its own status LED; standby is green, a dim amber or off, never the fault red.
-import { HEX, mergeMeshes, statusLed, ease, stepper } from './kit.js';
+import { HEX, mergeMeshes, statusLed, ease, stepper, glowMesh as kitGlow } from './kit.js';
 
 // A glowing mesh with its own material (never a shared one).
-function glowMesh(THREE, geo, hex, emissive) {
-  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hex, emissive: emissive ?? hex, emissiveIntensity: 0, roughness: 0.4 }));
-}
+const glowMesh = (THREE, geo, hex, emissive) => kitGlow(THREE, geo, hex, emissive, 0.4);
 const quiet = (m) => { m.userData.noAO = true; m.raycast = () => {}; m.castShadow = false; return m; };
 
 export default {
@@ -152,7 +150,7 @@ export default {
       horn.rotation.x = Math.PI / 2; horn.position.set(0, -0.045, 0.1); horn.castShadow = true;
       const throat = P.cyl(0.03, 0.03, 0.012, M.black, 0, -0.045, 0.07, 16); throat.rotation.x = Math.PI / 2;
       const base = P.cyl(0.045, 0.05, 0.02, M.black, 0, 0.08, 0.06, 20);
-      const beacon = glowMesh(THREE, new THREE.SphereGeometry(0.045, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), 0xB8332A, 0xFF2A1A);
+      const beacon = glowMesh(THREE, new THREE.SphereGeometry(0.045, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), 0xE6E3DC, 0xFF2A1A);
       beacon.position.set(0, 0.09, 0.06); beacon.material.roughness = 0.25;
       const arcs = [0, 1, 2].map(() => {
         const a = new THREE.Mesh(new THREE.RingGeometry(0.05, 0.057, 28), new THREE.MeshBasicMaterial({ color: 0xFF5A3A, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
@@ -165,7 +163,7 @@ export default {
         update(s, t) {
           const on = !!s.sounding, blink = Math.floor(t * 4) % 2 === 0;
           beacon.material.emissiveIntensity = on ? (blink ? 5 : 0.8) : 0;
-          beacon.material.color.setHex(on && blink ? 0xFF5A4A : 0xB8332A);
+          beacon.material.color.setHex(!on ? 0xE6E3DC : blink ? 0xFF5A4A : 0xB8332A); // pale and clear until it sounds: red at rest would read as a fault
           arcs.forEach((a, i) => {
             a.visible = on;
             if (!on) return;
@@ -204,11 +202,11 @@ export default {
       const step = P.box(W, 0.02, 0.2, M.steel, 0, -0.99, 0.1); step.castShadow = false;
       const root = P.group(...jambs, header, bay, doorPivot, opener, lampGlass, step);
       const led = statusLed(THREE, root, { at: [-0.18, 0.83, 0.262], r: 0.01 });
-      const dt = stepper(); let up = 0;
+      const dt = stepper(); let up = null; // null until the first state: a door that starts open shows open, not rising from closed
       return {
         root,
         update(s, t) {
-          const target = s.open ? 1 : 0, d = dt(t);
+          const target = s.open ? 1 : 0, d = dt(t); if (up === null) up = target;
           up = Math.abs(target - up) < 0.0005 ? target : up + Math.sign(target - up) * Math.min(Math.abs(target - up), d / 8); // 8 s end to end
           doorPivot.scale.y = Math.max(0.1, 1 - 0.9 * up);
           const moving = up > 0 && up < 1;

@@ -14,12 +14,12 @@ export const oneDecimal = (v) => String(Number(num(v).toFixed(1))); // 21 → "2
 
 // One radial glow texture for every LED (created on first use).
 let glowTex = null;
-function glowMap(THREE) {
+export function glowMap(THREE) {
   if (glowTex) return glowTex;
   const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
   const rg = g.createRadialGradient(32, 32, 0, 32, 32, 32); rg.addColorStop(0, 'rgba(255,255,255,1)'); rg.addColorStop(0.22, 'rgba(255,255,255,.85)'); rg.addColorStop(0.5, 'rgba(255,255,255,.3)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = rg; g.fillRect(0, 0, 64, 64);
-  glowTex = new THREE.CanvasTexture(c); glowTex.colorSpace = THREE.SRGBColorSpace;
+  glowTex = new THREE.CanvasTexture(c); glowTex.colorSpace = THREE.SRGBColorSpace; glowTex.userData.shared = true; // room3d never disposes a shared texture
   return glowTex;
 }
 
@@ -116,3 +116,15 @@ export function breadboard(THREE, P, M, w, d) {
 // is a short step); the first call gives a whole step, so a model starts at its state.
 export const ease = (cur, target, dt, k = 8) => (Math.abs(target - cur) < 0.002 ? target : cur + (target - cur) * Math.min(1, dt * k));
 export function stepper() { let last = null; return (t) => { const dt = last == null ? 1 : Math.min(0.2, Math.max(0, t - last)); last = t; return dt; }; }
+
+// A mesh with its own glow material (never shared), no shadows: dark until a model sets emissiveIntensity.
+export function glowMesh(THREE, geo, hex, emissive, roughness = 0.5) {
+  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hex, emissive: emissive ?? hex, emissiveIntensity: 0, roughness }));
+}
+
+// A canvas texture the model redraws on change: { c, tex, g }.
+export function screenTex(THREE, w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return { c, tex, g: c.getContext('2d') };
+}

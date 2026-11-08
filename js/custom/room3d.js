@@ -20,6 +20,7 @@ import { mergeMeshes } from './devices/kit.js';
 import { START_HOUR } from './scene.js';
 
 const HX = ROOM.w / 2, HZ = ROOM.d / 2;
+const MAPS = ['map', 'bumpMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap'];
 // Real point lights in the room at once. Lit lights take the slots first (in layout order), then dark ones fill what is
 // left; a light past the budget still glows (shade and bulb) but lights nothing: twenty point lights in every lit
 // fragment would not stay smooth on a phone. The count of visible lights stays at the budget (a change in it would
@@ -102,6 +103,17 @@ export function createRoom3d({ R, P, M, THREE }) {
     o.holder.visible = false; o.holder.removeFromParent();
     // its meshes' own geometry (never a sprite's: three shares one geometry across every sprite, labels and glows too)
     o.holder.traverse((x) => { if (x.isMesh && !x.userData.isShell) x.geometry.dispose(); });
+    // its own materials and their maps (a screen's CanvasTexture); never the shared M ones, nor a texture tagged shared (the LED glow)
+    const shared = new Set(Object.values(M)), kept = new Set();
+    for (const m of shared) for (const k of MAPS) if (m?.[k]) kept.add(m[k]);
+    o.holder.traverse((x) => {
+      for (const m of [].concat(x.material || [])) {
+        if (shared.has(m)) continue;
+        for (const k of MAPS) { const t = m[k]; if (t?.dispose && !kept.has(t) && !t.userData.shared) t.dispose(); }
+        m.dispose();
+      }
+    });
+    R.pruneTwins?.(); // the renderer's shadow twins of this device's wall-hung meshes
     objs.delete(id);
   }
 

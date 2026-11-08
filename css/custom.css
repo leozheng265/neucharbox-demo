@@ -27,7 +27,7 @@
 .room .notice { position: absolute; left: 50%; top: 44px; transform: translateX(-50%); z-index: 3; width: max-content; max-width: min(440px, calc(100% - 24px)); padding: 8px 14px; font-size: 13.5px; line-height: 1.35; color: #fff; background: rgba(20,30,40,.82); border-radius: 12px; text-align: center; animation: cnotice .18s ease-out; }
 @keyframes cnotice { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .room .empty-note { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; margin: 0; width: max-content; max-width: calc(100% - 40px); padding: 10px 16px; font-size: 14px; color: var(--ink); background: rgba(255,255,255,.9); border: 1px solid var(--line-2); border-radius: 12px; text-align: center; pointer-events: none; }
-.room .changed-note { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 2; margin: 0; width: max-content; max-width: min(440px, calc(100% - 24px)); padding: 7px 14px; font-size: 13px; line-height: 1.35; color: var(--ink); background: rgba(255,255,255,.92); border: 1px solid var(--line-2); border-radius: 12px; text-align: center; pointer-events: none; }
+.room .changed-note { position: absolute; left: 50%; bottom: 64px; /* above the selection bar (bottom 14 px), which an added device opens */ transform: translateX(-50%); z-index: 2; margin: 0; width: max-content; max-width: min(440px, calc(100% - 24px)); padding: 7px 14px; font-size: 13px; line-height: 1.35; color: var(--ink); background: rgba(255,255,255,.92); border: 1px solid var(--line-2); border-radius: 12px; text-align: center; pointer-events: none; }
 .empty-note .narrow { display: none; }
 .stage.custom:not([data-mode="build"]) .empty-note { display: none; } /* building is where devices are added */
 .room.dragging canvas { touch-action: none; cursor: grabbing; } /* every scene's canvas has it already (orbit); here a drag needs it too */
@@ -111,6 +111,7 @@
   /* the selection bar under the room's top row (the open sheet covers the room's lower part); a notice below it */
   .stage.custom[data-mode="build"] .room .selbar { top: 44px; bottom: auto; }
   .stage.custom[data-mode="build"] .room .notice { top: 96px; }
+  .room .changed-note { bottom: 14px; } /* the bar is up top here */
 }
 
 @media (max-width: 520px) {

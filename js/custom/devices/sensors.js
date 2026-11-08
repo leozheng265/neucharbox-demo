@@ -2,7 +2,7 @@
 // temperature and humidity sensor with a screen, a water-leak sensor beside a puddle, a ceiling presence sensor, a wall
 // energy meter, an EV charger with a glowing cable and a sprinkler valve that sprays while open. Each has its own status
 // LED; standby is green or a dim blue, never the fault red.
-import { HEX, num, clamp01, oneDecimal, statusLed, canvasTex, ease, stepper } from './kit.js';
+import { HEX, num, clamp01, oneDecimal, statusLed, canvasTex, ease, stepper, glowMesh as glow, screenTex } from './kit.js';
 
 const whole = (v) => Math.round(num(v));
 // A 0–100 reading as text: "saturated" at the top, never "100%".
@@ -10,16 +10,6 @@ const percent = (v, full = 'saturated') => { const r = whole(v); return r >= 100
 const cycle = (t, period, phase = 0) => (((t / period + phase) % 1) + 1) % 1;
 const quiet = (m) => { m.userData.noAO = true; m.raycast = () => {}; m.castShadow = false; return m; };
 
-// A mesh with its own glow material (never shared), no shadows.
-function glow(THREE, geo, hex, emissive) {
-  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hex, emissive: emissive ?? hex, emissiveIntensity: 0, roughness: 0.5 }));
-}
-// A canvas texture the model redraws on change.
-function screenTex(THREE, w, h) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h;
-  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  return { c, tex, g: c.getContext('2d') };
-}
 const watts = (v) => { const w = Math.max(0, num(v)); return w >= 1000 ? `${(w / 1000).toFixed(1)} kW` : `${Math.round(w)} W`; };
 
 export default {
@@ -108,8 +98,9 @@ export default {
     active: (s) => !!s.present,
     control: { kind: 'switch', field: 'present' },
     model({ THREE, P, M }) {
-      const base = P.cyl(0.06, 0.06, 0.012, M.white, 0, -0.006, 0, 32);
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.045, 24, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), M.hub);
+      // dark smoked dome on a dark mount, so it never reads as the white smoke alarm
+      const base = P.cyl(0.055, 0.055, 0.012, M.black, 0, -0.006, 0, 32);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.045, 24, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1E252B, roughness: 0.18, metalness: 0.2 }));
       dome.position.y = -0.012; dome.castShadow = true;
       const ring = glow(THREE, new THREE.TorusGeometry(0.052, 0.0035, 8, 36), 0xDCE0DF, 0x3AB7FF);
       ring.rotation.x = Math.PI / 2; ring.position.y = -0.0125;
