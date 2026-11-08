@@ -18,6 +18,8 @@
 //             red LED or tint and 'offline' as a dark LED; env = { hour, sky } is the light outside (room3d.js skyAt:
 //             0 at night, 1 by day), for parts that show it; pick is what a tap selects (default: root).
 import home from './home.js';
+import elder from './elder.js';
+import creator from './creator.js';
 
 function merge(...files) {
   const out = {};
@@ -28,4 +30,4 @@ function merge(...files) {
   return Object.freeze(out);
 }
 
-export const DEVICE_UI = merge(home);
+export const DEVICE_UI = merge(home, elder, creator);
