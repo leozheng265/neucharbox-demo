@@ -53,7 +53,7 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
     },
     check: (code) => call('POST', 'access/check', { body: { code }, auth: false }).then((d) => ({ remainingToday: d.remainingToday })),
     apply: (form) => call('POST', 'apply', { body: form, auth: false }).then(() => {}),
-    createSession: (scene) => call('POST', 'sessions', { body: { scene } }),
+    createSession: (scene, extra = {}) => call('POST', 'sessions', { body: { scene, ...extra } }),
     request: (sid, text) => call('POST', `sessions/${enc(sid)}/requests`, { body: { text } }),
     approve: (sid, rid) => req(sid, rid, 'approve'),
     decline: (sid, rid) => req(sid, rid, 'decline'),

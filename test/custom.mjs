@@ -320,4 +320,196 @@ export async function customChecks({ report, guardHits }) {
     eq(sc.sceneFor(emptyLayout()).deviceOrder, [], 'an empty room');
     for (const g of guardHits(`${s.title}`)) ok(false, `title ${g}`);
   }));
+
+  // ---- Task 7: the mode controller, the code gate and the live hooks (real createLive against the contract mock) ----
+  const ctl = await import('../js/custom/controller.js').catch((e) => ({ err: e }));
+  const gate = await import('../js/custom/gate.js').catch((e) => ({ err: e }));
+  const cpy = await import('../js/custom/copy.js').catch((e) => ({ err: e }));
+  const lv = await import('../js/engine/live.js'), lapi = await import('../js/engine/liveapi.js'), stm = await import('../js/engine/store.js'), mk = await import('./fixtures/live-mock.mjs');
+  const live2 = (...ms) => (fn) => async (t) => { for (const m of [cat, lay, sc, ui, ...ms]) if (m.err) throw m.err; await fn(t); };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const waitFor = async (cond, what) => { for (let i = 0; i < 600; i++) { if (cond()) return; await sleep(5); } throw new Error(`timed out waiting for ${what}`); };
+  const mem = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
+  const postsTo = (m, re) => m.calls.filter((c) => c.method === 'POST' && re.test(c.path));
+
+  // stub view / panel / ui for createLive (the shape test/live.mjs's harness uses)
+  function liveParts(log) {
+    const rec = (source) => (method, ...args) => { log.push([source, method, ...args]); };
+    const h = { lastAccess: null, accessCount: 0 };
+    const nop = () => ({ mergeSteps() {}, step() {}, call() {}, result() {}, timeline() {}, done() {} });
+    const view = {
+      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'failures', 'lost', 'input', 'live', 'closeChips'].map((m) => [m, rec('view').bind(null, m)])),
+      endCard() { return { close() {} }; },
+      planCard() { return { enable() {}, busy() {}, declined() {}, close() {}, toChecklist: nop }; },
+      checklist: nop,
+      access(spec, { onCode, onApply, onBack }) {
+        log.push(['view', 'access', spec]); h.accessCount++;
+        const a = { spec, code: (t) => onCode(t), apply: (x) => onApply(x), back: () => onBack(), close: () => log.push(['access', 'close']) };
+        h.lastAccess = a; return a;
+      },
+    };
+    const panel = { mark() {}, reveal() {} };
+    const uiStub = { alive: () => true, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
+    return { h, view, panel, ui: uiStub };
+  }
+
+  // A controller wired to the mock. makeLive builds a createLive per room, as the page will.
+  function rig({ mock = mk.createMockLive({ scenes: ['home', 'custom'] }), saved = true } = {}) {
+    const storage = mem(), codes = lv.codeStore(mem()); if (saved) codes.set(mk.MOCK_CODE);
+    const log = [], lives = [], seen = [], notices = [], modes = [], layouts = [];
+    const spy = (url, init) => { // how many streams were still open, on every earlier session, when each new session was asked for
+      if (/\/sessions$/.test(String(url)) && String(init?.method).toUpperCase() === 'POST') seen.push(lives.map((l) => mock.openStreams(l.live.sessionId ?? '')));
+      return mock.fetch(url, init);
+    };
+    const makeLive = (scene, devices) => {
+      const p = liveParts(log), store = stm.createStore(sc.initialFor(scene));
+      const live = lv.createLive({ scene, store, view: p.view, panel: p.panel, ui: p.ui, base: 'http://mock', fetch: spy, codes, sessionExtra: () => ({ devices }) });
+      lives.push({ live, parts: p, devices }); return live;
+    };
+    const c = ctl.createCustomController({ storage, makeLive, ui: { mode: (m) => modes.push(m), layout: (l) => layouts.push(l), notice: (k) => notices.push(k) } });
+    return { c, mock, codes, storage, log, lives, seen, notices, modes, layouts, last: () => lives.at(-1) };
+  }
+
+  await check('gate · no code shows the access card; a good code passes and is saved', live2(gate, cpy)(async ({ eq, ok }) => {
+    const mock = mk.createMockLive({ scenes: ['home', 'custom'] }), codes = lv.codeStore(mem()), log = [], p = liveParts(log);
+    const api = lapi.createLiveApi({ base: 'http://mock', fetch: mock.fetch, getCode: () => codes.get() });
+    let backed = 0; const done = gate.passGate({ api, codes, view: p.view, onBack: () => backed++ });
+    await waitFor(() => p.h.lastAccess, 'the access card');
+    eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.backLabel], ['code', 'Back to scenes'], 'a code card that says Back to scenes');
+    eq(await p.h.lastAccess.code('wrong-code'), lv.LIVE_COPY.badCode, 'a bad code is told so');
+    eq(codes.get(), null, 'a bad code is not saved');
+    eq(await p.h.lastAccess.code(' ncb-test-case '), null, 'a good code answers null');
+    eq(await done, true, 'the gate passes');
+    eq(codes.get(), mk.MOCK_CODE, 'the normalised code is saved');
+    eq(backed, 0, 'no back');
+    ok(postsTo(mock, /sessions$/).length === 0, 'the gate makes no session');
+    ok(log.some((e) => e[0] === 'access' && e[1] === 'close'), 'the card is closed');
+  }));
+
+  await check('gate · a saved good code passes without a card; live off shows the offline card; back resolves false', live2(gate, cpy)(async ({ eq }) => {
+    const mkApi = (mock, codes) => lapi.createLiveApi({ base: 'http://mock', fetch: mock.fetch, getCode: () => codes.get() });
+    { // saved and good
+      const mock = mk.createMockLive({ scenes: ['custom'] }), codes = lv.codeStore(mem()), p = liveParts([]); codes.set(mk.MOCK_CODE);
+      eq(await gate.passGate({ api: mkApi(mock, codes), codes, view: p.view, onBack() {} }), true, 'saved code passes');
+      eq(p.h.accessCount, 0, 'no card');
+    }
+    { // live off: the offline card, and Back resolves false
+      const mock = mk.createMockLive({ scenes: ['custom'], liveEnabled: false }), codes = lv.codeStore(mem()), p = liveParts([]); codes.set(mk.MOCK_CODE);
+      let backed = 0; const r = gate.passGate({ api: mkApi(mock, codes), codes, view: p.view, onBack: () => backed++ });
+      await waitFor(() => p.h.lastAccess, 'the offline card');
+      eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.backLabel], ['offline', 'Back to scenes'], 'offline card');
+      p.h.lastAccess.back(); eq(await r, false, 'back resolves false'); eq(backed, 1, 'onBack called');
+    }
+    { // the scene missing from /health counts as off
+      const mock = mk.createMockLive({ scenes: ['home'] }), codes = lv.codeStore(mem()), p = liveParts([]);
+      const r = gate.passGate({ api: mkApi(mock, codes), codes, view: p.view, onBack() {} });
+      await waitFor(() => p.h.lastAccess, 'the card'); eq(p.h.lastAccess.spec.mode, 'offline', 'custom not in scenes'); p.h.lastAccess.back(); await r;
+    }
+    { // a saved code that no longer works is cleared, with the note; a code with none left says so
+      const mock = mk.createMockLive({ scenes: ['custom'], code: 'OTHER' }), codes = lv.codeStore(mem()), p = liveParts([]); codes.set(mk.MOCK_CODE);
+      const r = gate.passGate({ api: mkApi(mock, codes), codes, view: p.view, onBack() {} });
+      await waitFor(() => p.h.lastAccess, 'the card');
+      eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.note, codes.get()], ['code', lv.LIVE_COPY.savedCodeGone, null], 'gone code');
+      eq(await p.h.lastAccess.code('OTHER'), null); eq(await r, true, 'then a new code passes');
+      const m2 = mk.createMockLive({ scenes: ['custom'], remaining: 0 }), c2 = lv.codeStore(mem()), q = liveParts([]); c2.set(mk.MOCK_CODE);
+      const r2 = gate.passGate({ api: mkApi(m2, c2), codes: c2, view: q.view, onBack() {} });
+      await waitFor(() => q.h.lastAccess, 'the card'); eq(q.h.lastAccess.spec.note, lv.LIVE_COPY.noneLeft, 'none left'); q.h.lastAccess.back(); await r2;
+    }
+  }));
+
+  await check('controller · done posts the device list', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig(); t.c.gated(); eq(t.c.mode, 'build', 'gated');
+    t.c.add('floor_lamp'); t.c.add('soil_sensor');
+    eq(t.layouts.length, 2, 'ui.layout per change');
+    eq(JSON.parse(t.storage.getItem('ncb.customRoom')).devices.map((d) => d.id), ['floor_lamp', 'soil_sensor'], 'saved');
+    await t.c.done();
+    eq(postsTo(t.mock, /^sessions$/).map((c) => c.body), [{ scene: 'custom', devices: [{ type: 'floor_lamp', id: 'floor_lamp' }, { type: 'soil_sensor', id: 'soil_sensor' }] }], 'POST sessions body');
+    eq([t.c.mode, t.c.live.phase, t.c.live === t.last().live], ['run', 'idle', true], 'run, idle');
+    t.c.teardown();
+  }));
+
+  await check('controller · moving keeps the session', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
+    const first = t.c.live; eq(t.c.toBuild(), true, 'toBuild'); eq(t.c.mode, 'build');
+    t.c.move('floor_lamp', { x: 1, z: 1 }); t.c.rotate('floor_lamp'); t.c.moveHub({ x: 0.5, z: -1 });
+    eq(t.c.changedSinceRun, false, 'moving is not a device change'); eq(t.notices, [], 'no notice');
+    await t.c.done();
+    eq(postsTo(t.mock, /^sessions$/).length, 1, 'no new POST sessions'); eq([t.c.live === first, t.c.mode], [true, 'run'], 'same live, run');
+    t.c.teardown();
+  }));
+
+  await check('controller · a device change closes the old live before the new session', live2(ctl, cpy)(async ({ eq, ok }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
+    for (let i = 0; i < 6; i++) {
+      const old = t.c.live, oldSid = old.sessionId;
+      await waitFor(() => t.mock.openStreams(oldSid) === 1, 'the stream to open');
+      eq(t.c.toBuild(), true); t.c.add(i % 2 ? 'soil_sensor' : 'blinds'); // never the same room as the last run
+      eq(t.c.changedSinceRun, true, `changedSinceRun before done (round ${i})`);
+      const n = postsTo(t.mock, /^sessions$/).length;
+      await t.c.done();
+      eq(postsTo(t.mock, /^sessions$/).length, n + 1, 'one new session');
+      ok(t.c.live !== old && t.c.live.phase === 'idle', 'a new live in idle');
+      eq(t.mock.openStreams(oldSid), 0, 'the old stream is closed');
+      eq(t.seen.at(-1).every((c) => c === 0), true, 'no earlier stream was open when the new session was asked for');
+      t.c.remove(t.c.layout.devices.at(-1).id);
+    }
+    ok(!t.log.some((e) => e[0] === 'view' && e[1] === 'ncb' && e[2] === lv.LIVE_COPY.limitCode), 'no code_limit');
+    t.c.teardown();
+  }));
+
+  await check('controller · Build is refused while a request runs', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
+    const sub = t.c.live.submit('pizza'); // a request the mock answers with cannot_do, then done
+    eq(t.c.canBuild, false, 'cannot build mid-request');
+    eq([t.c.toBuild(), t.c.mode, t.notices.at(-1)], [false, 'run', 'buildBusy'], 'refused with the notice');
+    await sub; await waitFor(() => t.c.live.phase === 'idle', 'the request to end');
+    eq([t.c.canBuild, t.c.toBuild(), t.c.mode], [true, true, 'build'], 'allowed once idle');
+    t.c.teardown();
+  }));
+
+  await check('controller · a dead code at Done building asks again and keeps the room', live2(ctl, cpy)(async ({ eq, ok }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
+    t.c.toBuild(); t.c.add('soil_sensor'); const before = JSON.stringify(t.c.layout);
+    t.mock.set({ code: 'OTHER' });
+    await t.c.done();
+    const p = t.last().parts;
+    ok(p.h.lastAccess && p.h.lastAccess.spec.mode === 'code', 'the access card is shown again');
+    eq(p.h.lastAccess.spec.note, lv.LIVE_COPY.savedCodeGone, 'with the note');
+    eq(JSON.stringify(t.c.layout), before, 'the room is unchanged'); eq(t.codes.get(), null, 'the dead code is forgotten');
+    eq(await p.h.lastAccess.code('OTHER'), null, 'a new code is accepted');
+    await waitFor(() => t.c.live.phase === 'idle', 'idle after the new code');
+    eq(t.c.live.phase, 'idle'); t.c.teardown();
+  }));
+
+  await check('controller · full and empty', live2(ctl, cpy)(async ({ eq, ok }) => {
+    const t = rig(); t.c.gated();
+    await t.c.done(); eq([postsTo(t.mock, /^sessions$/).length, t.c.mode, t.c.live], [0, 'build', null], 'done with no devices does nothing');
+    for (let i = 0; i < 20; i++) ok(t.c.add('floor_lamp'), `add ${i}`);
+    eq(t.notices, [], 'no notice yet'); eq(t.c.add('floor_lamp'), null, '21st add'); eq(t.notices, ['full'], 'full notice');
+    eq(t.c.layout.devices.length, 20, 'still 20');
+    t.c.clear(); eq(t.c.layout.devices.length, 0, 'cleared'); await t.c.done(); eq(postsTo(t.mock, /^sessions$/).length, 0, 'still no POST');
+  }));
+
+  await check('controller · says a change restarts the conversation once', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done(); t.c.toBuild();
+    t.c.add('blinds'); t.c.add('soil_sensor'); t.c.remove('blinds'); eq(t.notices, ['changed'], 'one changed notice');
+    eq(t.c.layout.hub.x, 0, 'the hub stays'); t.c.teardown();
+  }));
+
+  await check('copy · CUSTOM_COPY passes the guardrails', live2(cpy)(({ eq, ok }) => {
+    const C = cpy.CUSTOM_COPY, hits = [];
+    for (const [k, v] of Object.entries(C)) for (const text of typeof v === 'function' ? [v(0), v(1), v(20)] : [v]) { ok(typeof text === 'string' && text, `${k} is a string`); hits.push(...guardHits(text).map((g) => `${k}: ${g}`)); }
+    eq(hits, [], 'guard hits'); eq([C.cardTitle, C.done, C.count(3), C.clearConfirm(5)], ['Build your own', 'Done building →', '3 / 20 devices', 'Clear all 5 devices?'], 'spot values');
+  }));
+
+  await check('live hooks · createSession without extra posts { scene } only; the mock builds a custom room', live2()(async ({ eq }) => {
+    const mock = mk.createMockLive(), api = lapi.createLiveApi({ base: 'http://mock', fetch: mock.fetch, getCode: () => mk.MOCK_CODE });
+    await api.createSession('home'); eq(mock.calls.at(-1).body, { scene: 'home' }, 'plain body');
+    const m2 = mk.createMockLive({ scenes: ['custom'] }), a2 = lapi.createLiveApi({ base: 'http://mock', fetch: m2.fetch, getCode: () => mk.MOCK_CODE });
+    const r = await a2.createSession('custom', { devices: [{ type: 'floor_lamp', id: 'floor_lamp' }] });
+    eq(Object.keys(r.state).sort(), ['env', 'floor_lamp'], 'custom state'); eq(r.state.floor_lamp, { brightness: 0, status: 'online' }, 'initial + online');
+    for (const bad of [[], [{ type: 'floor_lamp', id: 'floor_lamp_1' }], [{ type: 'nope', id: 'nope' }], [{ type: 'floor_lamp', id: 'floor_lamp' }, { type: 'floor_lamp', id: 'floor_lamp' }]]) {
+      try { await a2.createSession('custom', { devices: bad }); eq('no error', 'bad_room'); } catch (e) { eq([e.status, e.kind], [400, 'bad_room'], 'bad room'); }
+    }
+  }));
 }
