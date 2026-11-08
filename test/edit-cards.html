@@ -25,6 +25,7 @@
 import { createStore } from '../js/engine/store.js';
 import { createPanel } from '../js/engine/panel.js';
 import { createClockCtl } from '../js/engine/clockctl.js';
+import { createLiveView } from '../js/engine/livechat.js';
 import home from '../js/scenes/home.js';
 
 const problems = [];
@@ -98,6 +99,20 @@ try {
   soil._drag = true; store.set('soil.moisture', 40); ok(soil.value === '22', 'a slider mid-drag is not moved');
   soil._drag = false; store.set('soil.moisture', 41); ok(soil.value === '41', 'and follows again after');
 
+  // keyboard: Chrome fires `change` on every arrow press; one edit goes out ~400 ms after the last key (or on blur)
+  const kb = sliders('soil')[0], n0 = calls.length;
+  for (const v of ['29', '28', '27']) { kb.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); kb.value = v; fire(kb, 'input'); fire(kb, 'change'); }
+  ok(calls.length === n0, `arrow presses send nothing at once (got ${calls.length - n0})`);
+  await new Promise((r) => setTimeout(r, 200)); ok(calls.length === n0, 'still nothing at 200 ms');
+  await new Promise((r) => setTimeout(r, 300));
+  ok(calls.length === n0 + 1 && calls.at(-1)[0] === 'soil.moisture' && calls.at(-1)[1] === 27, `one edit with the last value after the keys stop, got ${JSON.stringify(calls.slice(n0))}`);
+  kb.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); kb.value = '30'; fire(kb, 'change'); kb.dispatchEvent(new Event('blur'));
+  ok(calls.length === n0 + 2 && calls.at(-1)[1] === 30, 'blur sends a pending key edit at once');
+  await new Promise((r) => setTimeout(r, 500)); ok(calls.length === n0 + 2, 'and nothing more later');
+  kb.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); kb.value = '12'; fire(kb, 'change'); kb.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  ok(calls.length === n0 + 3 && calls.at(-1)[1] === 12, 'a pointer release still sends at once');
+  await new Promise((r) => setTimeout(r, 50));
+
   // a real press and release (the controls stop pointerup from bubbling): the drag ends, the store lands on the slider
   const rel = sliders('soil')[0];
   rel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ok(rel._drag === true, 'pointerdown starts a drag');
@@ -158,12 +173,30 @@ try {
   $('.clk-go').click(); ok(advanced.at(-1) === 25.5, `next-day Go sends 25.5, got ${advanced.at(-1)}`);
   const n = advanced.length;
   clk.render({ label: 'Sat 09:00', enabled: false, reason: 'The clock moves again when this request is done.' });
-  ok($$('#clockctl button').every((b) => b.disabled) && $('.clk-set').title.startsWith('The clock moves again'), 'disabled with the reason as its title');
+  ok($$('#clockctl button').every((b) => b.hidden || b.disabled), 'disabled for a request: no live button');
+  ok($('.clk-why') && !$('.clk-why').hidden && $('.clk-why').textContent.startsWith('The clock moves again') && $('.clk-why').offsetWidth > 0, 'the reason is visible text on the row');
+  ok($$('#clockctl [data-h]').every((b) => b.offsetWidth === 0) && $('.clk-label').offsetWidth > 0, 'in place of the buttons, the label stays');
+  clk.render({ label: 'Sat 09:00', enabled: false, reason: null });
+  ok($$('#clockctl > button').every((b) => b.disabled && b.offsetWidth > 0) && $('.clk-why').hidden, 'disabled for something else (an advance, a reset): greyed buttons, no reason text');
+  clk.render({ label: 'Sat 09:00', enabled: false, reason: 'The clock moves again when this request is done.' });
   $$('#clockctl [data-h]')[0].click(); ok(advanced.length === n, 'a disabled button sends nothing');
   clk.render({ label: 'Sat 09:00', enabled: true });
-  ok(!$('.clk-set').disabled && $('.clk-set').title === '', 'enabled again');
+  ok(!$('.clk-set').disabled && $('.clk-why').hidden && $('.clk-set').offsetWidth > 0, 'enabled again: buttons back, reason gone');
   clk.active(false); ok($('#clockctl').hidden, 'hidden when live ends');
   ok(document.documentElement.scrollWidth <= innerWidth, `no horizontal page scroll (${document.documentElement.scrollWidth} > ${innerWidth})`);
+  // a held-back fire in a checklist: "Rule held back", no envelope
+  const host = document.createElement('div'); document.body.appendChild(host);
+  const view = createLiveView({ chat: { esc: (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])), mount: (n) => host.appendChild(n) }, scene: home });
+  const cl = view.checklist([{ id: 's1', text: 'A step', devices: [] }]);
+  cl.timeline({ at: 'Sat 07:00', text: 'It already ran 2 times today', ok: true, kind: 'notify', origin: 'held' });
+  cl.timeline({ at: 'Sat 07:05', text: 'Pump on', ok: true, kind: 'notify', origin: 'rule' });
+  const rows = $$('.trow', host).map((r) => r.textContent);
+  ok(rows[0] === 'Sat 07:00 · Rule held back · It already ran 2 times today', `held row: "${rows[0]}"`);
+  ok(rows[1].includes('📩'), `a real notification keeps its envelope: "${rows[1]}"`);
+  view.ruleLine({ at: 'Sat 07:00', text: 'Pump on', kind: 'rule', origin: 'rule' });
+  ok(!$('.msg.rule', host).hasAttribute('role'), 'a rule line has no role of its own (it sits inside the log)');
+  host.hidden = true;
+  ok(getComputedStyle(card('lamp')).userSelect === 'none', 'cards are not text-selectable');
   panel.editable(true, { onEdit() {} }); // leave controls on screen for the eye
   clk.active(true); clk.render({ label: 'Fri 16:30', enabled: true });
 } catch (e) {

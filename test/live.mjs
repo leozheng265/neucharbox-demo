@@ -1093,7 +1093,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.mock.edit(sid, 'state', { path: 'lamp.brightness', value: 0.4, ms: 0 }); await settle();
     eq(t.store.get('lamp.brightness'), 0.4);
     t.mock.edit(sid, 'clock', { iso: '2026-11-08T22:30:00', label: 'Fri 22:30', hour: 22.5 }); await sleep(900);
-    eq(t.find('ui', 'status'), ['Fri 22:30']); eq(lastClock(t).label, 'Fri 22:30'); eq(t.store.get('env.hour'), 22.5);
+    ok(t.find('ui', 'status')?.[0] !== 'Fri 22:30', 'a hand edit never takes the status line'); eq(lastClock(t).label, 'Fri 22:30'); eq(t.store.get('env.hour'), 22.5);
     t.live.close();
   });
 
@@ -1153,6 +1153,81 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const v = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(401, { error: 'unauthorized', message: 'No.' })), entered: true });
     await v.live.advance(6); await settle(); eq(accessCount(v), 2, '401 asks for the code again');
     t.live.close(); u.live.close(); v.live.close();
+  });
+
+  // ---- final review fixes ----
+  // A mock whose advance answers only when released: what a visitor can do meanwhile.
+  const slowAdvance = (m) => { let release; const gate = new Promise((r) => { release = r; }); return { mock: { ...m, fetch: (url, init) => (/\/advance$/.test(String(url)) ? gate.then(() => m.fetch(url, init)) : m.fetch(url, init)) }, release }; };
+  const finished = async (t) => { await toPlan(t, MOVIE); await t.card.approve(); await waitFor(() => count(t, 'view', 'endCard') === 1); return t.find('view', 'endCard')[1]; };
+
+  await check('advance · a typed request during an advance is held (input off, no POST, no error), then sent', async () => {
+    const { mock, release } = slowAdvance(createMockLive()), t = await harness({ mock, entered: true });
+    const p = t.live.advance(6); eq(lastInput(t), false, 'input off during the advance');
+    await t.live.submit(MOVIE); await settle();
+    eq(postsTo(t.mock, /\/requests$/).length, 0, 'no POST while advancing'); ok(!t.has('view', 'user', MOVIE), 'not shown as sent yet'); ok(!t.has('view', 'ncb', LIVE_COPY.error), 'no error line');
+    release(); await p; await waitFor(() => count(t, 'view', 'planCard') === 1);
+    eq(postsTo(t.mock, /\/requests$/).length, 1, 'sent once after the advance'); ok(!t.has('view', 'ncb', LIVE_COPY.error), 'still no error line'); eq(t.log.filter((e) => e[0] === 'view' && e[1] === 'input' && e[2] === true).length >= 2, true, 'input came back');
+    t.live.close();
+  });
+
+  await check('advance · a what-if and a reset picked during an advance wait for it', async () => {
+    const { mock, release } = slowAdvance(createMockLive()), t = await harness({ mock, entered: true });
+    const acts = await finished(t);
+    const p = t.live.advance(6); acts.onWhatIf(); t.find('view', 'failures')[1]('lamp'); await settle();
+    eq(postsTo(t.mock, /\/whatif$/).length, 0, 'no what-if POST while advancing');
+    release(); await p; await waitFor(() => postsTo(t.mock, /\/whatif$/).length === 1); ok(!t.has('view', 'ncb', LIVE_COPY.error), 'no error line');
+    await waitFor(() => count(t, 'view', 'endCard') === 2);
+    const b = slowAdvance(createMockLive()), u = await harness({ mock: b.mock, entered: true }), acts2 = await finished(u);
+    const q = u.live.advance(6); acts2.onReset(); await settle(); eq(postsTo(u.mock, /\/reset$/).length, 0, 'no reset POST while advancing');
+    b.release(); await q; await waitFor(() => postsTo(u.mock, /\/reset$/).length === 1); ok(!u.has('view', 'ncb', LIVE_COPY.error), 'reset: no error line');
+    t.live.close(); u.live.close();
+  });
+
+  await check('advance · a refused advance gives the input back; an advance never takes the status line', async () => {
+    const t = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(429, { error: 'rate', message: 'Too many.' })), entered: true });
+    await t.live.advance(6); eq(lastInput(t), true, 'input back after an error');
+    const u = await harness({ entered: true }), s0 = u.log.filter((e) => e[0] === 'ui' && e[1] === 'status').length;
+    await u.live.advance(6); eq(u.log.filter((e) => e[0] === 'ui' && e[1] === 'status').length, s0, 'status line untouched'); eq(lastInput(u), true);
+    t.live.close(); u.live.close();
+  });
+
+  await check('clock · the busy reason only while a request is under way (not for a reset)', async () => {
+    const t = await harness({ entered: true }), acts = await finished(t);
+    eq(lastClock(t).reason, null, 'idle: none');
+    await t.live.submit(MOVIE); eq(lastClock(t).reason, LIVE_COPY.clockBusy, 'request: the reason');
+    t.live.close();
+    const u = await harness({ entered: true }), a2 = await finished(u);
+    const reset = u.live.phase === 'idle'; ok(reset);
+    const p = a2.onReset(); eq(lastClock(u).enabled, false, 'reset: disabled'); eq(lastClock(u).reason, null, 'reset: no request reason'); await p; await waitFor(() => lastClock(u).enabled === true);
+    u.live.close();
+  });
+
+  await check('timeline · a held-back fire during a request keeps its origin for the checklist', async () => {
+    const t = await harness({ mock: movieMock(...OPEN_RUN), entered: true }), sid = t.live.sessionId;
+    await toPlan(t, MOVIE); await t.card.approve(); await waitFor(() => t.live.phase === 'running');
+    t.mock.push(sid, 'timeline', { ...ruleRow, origin: 'held', kind: 'notify', text: 'It already ran 2 times today', src: 'edit', rid: 'r1' }); await settle();
+    eq(t.find('checklist', 'timeline')?.[0].origin, 'held'); t.live.close();
+  });
+
+  await check('edit · a timeline row with a finished request\'s rid and src edit goes to the chat', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId; await finished(t);
+    t.mock.push(sid, 'timeline', { ...ruleRow, src: 'edit', rid: 'r1' }); await settle();
+    eq(count(t, 'view', 'ruleLine'), 1, 'a chat line'); eq(count(t, 'checklist', 'timeline'), 0, 'not the closed checklist'); t.live.close();
+  });
+
+  await check('edit · a rejected change goes back to the room\'s value from the room event', async () => {
+    const t = await harness({ entered: true }), room = t.store.get('lamp.brightness');
+    t.store.set('lamp.brightness', 0.7); // drifted locally, never echoed
+    await t.live.edit('lamp.brightness', 2); await settle();
+    eq(t.store.get('lamp.brightness'), room, 'the room value, not the drifted one'); t.live.close();
+  });
+
+  await check('session · two no_session failures at once open one session and say timed-out once', async () => {
+    const m = createMockLive(); let left = 2;
+    const t = await harness({ mock: { ...m, fetch: (url, init) => (left > 0 && /\/set$/.test(String(url)) ? (left--, jsonAnswer(404, { error: 'no_session', message: 'That session has ended.' })()) : m.fetch(url, init)) }, entered: true });
+    await Promise.all([t.live.edit(SOIL_EDIT, 11), t.live.edit(SOIL_EDIT, 12)]);
+    await waitFor(() => t.live.phase === 'idle'); await settle();
+    eq(postsTo(t.mock, /sessions$/).length, 2, 'the first session and one more'); eq(ncbCount(t, LIVE_COPY.timedOut), 1, 'one timed-out line'); t.live.close();
   });
 
   await check('edit · editing on in live mode, off after exit; the new copy is there', async () => {

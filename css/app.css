@@ -84,7 +84,7 @@ button { font: inherit; color: inherit; }
 .panel { display: flex; gap: 8px; padding: 8px 0 8px 12px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--line); scrollbar-width: thin; scroll-padding-inline: 12px; }
 /* the strip's end space (gap 8 + 4 = the 12 px start padding): trailing padding isn't scrollable in every engine */
 .panel::after { content: ''; flex: 0 0 4px; }
-.ent { position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 9px; min-width: 150px; max-width: 200px; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 7px 8px; background: #fff; font-size: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .3s; }
+.ent { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 9px; min-width: 150px; max-width: 200px; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 7px 8px; background: #fff; font-size: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .3s; }
 .ent .ico { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #EEF3F2; color: #6E8785; transition: background .25s, color .25s; }
 .ent .ico svg { width: 20px; height: 20px; }
 .ent .txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; } /* the whole text column: every bar spans it */
@@ -287,6 +287,10 @@ button { font: inherit; color: inherit; }
 
 @media (max-width: 959px) {
   .room canvas { height: clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)); }
+  /* Live mode (.live-edit) adds the editing rows: the thermostat's two 32 px sliders lift the strip from ~50 to ~110 px and the
+     status row takes two lines (the clock beside it). The room gives up that height, not the chat. */
+  .app.live-edit .room canvas { height: max(110px, calc(clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)) - 74px)); }
+  .app.live-edit .status { min-height: 46px; } /* two lines of status text, always: the row doesn't jump with the message */
   .ent { max-width: 240px; }
   .ent .ctl[hidden] { display: flex; visibility: hidden; } /* same tile height with or without a control */
   /* A slimmer strip, so the control row costs 1 px, not 13: at 360 x 640 an end card shown from its top keeps its
@@ -308,7 +312,8 @@ button { font: inherit; color: inherit; }
   .beats button { padding: 3px 0 5px; }
   .stage { grid-template-columns: minmax(0, 1fr) minmax(300px, 46%); grid-template-rows: minmax(0, 1fr) auto; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
   .room { grid-column: 1; grid-row: 1; }
-  .room canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .room canvas, .app.live-edit .room canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .app.live-edit .status { min-height: 32px; }
   .status { grid-column: 1; grid-row: 2; }
   .side { display: flex; flex-direction: column; grid-column: 2; grid-row: 1 / 3; min-height: 0; border-left: 1px solid var(--line); }
   .panel { flex: 0 0 auto; border-top: 0; }
@@ -364,7 +369,7 @@ button { font: inherit; color: inherit; }
 /* ---- editable cards (live mode): controls right on the card, and the clock beside the status line ---- */
 .ent:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
 .ent .edits { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
-.clockctl[hidden], .clockctl .clk-pick[hidden] { display: none; }
+.clockctl[hidden], .clockctl .clk-pick[hidden], .clockctl .clk-why[hidden] { display: none; }
 .ent.has-edits .ctl, .ent.has-edits[class] .ctl[hidden] { display: none; } /* the controls replace the display bar and switch */
 .ent .erow { display: flex; align-items: center; gap: 6px; min-height: 22px; min-width: 0; }
 .ent .erow.switch { gap: 5px; }
@@ -396,6 +401,7 @@ button { font: inherit; color: inherit; }
 .clockctl .clk-btn:hover:not(:disabled) { border-color: var(--accent-a); }
 .clockctl .clk-btn:disabled { color: var(--ink-3); border-color: var(--line-2); cursor: default; }
 .clockctl .clk-btn:focus-visible, .clockctl select:focus-visible, .clockctl input:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 1px; }
+.clockctl .clk-why { font-size: 12px; color: var(--ink-2); line-height: 1.3; }
 .clockctl .clk-day, .clockctl .clk-time { min-height: 26px; padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 8px; background: #fff; font: inherit; font-size: 12px; color: var(--ink); }
 @media (max-width: 959px) {
   .ent.has-edits { align-items: flex-start; max-width: 260px; }
@@ -406,4 +412,12 @@ button { font: inherit; color: inherit; }
   .ent .edits { margin-top: 2px; gap: 0; }
   .clockctl .clk-btn, .clockctl .clk-day, .clockctl .clk-time { min-height: 32px; }
   .clockctl .clk-day, .clockctl .clk-time { font-size: 16px; } /* no zoom on focus */
+  /* The clock control sits in the status row, beside the status text (which gives up width, up to two lines), so live mode
+     costs the chat no row of its own. Open, its picker (or the reason, a sentence) takes the row's second line. */
+  .status:has(.clockctl:not([hidden])) { flex-wrap: nowrap; }
+  .status:has(.clockctl:not([hidden])) .stext { flex: 1 1 0; line-height: 1.25; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .clockctl { flex: 0 0 auto; flex-wrap: nowrap; gap: 4px; margin-left: 0; }
+  .clockctl .clk-btn { padding: 2px 8px; }
+  .status:has(.clk-pick:not([hidden])), .status:has(.clk-why:not([hidden])) { flex-wrap: wrap; }
+  .status:has(.clk-pick:not([hidden])) .clockctl, .status:has(.clk-why:not([hidden])) .clockctl { flex: 1 1 100%; flex-wrap: wrap; }
 }
