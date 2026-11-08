@@ -78,8 +78,26 @@ export function createRoom3d({ R, P, M, THREE }) {
     const give = dealLights(lights); for (const L of lights) L.visible = give.has(L);
   }
 
+  // A small wall or ceiling device is a few pixels wide from across the room, too small for a fingertip: an unseen box
+  // round it (at least TAP_MIN across its face) is part of its tap target, so a tap near it picks it. It sits on the
+  // device's side of the wall (z 0 to the model's depth, or at least TAP_DEPTH), so it never reaches into the room.
+  const TAP_MIN = 0.4, TAP_DEPTH = 0.1;
+  function tapProxy(root, mount) {
+    if (mount === 'floor') return;
+    root.updateWorldMatrix(true, true);
+    const b = new THREE.Box3().setFromObject(root); if (b.isEmpty()) return;
+    const sz = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
+    const wall = mount === 'wall';
+    if (wall ? sz.x >= TAP_MIN && sz.y >= TAP_MIN : sz.x >= TAP_MIN && sz.z >= TAP_MIN) return; // already a fingertip's size
+    const w = Math.max(sz.x, TAP_MIN), h = wall ? Math.max(sz.y, TAP_MIN) : Math.max(sz.y, TAP_DEPTH), dp = wall ? Math.max(sz.z, TAP_DEPTH) : Math.max(sz.z, TAP_MIN);
+    const p = new THREE.Mesh(new THREE.BoxGeometry(w, h, dp), new THREE.MeshBasicMaterial({ visible: false }));
+    p.position.set(c.x, wall ? c.y : b.max.y - h / 2, wall ? dp / 2 : c.z); // wall: z from 0 · ceiling: down from the top of the model
+    p.visible = false; p.castShadow = p.receiveShadow = false; p.userData.proxy = p.userData.noAO = p.userData.noHighlight = true;
+    root.add(p);
+  }
   function add(d, ui) {
     const model = ui.model({ THREE, P, M });
+    tapProxy(model.root, typeOf(d.type)?.mount);
     const holder = new THREE.Group(); holder.add(model.root); R.scene.add(holder);
     R.addPickable(model.pick || model.root, d.id);
     const o = { type: d.type, holder, root: model.root, model, lights: [], idle: null, hi: null, shells: null, cut: false };

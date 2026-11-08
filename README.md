@@ -163,6 +163,32 @@ Runs in Node, no browser needed:
 patched in memory: `const { sceneChecks, buildChecks, results } = await
 import('./test/run.mjs')`.
 
+## Build your own (the 6th scene)
+
+`#custom`, behind an invite code: a visitor builds a room (8 × 6 × 2.8 m, up to 20 of the 54 device types plus the hub),
+places the devices in 3D, then runs live-AI requests on exactly those devices. The code is in `js/custom/`; the
+catalog copy `js/custom/catalog.data.js` is generated (`node tools/sync-catalog.mjs <catalog.json>`), never edited by hand.
+Run it against the mock: `python serve.py 8769` and `node test/mock-live.mjs 8787 --scenes home,custom`, then open
+`http://localhost:8769/?liveApi=http://localhost:8787#custom` (mock code `NCB-TEST-CASE`).
+
+**Phone and performance (Task 16, built-in browser, 20 mixed devices, one per category where possible):**
+
+| | desktop 1280 × 800 | phone preset 375 × 812 (dpr 2) |
+|---|---|---|
+| median frame time, 300 frames | 16.7 ms (vsync) | 16.7 ms (vsync) |
+| 95th percentile | 17.4 ms | 17.2 ms |
+| render tier after 22 s | `high` (watchdog did not drop it) | `low` (chosen at load for phones) |
+| CPU + GPU cost of one frame (`R.step`, `gl.finish`) | 1.6 ms | 0.9 ms |
+
+These are a desktop GPU emulating a phone viewport: the frame time sits at the display's 60 Hz cap, so it proves
+the 33 ms budget has room on this machine, not what a real mid-range phone does. Check on a real device before a launch.
+Phones (portrait, width <= 600 px) get their own camera (`scene.js` `CAMERA_PHONE`: higher and steeper, so the floor
+fills the tall canvas), a bottom sheet for the inventory that starts folded and folds when the room is touched, 36 px
+buttons on the selection bar, and unseen tap boxes (at least 40 cm across) round small wall and ceiling devices.
+Known limits: the phone camera is chosen once at page load (rotating the phone mid-session keeps the old framing); a
+second finger put down while one is on a device does not start a pinch-zoom; a lamp added after the page loaded has no
+shade stand-ins (no visible light leak in a 20-device room at night).
+
 ## Deploy
 
 See **DEPLOY.md** (English + 中文) for the hosting requirements. In short: this

@@ -97,7 +97,7 @@ export function createPlacement({ R, room3d, controller, canvas, selbar = docume
     for (const id of room3d.pickIds()) { const o = room3d.objectFor(id); if (o) owners.set(o, id); }
     for (const h of caster.intersectObjects([...owners.keys()], true)) {
       let id = null, shown = true;
-      for (let a = h.object; a; a = a.parent) { if (!a.visible) { shown = false; break; } if (id === null && owners.has(a)) id = owners.get(a); }
+      for (let a = h.object; a; a = a.parent) { if (!a.visible && !a.userData.proxy) { shown = false; break; } if (id === null && owners.has(a)) id = owners.get(a); }
       if (shown && id) return { id, ray, point: h.point };
     }
     return { id: null, ray, point: null };

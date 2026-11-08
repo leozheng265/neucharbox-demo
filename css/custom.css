@@ -95,6 +95,7 @@
   .inv-grip { display: grid; place-items: center; flex: 0 0 auto; width: calc(100% + 24px); height: 32px; margin: 0 -12px; padding: 0; border: 0; background: none; cursor: pointer; }
   .inv-grip span { width: 40px; height: 4px; border-radius: 4px; background: var(--line-2); }
   .inv-grip:focus-visible span { background: var(--accent-a); }
+  .stage.custom .room .reset { min-height: 36px; padding: 0 14px; } /* a fingertip, not a 26 px chip */
   .inv-search { height: 40px; font-size: 16px; } /* 16 px: no zoom-in on focus in iOS Safari */
   /* collapsed: one row of tiles, scrolled sideways; no chips or foot */
   .inv:not(.open) .inv-cats, .inv:not(.open) .inv-foot { display: none; }
@@ -110,6 +111,7 @@
   .inv-tile .nm { font-size: 12px; }
   /* the selection bar under the room's top row (the open sheet covers the room's lower part); a notice below it */
   .stage.custom[data-mode="build"] .room .selbar { top: 44px; bottom: auto; }
+  .selbar .btn { min-height: 36px; padding-inline: 14px; } /* Rotate and Remove under a thumb */
   .stage.custom[data-mode="build"] .room .notice { top: 96px; }
   .room .changed-note { bottom: 14px; } /* the bar is up top here */
 }
