@@ -43,6 +43,12 @@ try {
   const inv = createInventory($('#inventory'), { onAdd: (t) => added.push(t), onClear: () => { cleared++; }, inRoom: () => room, count: () => n, note: $('#note') });
   const root = $('#inventory'), tiles = () => $$('.inv-tile', root), visible = () => tiles().filter(shown).map((b) => b.dataset.type);
   const types = CATALOG.types;
+  // pictures: every tile gets a rendered <img> within 5 s, and no long task (over 200 ms) holds the page while they fill
+  const longTasks = []; try { new PerformanceObserver((l) => longTasks.push(...l.getEntries().map((e) => Math.round(e.duration)))).observe({ entryTypes: ['longtask'] }); } catch {}
+  const [THREE, parts, { createThumbs }, { DEVICE_UI }] = await Promise.all([import('three'), import('../js/engine/parts.js'), import('../js/custom/thumbs.js'), import('../js/custom/devices/index.js')]);
+  const thumbs = createThumbs({ THREE, parts }); longTasks.length = 0; // (module loading is not the pictures' cost)
+  const t0 = performance.now(); let pending = 0; const firstUrl = {};
+  for (const t of types) { pending++; thumbs.get(t.type).then((u) => { if (u) { firstUrl[t.type] = u; inv.setThumb(t.type, u); } else problems.push(`${t.type}: no picture`); }).finally(() => { pending--; }); }
 
   // 1. one tile per catalog type (54 once the catalog is complete), by category then table order
   eq(tiles().length, types.length, 'one tile per catalog type');
@@ -123,6 +129,8 @@ try {
   inv.setThumb(tiles()[0].dataset.type, 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==');
   ok($('.pic img', tiles()[0]) && !$('.pic svg', tiles()[0]), 'setThumb');
 
+  // pictures finish (checked last, below)
+  ok(Object.keys(DEVICE_UI).length === types.length, 'a UI per type');
   // ---- placement's pure helpers ----
   const { rayPlane, hitOn, grabOffset, dragTo, isTap, selection, TAP_SLOP } = pl;
   const v = (x, y, z) => ({ x, y, z });
@@ -162,6 +170,19 @@ try {
     ok(p.x + 0.15 <= edgeL || p.x - 0.15 >= edgeR, `wall device at x ${x} keeps off the window (${p.x})`);
   }
   ok(lay.clampPos('wall', { x: 2.9, z: -3 }, 1.2).x + 0.6 <= edgeL, 'a wide one goes left (no room on the right)');
+  // (the pictures had 5 s from the start)
+  await wait(Math.max(0, 5000 - (performance.now() - t0)));
+  eq(pending, 0, 'all pictures drawn within 5 s');
+  for (const t of types) {
+    const img = $('.pic img', tiles().find((b) => b.dataset.type === t.type));
+    ok(img && img.src.startsWith('data:image/png'), `${t.type}: tile has a data:image/png <img>`);
+  }
+  window.__thumbMs = Math.round(performance.now() - t0); window.__longTasks = longTasks;
+  ok(Math.max(0, ...longTasks) <= 200, `long tasks while pictures filled: ${longTasks.join(', ')} ms`);
+  // a second get is cached; dispose then get builds again
+  const again = await thumbs.get(types[0].type); ok(again === firstUrl[types[0].type], 'cached picture');
+  thumbs.dispose();
+  const t2 = createThumbs({ THREE, parts }); const redo = await t2.get(types[0].type); ok(typeof redo === 'string', 'a fresh context draws again'); t2.dispose();
 } catch (e) { problems.push(`threw: ${e?.stack || e}`); }
 
 const out = $('#qaResult');
