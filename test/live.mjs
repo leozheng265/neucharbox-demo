@@ -49,7 +49,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       h.checklist = c; return c;
     };
     h.view = {
-      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'failures', 'lost', 'input', 'live', 'closeChips'].map((m) => [m, rec('view').bind(null, m)])),
+      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'failures', 'lost', 'input', 'live', 'closeChips', 'ruleLine'].map((m) => [m, rec('view').bind(null, m)])),
       endCard(...a) { log.push(['view', 'endCard', ...a]); return { close: () => log.push(['end', 'close']) }; },
       planCard(spec, { onApprove, onDecline }) {
         log.push(['view', 'planCard', spec]);
@@ -68,7 +68,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     };
     h.panel = { mark: rec('panel').bind(null, 'mark'), reveal: rec('panel').bind(null, 'reveal') };
     let alive = true;
-    h.ui = { alive: () => alive, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
+    h.ui = { alive: () => alive, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind', 'editing', 'clock'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
     h.ui.kill = () => { alive = false; };
     h.find = (source, method) => log.filter((e) => e[0] === source && e[1] === method).at(-1)?.slice(2);
     h.has = (source, method, ...args) => log.some((e) => e[0] === source && e[1] === method && args.every((a, i) => JSON.stringify(e[2 + i]) === JSON.stringify(a)));
@@ -1051,5 +1051,114 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const m2 = createMockLive(), u = await harness({ mock: failOnce(m2, /\/requests$/, jsonAnswer(500, { error: 'internal', message: 'Oops.' })), entered: true });
     await u.live.submit(MOVIE); await settle();
     eq(u.log.filter((e) => e[0] === 'view' && e[1] === 'planning').map((e) => e[2]), [true, false], 'on, then off after the failure'); u.live.close();
+  });
+  // ---- Task 8: hand edits, edit events, clock state ----
+  const lastClock = (t) => t.find('ui', 'clock')?.[0];
+  const SOIL_EDIT = 'soil.moisture';
+  const ncbCount = (t, text) => t.log.filter((e) => e[0] === 'view' && e[1] === 'ncb' && e[2] === text).length;
+  await check('edit · a slider change posts set and moves the store at once', async () => {
+    const t = await harness({ entered: true }); const before = t.store.get(SOIL_EDIT);
+    ok(before !== 25, 'starts elsewhere');
+    const p = t.live.edit(SOIL_EDIT, 25);
+    eq(t.store.get(SOIL_EDIT), 25, 'moved before the POST answered');
+    await p; await settle();
+    const s = postsTo(t.mock, /\/set$/); eq(s.length, 1); eq(s[0].body, { path: SOIL_EDIT, value: 25 });
+    eq(t.store.get(SOIL_EDIT), 25, 'stays'); t.live.close();
+  });
+
+  await check('edit · a rejected change rolls back with one message; a path outside the edit specs posts nothing', async () => {
+    const t = await harness({ entered: true });
+    await t.live.edit('lamp.status', 'fault'); await t.live.edit('nope.field', 1); await t.live.edit('lamp.on', true); await settle();
+    eq(postsTo(t.mock, /\/set$/).length, 0, 'no POST for non-spec paths'); eq(t.store.get('lamp.status'), 'online');
+    const prev = t.store.get('lamp.brightness'), n0 = ncbCount(t, LIVE_COPY.editRejected);
+    await t.live.edit('lamp.brightness', 2); await settle();
+    eq(postsTo(t.mock, /\/set$/).length, 1); eq(t.store.get('lamp.brightness'), prev, 'rolled back');
+    eq(ncbCount(t, LIVE_COPY.editRejected), n0 + 1, 'one editRejected');
+    t.live.close();
+    const u = await harness({ entered: true }); u.live.exit(); await u.live.edit(SOIL_EDIT, 5); eq(postsTo(u.mock, /\/set$/).length, 0, 'no session, no POST'); u.live.close();
+  });
+
+  await check('edit · rate refusals roll back and say so at most once per 10 s', async () => {
+    const t = await harness({ entered: true });
+    await Promise.all(Array.from({ length: 12 }, (_, i) => t.live.edit(SOIL_EDIT, i + 1))); await settle();
+    eq(postsTo(t.mock, /\/set$/).length, 12); eq(ncbCount(t, LIVE_COPY.editRate), 1, 'one message'); eq(t.store.get(SOIL_EDIT), 10, 'the last accepted value');
+    await sleep(5100); await t.live.edit(SOIL_EDIT, 50); eq(t.store.get(SOIL_EDIT), 50, 'accepted after the window');
+    await Promise.all(Array.from({ length: 11 }, (_, i) => t.live.edit(SOIL_EDIT, 60 + i))); eq(ncbCount(t, LIVE_COPY.editRate), 1, 'still within 10 s of the first message');
+    await sleep(10100); await Promise.all(Array.from({ length: 12 }, (_, i) => t.live.edit(SOIL_EDIT, 20 + i))); eq(ncbCount(t, LIVE_COPY.editRate), 2, 'a second message after 10 s');
+    t.live.close();
+  });
+
+  await check('edit · src edit events without rid apply (state, clock) and never wait in holding', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId;
+    t.mock.edit(sid, 'state', { path: 'lamp.brightness', value: 0.4, ms: 0 }); await settle();
+    eq(t.store.get('lamp.brightness'), 0.4);
+    t.mock.edit(sid, 'clock', { iso: '2026-11-08T22:30:00', label: 'Fri 22:30', hour: 22.5 }); await sleep(900);
+    eq(t.find('ui', 'status'), ['Fri 22:30']); eq(lastClock(t).label, 'Fri 22:30'); eq(t.store.get('env.hour'), 22.5);
+    t.live.close();
+  });
+
+  await check('edit · a src edit event applies even with a request id nobody holds', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId;
+    t.mock.push(sid, 'state', { path: 'soil.moisture', value: 31, ms: 0, src: 'edit', rid: 'r9' }); await settle();
+    eq(t.store.get(SOIL_EDIT), 31, 'a stray rid with src edit still applies'); t.live.close();
+  });
+
+  const ruleRow = { at: 'Sat 07:00', text: 'Pump on', ok: true, kind: 'rule', origin: 'rule', device: 'pump' };
+  const justs = (t) => t.log.filter((e) => e[0] === 'panel' && e[1] === 'mark' && e[3] === 'just').length;
+  await check('edit · a rule fire outside a request is a chat line and marks JUST SET (rule and schedule, not held)', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId;
+    t.mock.edit(sid, 'timeline', ruleRow); await settle();
+    eq(t.find('view', 'ruleLine'), [{ at: 'Sat 07:00', text: 'Pump on', ok: true, kind: 'rule', origin: 'rule' }]);
+    ok(t.has('panel', 'mark', 'pump', 'just'), 'JUST SET');
+    const m0 = justs(t);
+    t.mock.edit(sid, 'timeline', { ...ruleRow, origin: 'held', ok: true }); t.mock.edit(sid, 'timeline', { ...ruleRow, ok: false });
+    t.mock.edit(sid, 'timeline', { ...ruleRow, device: undefined }); await settle();
+    eq(count(t, 'view', 'ruleLine'), 4, 'every row shows');
+    eq(justs(t), m0, 'no JUST SET for held, failed or deviceless rows');
+    t.mock.edit(sid, 'timeline', { ...ruleRow, origin: 'schedule', kind: 'action' }); await settle();
+    eq(justs(t), m0 + 1, 'schedule marks');
+    t.live.close();
+  });
+
+  await check('edit · a rule fire during a request goes to the checklist timeline', async () => {
+    const t = await harness({ mock: movieMock(...OPEN_RUN), entered: true }), sid = t.live.sessionId;
+    await toPlan(t, MOVIE); await t.card.approve(); await waitFor(() => t.live.phase === 'running');
+    t.mock.push(sid, 'timeline', { ...ruleRow, src: 'edit', rid: 'r1' }); await settle();
+    eq(t.find('checklist', 'timeline'), [{ at: 'Sat 07:00', text: 'Pump on', ok: true, kind: 'rule', origin: 'rule' }]); eq(count(t, 'view', 'ruleLine'), 0, 'no chat line');
+    ok(t.has('panel', 'mark', 'pump', 'just'), 'JUST SET');
+    t.live.close();
+  });
+
+  await check('clock · enabled only while idle', async () => {
+    const t = await harness({ entered: true });
+    eq(lastClock(t).enabled, true, 'after enter'); eq(lastClock(t).label, 'Fri 16:30');
+    await toPlan(t, MOVIE); eq(lastClock(t).enabled, false, 'planning / awaiting'); eq(lastClock(t).reason, LIVE_COPY.clockBusy);
+    await t.card.approve(); await waitFor(() => count(t, 'view', 'endCard') === 1);
+    eq(lastClock(t).enabled, true, 'after done'); t.live.exit(); eq(lastClock(t).enabled, false, 'after exit'); t.live.close();
+  });
+
+  await check('clock · advance stays disabled until it answers', async () => {
+    const t = await harness({ entered: true }), n0 = count(t, 'ui', 'clock');
+    const p = t.live.advance(6); eq(lastClock(t).enabled, false, 'at once');
+    await t.live.advance(1); eq(postsTo(t.mock, /\/advance$/).length, 1, 'a second advance while one runs is ignored');
+    await p; eq(lastClock(t).enabled, true, 'after the answer'); eq(lastClock(t).label, 'Fri 22:30'); ok(count(t, 'ui', 'clock') > n0);
+    eq(postsTo(t.mock, /\/advance$/)[0].body, { hours: 6 }); t.live.close();
+  });
+
+  await check('clock · advance refused (busy) says nothing extra and re-enables; rate says editRate; 401 asks for the code', async () => {
+    const t = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(409, { error: 'busy', message: 'A request is already running.' })), entered: true });
+    const n0 = count(t, 'view', 'ncb'); await t.live.advance(6); eq(count(t, 'view', 'ncb'), n0, 'no chat line'); eq(lastClock(t).enabled, true);
+    const u = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(429, { error: 'rate', message: 'Too many.' })), entered: true });
+    await u.live.advance(6); ok(u.has('view', 'ncb', LIVE_COPY.editRate), 'editRate'); eq(lastClock(u).enabled, true);
+    const v = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(401, { error: 'unauthorized', message: 'No.' })), entered: true });
+    await v.live.advance(6); await settle(); eq(accessCount(v), 2, '401 asks for the code again');
+    t.live.close(); u.live.close(); v.live.close();
+  });
+
+  await check('edit · editing on in live mode, off after exit; the new copy is there', async () => {
+    const t = await harness({ entered: true }); eq(t.find('ui', 'editing'), [true]);
+    t.live.exit(); eq(t.find('ui', 'editing'), [false]); t.live.close();
+    eq([LIVE_COPY.editRejected, LIVE_COPY.editRate, LIVE_COPY.clockBusy, LIVE_COPY.clockPlus1, LIVE_COPY.clockPlus6, LIVE_COPY.clockSet, LIVE_COPY.clockGo, LIVE_COPY.ruleFired, LIVE_COPY.ruleHeld, LIVE_COPY.scheduled],
+      ["That change didn't go through, so the card is back to the room's value.", "That's a lot of changes at once. Slow down a little.", 'The clock moves again when this request is done.', '+1 h', '+6 h', 'Set time…', 'Go', 'Rule fired', 'Rule held back', 'Scheduled']);
   });
 }

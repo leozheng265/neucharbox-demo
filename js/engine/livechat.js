@@ -249,6 +249,12 @@ export function createLiveView({ chat, scene }) {
   return {
     user: (text) => { sayEl = null; chat.user(text); },
     ncb: (text) => chat.ncb(text),
+    // A rule or schedule that fired (or was held back) outside a request: one status line in the chat.
+    ruleLine({ at, text, kind, origin }) {
+      const head = origin === 'held' ? LIVE_COPY.ruleHeld : kind === 'notify' ? '📩' : origin === 'schedule' ? LIVE_COPY.scheduled : LIVE_COPY.ruleFired;
+      const node = parse(`<div class="msg ncb rule" role="status">${esc(`${head} · ${at} · ${text}`)}</div>`);
+      sayEl = null; mount(node);
+    },
     chips(texts, onPick, heading) {
       if (!texts.length) return;
       chat.chips(texts.map((chip) => ({ chip })), (p) => onPick(p.chip), { heading });
