@@ -158,8 +158,9 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
         el._show = show;
         el.oninput = () => { el._at = now(); show(); };
         el.onchange = () => { el._at = now(); show(); const v = Math.round((Number(el.value) / e.scale) * 1e6) / 1e6; if (onEditCb) onEditCb(e.path, v); };
-        const rest = () => { el._drag = false; setTimeout(() => { if (editing) render(store.state); }, 0); }; // after the release's own `change`
-        el.onpointerdown = () => { el._drag = true; addEventListener('pointerup', rest, { once: true }); addEventListener('pointercancel', rest, { once: true }); };
+        const rest = () => { el._drag = false; removeEventListener('pointerup', rest, true); removeEventListener('pointercancel', rest, true); setTimeout(() => { if (editing) render(store.state); }, 0); }; // after the release's own `change`
+        // Capture phase: the controls' box stops pointerup from bubbling, so a bubbling listener would never hear a release.
+        el.onpointerdown = () => { el._drag = true; addEventListener('pointerup', rest, true); addEventListener('pointercancel', rest, true); };
         el.onblur = rest;
       } else {
         el = document.createElement('button'); el.type = 'button'; el.className = 'sw edit-sw'; el.setAttribute('role', 'switch'); el.setAttribute('aria-checked', 'false');
@@ -174,8 +175,10 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     // otherwise) is kept by hand: the strip doesn't scroll away from a slider being dragged.
     for (const ev of ['click', 'keyup', 'pointerup']) box.addEventListener(ev, (x) => x.stopPropagation());
     box.addEventListener('keydown', (x) => { x.stopPropagation(); hand(); });
-    box.addEventListener('pointerdown', (x) => { x.stopPropagation(); handDown = true; hand(); addEventListener('pointerup', () => { handDown = false; hand(); }, { once: true }); });
+    const lift = () => { handDown = false; hand(); removeEventListener('pointerup', lift, true); removeEventListener('pointercancel', lift, true); };
+    box.addEventListener('pointerdown', (x) => { x.stopPropagation(); handDown = true; hand(); addEventListener('pointerup', lift, true); addEventListener('pointercancel', lift, true); });
     c.querySelector('.txt').appendChild(box); c._edits = box; c.classList.add('has-edits');
+    c.setAttribute('role', 'group'); c.setAttribute('aria-label', d.name); // button children are presentational: with controls inside, the card is a group (still tabbable; Enter/Space/click select)
   }
   function syncEdits(id, s, tone) {
     const c = cards[id]; if (!c._edits) return;
@@ -187,7 +190,9 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
       const { el } = c._ctls[i], v = Number(e.value), ok = Number.isFinite(v);
       el.disabled = off || !ok;
       if (e.kind === 'switch') { el.setAttribute('aria-checked', String(!!e.value)); el.classList.toggle('on', !!e.value); return; }
-      if (el._drag || (el.ownerDocument.activeElement === el && now() - (el._at || -Infinity) < 1200)) return;
+      if (el._drag) return;
+      const left = el.ownerDocument.activeElement === el ? 1200 - (now() - (el._at || -Infinity)) : 0;
+      if (left > 0) { clearTimeout(el._t); el._t = setTimeout(() => { if (editing && c._ctls) { c._ek = null; render(store.state); } }, left + 20); return; } // in use: look again when the window ends
       if (ok) { el.value = String(Math.round(v * e.scale * 1e6) / 1e6); el._show(v * e.scale); } // the text shows the store's value, which the input may have snapped to its step
     });
     c._ek = stale ? null : key;
@@ -197,7 +202,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     root.classList.toggle('editable', editing);
     for (const id of ids) {
       const c = cards[id];
-      if (c._edits) { c._edits.remove(); c._edits = c._ctls = c._ek = null; c.classList.remove('has-edits'); }
+      if (c._edits) { for (const { el } of c._ctls) clearTimeout(el._t); c._edits.remove(); c._edits = c._ctls = c._ek = null; c.classList.remove('has-edits'); c.setAttribute('role', 'button'); c.removeAttribute('aria-label'); }
       if (editing) buildEdits(id);
     }
     render(store.state);
