@@ -9,10 +9,10 @@ const parse = (label) => { const m = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+(\d
 const pad = (n) => String(n).padStart(2, '0');
 
 export function createClockCtl(el, { onAdvance }) {
-  el.innerHTML = `<span class="clk-label"></span><button type="button" class="clk-btn" data-h="1">${LIVE_COPY.clockPlus1}</button><button type="button" class="clk-btn" data-h="6">${LIVE_COPY.clockPlus6}</button><button type="button" class="clk-btn clk-set" aria-expanded="false">${LIVE_COPY.clockSet}</button>
+  el.innerHTML = `<span class="clk-label"></span><span class="clk-why" hidden></span><button type="button" class="clk-btn" data-h="1">${LIVE_COPY.clockPlus1}</button><button type="button" class="clk-btn" data-h="6">${LIVE_COPY.clockPlus6}</button><button type="button" class="clk-btn clk-set" aria-expanded="false">${LIVE_COPY.clockSet}</button>
     <span class="clk-pick" hidden><select class="clk-day" aria-label="Day"></select><input class="clk-time" type="time" step="900" aria-label="Time"><button type="button" class="clk-btn clk-go">${LIVE_COPY.clockGo}</button></span>`;
   const $ = (s) => el.querySelector(s);
-  const label = $('.clk-label'), set = $('.clk-set'), pick = $('.clk-pick'), day = $('.clk-day'), time = $('.clk-time'), go = $('.clk-go'), fixed = [...el.querySelectorAll('[data-h]')];
+  const label = $('.clk-label'), why = $('.clk-why'), set = $('.clk-set'), pick = $('.clk-pick'), day = $('.clk-day'), time = $('.clk-time'), go = $('.clk-go'), fixed = [...el.querySelectorAll('[data-h]')];
   let cur = null, enabled = false, reason = null, active = false, text = null;
 
   // Minutes from now to the chosen day + time (null if the time field is empty).
@@ -20,10 +20,14 @@ export function createClockCtl(el, { onAdvance }) {
   const refresh = () => {
     const mins = minutes();
     el.hidden = !(active && text);
-    for (const b of [...fixed, set]) { b.disabled = !enabled || (b === set && !cur); b.title = enabled ? '' : reason || ''; }
+    // Disabled for a request: the reason is text on the row, in place of the buttons (a title never shows on touch, and a
+    // disabled button can't be focused). Disabled for anything else (an advance, a reset): the buttons stay, greyed.
+    const note = !enabled && reason ? reason : '';
+    why.textContent = note; why.hidden = !note;
+    for (const b of [...fixed, set]) { b.hidden = !!note; b.disabled = !enabled || (b === set && !cur); }
     go.disabled = !enabled || mins == null || mins <= 0 || mins > MAX_MIN;
-    go.title = !enabled ? reason || '' : go.disabled ? 'Pick a time after the clock, within 7 days.' : '';
-    day.disabled = time.disabled = !enabled; pick.title = enabled ? '' : reason || '';
+    go.title = enabled && go.disabled ? 'Pick a time after the clock, within 7 days.' : '';
+    day.disabled = time.disabled = !enabled;
   };
   const fillDays = () => {
     const keep = day.value; day.textContent = '';

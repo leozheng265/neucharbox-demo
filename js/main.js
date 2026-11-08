@@ -24,7 +24,7 @@ const follow = () => `<nav class="social" aria-label="Follow NeuCharBox"><span c
 const darkThumb = (g) => { const m = /#([0-9a-f]{6})/i.exec(g || ''); if (!m) return false; const n = parseInt(m[1], 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 110; };
 
 function renderPicker() {
-  app.classList.remove('failed'); app.classList.add('picker-mode');
+  app.classList.remove('failed', 'live-edit'); app.classList.add('picker-mode');
   app.innerHTML = `
     <header class="top"><div class="logo"></div><div class="brand">NeuCharBox</div><div class="scene-name">Live demo</div><div class="spacer"></div>${follow()}</header>
     <main class="picker">
@@ -38,7 +38,7 @@ function renderPicker() {
 }
 
 async function mountScene(meta, gen) {
-  app.classList.remove('picker-mode', 'failed');
+  app.classList.remove('picker-mode', 'failed', 'live-edit');
   app.innerHTML = `
     <header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(meta.title)}</div><div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a>${follow()}</header>
     <nav class="beats" id="beats" aria-label="Demo steps">${BEATS.map(([id, label]) => `<button data-beat="${id}" disabled${id === 'recover' ? ' hidden' : ''}>${label}</button>`).join('')}</nav>
@@ -118,7 +118,9 @@ async function mountScene(meta, gen) {
   } });
 
   // The status dot turns red while the line reports a fault; the next status write clears it.
-  const setStatus = (text, bad) => { statusText.textContent = text; statusEl.classList.toggle('bad', !!bad); };
+  // The clock control already shows the time: a status line that is only the clock's label is dropped while it shows.
+  let clockOn = false, clockText = null;
+  const setStatus = (text, bad) => { if (clockOn && clockText && text === clockText) return; statusText.textContent = text; statusEl.classList.toggle('bad', !!bad); };
   const setBeats = ({ current, recoverHidden, skippable }) => {
     const idx = BEATS.findIndex((b) => b[0] === current);
     beatBtns.forEach((b, i) => {
@@ -154,8 +156,8 @@ async function mountScene(meta, gen) {
   live = base ? createLive({ scene, store, panel, base, view: createLiveView({ chat, scene }), ui: {
     alive: () => gen === mountGen, status: setStatus, beats: setBeats, track: (on) => panel.track(on), rewind: () => panel.rewind(),
     resetRoom: () => { room.reset?.(); R.clearMarkers(); }, baseline: () => flow.baseline,
-    editing: (on) => { panel.editable(on, { onEdit: (p, v) => live.edit(p, v) }); clockCtl.active(on); },
-    clock: (c) => clockCtl.render(c),
+    editing: (on) => { clockOn = !!on; app.classList.toggle('live-edit', !!on); panel.editable(on, { onEdit: (p, v) => live.edit(p, v) }); clockCtl.active(on); },
+    clock: (c) => { clockText = c?.label || null; clockCtl.render(c); },
     offerGuided: (h) => { chat.closeEnds(); chat.closeFailures(); if (flow.baseline) { store.restore(flow.baseline); room.reset?.(); R.clearMarkers(); } flow.offerChips(h); },
   } }) : null;
   beatBtns.forEach((b) => (b.onclick = () => flow.skipTo(b.dataset.beat)));
@@ -187,7 +189,9 @@ function showLoadFailure(e) {
     browser: ['3D view unavailable in this browser', 'Your browser can\'t show the 3D room.', 'This demo needs 3D graphics (WebGL 2) and a recent browser: Safari 16.4 or later, or a current Chrome, Edge or Firefox. If you\'re on one of those, 3D may be switched off or blocked on this device.'],
     bug: ['This scene could not load', 'This scene hit a bug and couldn\'t start.', 'That\'s a problem in this demo, not your device. Try again, or pick another scene.'],
   }[kind];
-  if (st) { st.textContent = T[0]; st.classList.add('bad'); }
+  const stt = document.getElementById('statusText'); // keeps the status row's other children (the clock control)
+  if (stt) stt.textContent = T[0]; else if (st) st.textContent = T[0];
+  st?.classList.add('bad');
   app.classList.add('failed'); // no empty room, dashboard or step bar: just the explanation
   if (!chatEl) return;
   chatEl.innerHTML = `<div class="chat-log"><div class="card end fail" role="alert"><h3>${T[1]}</h3>

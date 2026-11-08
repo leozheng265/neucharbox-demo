@@ -98,6 +98,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // The request: its id (null while the POST that starts it is in flight), the latest finished one (what a what-if
   // replays), the events held for that POST, the cards and checklist on screen, the card waiting for an answer and the
   // answer in flight, and a typed change waiting for its decline's `done`.
+  let requesting = false;     // a request or what-if is under way (the clock says why it waits only then)
+  let held = null;            // a request, what-if or reset picked during an advance: it goes when the advance ends
   let rid = null, lastRid = null, holding = null, card = null, replanCard = null, replanSteps = [], checklist = null;
   let waiting = null, answer = null, pendingText = null, reading = null, planningOn = false, ranStep = false, exitOnDone = false;
   const labels = new Map();   // callId → the call's label, for the status line when its result comes
@@ -111,7 +113,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // The clock control: usable only between requests (idle), while no advance runs, and while a session exists.
   const clockUi = () => {
     if (dead()) return;
-    const waitingOnRequest = ['planning', 'awaiting', 'running', 'busy'].includes(phase) && !!sessionId;
+    const waitingOnRequest = requesting && ['planning', 'awaiting', 'running', 'busy'].includes(phase) && !!sessionId;
     ui.clock?.({ label: clockLabel, enabled: phase === 'idle' && !advancing && !!sessionId, reason: waitingOnRequest ? LIVE_COPY.clockBusy : null });
   };
   const setPhase = (p) => { phase = p; clockUi(); };
@@ -138,13 +140,13 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   }
 
   // ---- room ----
-  function setClock(c, { instant = false } = {}) {
+  function setClock(c, { instant = false, status = true } = {}) {
     if (!isObj(c) || !finite(c.hour)) return;
     const cur = Number(store.get('env.hour')) || 0, t = now();
     const ms = instant || c.hour < cur ? 0 : Math.min(800, Math.max(0, t - lastClockAt));
     lastClockAt = t; store.tween('env.hour', c.hour, ms);
     if (typeof c.label === 'string') { clockLabel = c.label; clockUi(); }
-    if (!instant && typeof c.label === 'string') ui.status(c.label); // a room or a reset sets the clock without taking the status line
+    if (!instant && status && typeof c.label === 'string') ui.status(c.label); // a room, a reset, a hand edit or an advance sets the clock without taking the status line
   }
 
   // The server's whole room, merged per field onto the post-setup snapshot (room-only fields keep their values).
@@ -154,7 +156,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     ui.resetRoom(); known.clear();
     if (isObj(state)) {
       for (const [id, slice] of Object.entries(state)) {
-        if (isObj(slice)) for (const [field, value] of Object.entries(slice)) { const p = `${id}.${field}`; if (writable(p)) store.set(p, value); }
+        if (isObj(slice)) for (const [field, value] of Object.entries(slice)) { const p = `${id}.${field}`; if (writable(p)) { store.set(p, value); known.set(p, value); } }
       }
     }
     setClock(clock, { instant: true });
@@ -229,7 +231,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         if (isWhatIf) beat('recover');
         break;
       case 'clock': setClock(d); break;
-      case 'timeline': checklist?.timeline({ at: str(d.at), text: str(d.text), ok: okOf(d), kind: d.kind }); break;
+      case 'timeline': checklist?.timeline({ at: str(d.at), text: str(d.text), ok: okOf(d), kind: d.kind, origin: d.origin }); break;
       case 'replan': // its ids are final (contract): approving merges them into the checklist
         replanSteps = stepsOf(d.steps);
         replanCard = planCard({ kind: 'replan', steps: replanSteps, reason: str(d.reason) });
@@ -256,7 +258,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   function applyEdit({ event: k, data: d }) {
     if (gone()) return;
     if (k === 'state') return applyState(d);
-    if (k === 'clock') return setClock(d);
+    if (k === 'clock') return setClock(d, { status: false });
     if (k !== 'timeline') return;
     const row = { at: str(d.at), text: str(d.text), ok: okOf(d), kind: d.kind, origin: d.origin };
     if (rid !== null && d.rid === rid && checklist) checklist.timeline(row); else view.ruleLine(row);
@@ -269,7 +271,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (planningOn) { planningOn = false; view.planning(false); }
     if (finite(d.remainingToday)) remainingToday = d.remainingToday;
     waiting?.close(); // a card still waiting (the request ended under it) takes no more answers
-    card = replanCard = checklist = waiting = null;
+    card = replanCard = checklist = waiting = null; requesting = false;
     if (exitOnDone) { exitOnDone = false; return exit(); } // the kill switch tripped mid-run
     const out = d.outcome;
     if (out === 'ok' || out === 'failed' || out === 'limit') {
@@ -286,7 +288,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   // The end card's buttons (the view disables them all when one is pressed). Each acts only between requests.
   const endActions = () => ({
-    onAnother: () => { if (gone() || phase !== 'idle') return; isWhatIf = false; beat('ask'); ui.status(LIVE_COPY.statusWaiting(n)); view.input(true); },
+    onAnother: () => { if (gone() || phase !== 'idle') return; isWhatIf = false; beat('ask'); ui.status(LIVE_COPY.statusWaiting(n)); if (!advancing) view.input(true); }, // an advance gives the input back itself
     onWhatIf: () => {
       if (gone() || phase !== 'idle' || !lastRid) return;
       view.failures(devices.map((id) => ({ key: id, icon: scene.devices[id].icon, name: scene.devices[id].name })), whatIf);
@@ -349,7 +351,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     for (const ev of held) if (ev.data.rid === rid && !gone()) handle(ev);
     return true;
   }
-  const backToIdle = () => { setPhase('idle'); ui.track(false); view.input(true); ui.status(LIVE_COPY.statusWaiting(n)); };
+  const backToIdle = () => { requesting = false; setPhase('idle'); ui.track(false); view.input(true); ui.status(LIVE_COPY.statusWaiting(n)); };
   const closeEnd = () => { ended?.close?.(); ended = null; };
   const limited = (line, off = false) => { if (off) available = false; view.ncb(line); exit(); };
 
@@ -359,7 +361,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (t.length > 400) { view.ncb(LIVE_COPY.tooLong); return; } // UTF-16 units, as the server counts
     if (phase === 'awaiting') return respond(waiting, 'decline', t); // a typed change: decline quietly, then plan this
     if (phase !== 'idle') return;                                   // one request at a time
-    begin(); setPhase('busy'); isWhatIf = false;
+    if (advancing) { held = () => submit(t); return; }              // the server is busy with the advance: send it when that ends
+    begin(); requesting = true; setPhase('busy'); isWhatIf = false;
     view.closeChips(); // an old "Try:" or cannot_do chip can't start a second request
     view.input(false); view.user(t); ui.status(LIVE_COPY.planning); ui.track(true);
     planningOn = true; view.planning(true); // "Planning…" at once (spec 3.3), not when the server's event arrives
@@ -371,7 +374,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         if (k === 'code_limit') return limited(LIVE_COPY.limitCode);
         if (k === 'global_limit' || k === 'budget') return limited(LIVE_COPY.limitGlobal, k === 'budget');
         if (k === 'live_off') return limited(LIVE_COPY.offline, true); // switched off, or no NeuChar key: not a limit
-        if (k === 'no_session' && !retried) { if ((await newSession({ notice: LIVE_COPY.timedOut })) && !gone()) { planningOn = true; view.planning(true); continue; } return; }
+        if (k === 'no_session' && !retried) { if ((await reopen()) && !gone()) { planningOn = true; view.planning(true); continue; } return; }
         if (planningOn) { planningOn = false; view.planning(false); }
         view.ncb(k === 'too_long' ? LIVE_COPY.tooLong : LIVE_COPY.error);
         return backToIdle();
@@ -382,8 +385,9 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // "What if something fails?" on an end card: the latest finished request, replayed with `id` failing.
   async function whatIf(id) {
     if (gone() || phase !== 'idle' || !lastRid || !isDevice(id)) return;
+    if (advancing) { held = () => whatIf(id); return; }
     view.user(LIVE_COPY.whatIfAsk(refOf(scene, id), !!scene.devices[id].plural));
-    begin(); isWhatIf = true; setPhase('busy'); ranStep = true; // its Run beat is now
+    begin(); requesting = true; isWhatIf = true; setPhase('busy'); ranStep = true; // its Run beat is now
     view.input(false); ui.rewind(); ui.status(REPLAYING); ui.track(true); beat('run');
     try { await start(() => api.whatIf(sessionId, lastRid, id)); } catch (e) {
       if (gone()) return;
@@ -400,6 +404,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // "Reset room" on an end card. reset emits no event (contract), so its answer is the only source of the room.
   async function resetRoom() {
     if (gone() || phase !== 'idle') return;
+    if (advancing) { held = () => resetRoom(); return; }
     setPhase('busy'); view.input(false);
     let r;
     try {
@@ -437,22 +442,24 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       if (kindOf(e) === 'rate') sayRate(); else view.ncb(LIVE_COPY.editRejected);
       return;
     }
-    if (!gone() && sid === sessionId) known.set(path, value);
   }
 
   async function advance(hours) {
     if (gone() || !sessionId || phase !== 'idle' || advancing) return;
     const sid = sessionId;
-    advancing = true; clockUi();
+    advancing = true; clockUi(); view.input(false); // the server answers 409 busy to a request, what-if or reset meanwhile: hold those
     try {
       const r = await api.advance(sid, hours);
-      if (!gone() && sid === sessionId) setClock(r?.clock);
+      if (!gone() && sid === sessionId) setClock(r?.clock, { status: false });
     } catch (e) {
       if (gone() || sid !== sessionId) return;
       if (status(e) === 401) unauthorized();
       else if (kindOf(e) === 'no_session') regenerate();
       else if (kindOf(e) === 'rate') sayRate();
-    } finally { advancing = false; clockUi(); }
+    } finally {
+      advancing = false; clockUi();
+      if (!gone() && sid === sessionId && phase === 'idle') { view.input(true); const h = held; held = null; h?.(); }
+    }
   }
 
   // ---- the stream's status ----
@@ -485,7 +492,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // Forget the request on screen (a new session, a lost code, exit, close): late events and answers find nothing.
   function forget() {
     if (answer) answer.over = true;
-    rid = null; lastRid = null; holding = null; answer = null; pendingText = null; isWhatIf = false;
+    rid = null; lastRid = null; holding = null; answer = null; pendingText = null; held = null; isWhatIf = false; requesting = false;
     busy.clear(); begin();
   }
   // Makes a session and its stream. false when it failed (already handled) or the visit moved on.
@@ -511,9 +518,15 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   }
   const idle = () => { ui.status(LIVE_COPY.statusWaiting(n)); beat('ask'); setPhase('idle'); };
   // The session expired under the stream (or under a POST): a fresh room, and the visitor can go on.
-  async function regenerate() {
-    setPhase('busy');
-    if (await newSession({ notice: LIVE_COPY.timedOut })) { ui.track(false); view.input(true); idle(); }
+  // One at a time: a stream 'gone', a failed edit and a failed request can all find the session expired together.
+  let opening = null, regenerating = null;
+  const reopen = () => (opening ??= newSession({ notice: LIVE_COPY.timedOut }).finally(() => { opening = null; }));
+  function regenerate() {
+    if (regenerating) return regenerating;
+    requesting = false; setPhase('busy');
+    return (regenerating = (async () => {
+      if (await reopen()) { ui.track(false); view.input(true); idle(); }
+    })().finally(() => { regenerating = null; }));
   }
   // A POST sessions that failed (or answered nonsense).
   function failed(e) {

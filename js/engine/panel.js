@@ -136,6 +136,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   // units. A switch reports !on on click. The controls never select the card: they stop click, pointer and key events.
   let onEditCb = null, editing = false;
   const OFFTONES = ['offline', 'bad', 'busy'];
+  const KEY_MS = 400;
   const decimals = (e) => (e.step * e.scale < 1 ? 1 : 0);
   const showVal = (e, v) => `${(Math.round(v * e.scale * 10 ** decimals(e)) / 10 ** decimals(e)).toFixed(decimals(e))}${e.unit || ''}`;
   const fieldOf = (e) => e.label || e.path.split('.').slice(1).join('.');
@@ -157,11 +158,15 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
         const show = (shown = Number(el.value)) => { const n = Number(el.value); val.textContent = showVal(e, shown / e.scale); el.setAttribute('aria-valuetext', val.textContent); el.style.setProperty('--fill', `${((n - el.min) / (el.max - el.min)) * 100}%`); };
         el._show = show;
         el.oninput = () => { el._at = now(); show(); };
-        el.onchange = () => { el._at = now(); show(); const v = Math.round((Number(el.value) / e.scale) * 1e6) / 1e6; if (onEditCb) onEditCb(e.path, v); };
+        // A pointer release reports at once. Chrome also fires `change` on every arrow press, so a key-driven change waits
+        // until the keys stop (KEY_MS) or the slider loses focus: one edit for one adjustment, not one per step.
+        const send = () => { clearTimeout(el._kt); el._kt = 0; el._keyed = false; const v = Math.round((Number(el.value) / e.scale) * 1e6) / 1e6; if (onEditCb) onEditCb(e.path, v); };
+        el.onkeydown = (k) => { if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(k.key)) el._keyed = true; };
+        el.onchange = () => { el._at = now(); show(); if (el._keyed) { clearTimeout(el._kt); el._kt = setTimeout(send, KEY_MS); } else send(); };
         const rest = () => { el._drag = false; removeEventListener('pointerup', rest, true); removeEventListener('pointercancel', rest, true); setTimeout(() => { if (editing) render(store.state); }, 0); }; // after the release's own `change`
         // Capture phase: the controls' box stops pointerup from bubbling, so a bubbling listener would never hear a release.
         el.onpointerdown = () => { el._drag = true; addEventListener('pointerup', rest, true); addEventListener('pointercancel', rest, true); };
-        el.onblur = rest;
+        el.onblur = () => { rest(); if (el._kt) send(); };
       } else {
         el = document.createElement('button'); el.type = 'button'; el.className = 'sw edit-sw'; el.setAttribute('role', 'switch'); el.setAttribute('aria-checked', 'false');
         const lab = document.createElement('span'); lab.className = 'elab'; lab.textContent = e.label || fieldOf(e);
@@ -202,7 +207,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     root.classList.toggle('editable', editing);
     for (const id of ids) {
       const c = cards[id];
-      if (c._edits) { for (const { el } of c._ctls) clearTimeout(el._t); c._edits.remove(); c._edits = c._ctls = c._ek = null; c.classList.remove('has-edits'); c.setAttribute('role', 'button'); c.removeAttribute('aria-label'); }
+      if (c._edits) { for (const { el } of c._ctls) { clearTimeout(el._t); clearTimeout(el._kt); } c._edits.remove(); c._edits = c._ctls = c._ek = null; c.classList.remove('has-edits'); c.setAttribute('role', 'button'); c.removeAttribute('aria-label'); }
       if (editing) buildEdits(id);
     }
     render(store.state);
