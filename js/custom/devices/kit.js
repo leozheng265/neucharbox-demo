@@ -4,6 +4,9 @@
 
 export const HEX = { green: 0x2FBF71, red: 0xE0563A, amber: 0xFFB020, blue: 0x3AB7FF, off: 0x2E3337 };
 
+// The colours a light device can take (the catalog's `color` enum), as hex.
+export const LIGHT_HEX = { white: 0xFFFFFF, warm: 0xFFB46B, blue: 0x3A8CFF, purple: 0x8A5CFF, red: 0xFF3A3A, green: 0x3AE07A };
+
 export const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0); // null, NaN and text read as 0
 export const clamp01 = (v) => Math.min(1, Math.max(0, num(v)));
 export const pct = (v) => Math.round(clamp01(v) * 100); // a 0–1 field as a whole percent
@@ -50,6 +53,15 @@ export function statusLed(THREE, parent, { at = [0, 0, 0], r = 0.007, mesh = nul
       else paint(hex, st === 'busy' ? level * (0.55 + 0.45 * Math.sin(t * 6)) : level);
     },
   };
+}
+
+// A light device's real light: a point light added to `parent` at `at`, dark until the model sets its intensity. No
+// shadows (each is six cube renders a frame), and room3d.js gives only LIGHT_BUDGET lit lights at a time a slot
+// (a model finds its lights by walking its root for lights). Intensity ~2–3 at full for a lamp; `distance` how far it reaches.
+export function pointLight(THREE, parent, at, { hex = 0xFFCF98, distance = 6, decay = 1.7 } = {}) {
+  const L = new THREE.PointLight(hex, 0, distance, decay);
+  L.position.set(...at); L.castShadow = false; parent.add(L);
+  return L;
 }
 
 // One mesh from several siblings (their transforms in their common parent baked in), in `material`: one draw call

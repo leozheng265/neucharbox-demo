@@ -22,6 +22,7 @@ import elder from './elder.js';
 import creator from './creator.js';
 import lab from './lab.js';
 import warehouse from './warehouse.js';
+import living from './living.js';
 
 function merge(...files) {
   const out = {};
@@ -32,4 +33,4 @@ function merge(...files) {
   return Object.freeze(out);
 }
 
-export const DEVICE_UI = merge(home, elder, creator, lab, warehouse);
+export const DEVICE_UI = merge(home, elder, creator, lab, warehouse, living);

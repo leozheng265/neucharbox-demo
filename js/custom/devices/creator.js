@@ -1,7 +1,7 @@
 // The Creator desk types' card UI and 3D models for the custom room (contract: devices/index.js). Their look follows the
 // creator scene (js/scenes/creator.js): a softbox on a stand, a camera on a tripod, a boom mic, a capture card, the
 // overlay app on a monitor, the on-air sign and an LED strip. Each stands, hangs or mounts on its own with a status LED.
-import { HEX, num, clamp01, pct, statusLed } from './kit.js';
+import { HEX, num, clamp01, pct, statusLed, pointLight } from './kit.js';
 
 const STRIP = { white: 0xFFFFFF, warm: 0xFFB46B, blue: 0x3A8CFF, purple: 0x8A5CFF, red: 0xFF3A3A, green: 0x3AE07A };
 const level = (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : r >= 100 ? 'full' : `${r}%`; };
@@ -29,13 +29,14 @@ export default {
       const ctl = P.box(0.045, 0.07, 0.035, M.white, 0, 1.1, 0.0, 0.004);
       const root = P.group(base, pole, arm, box, ctl);
       const led = statusLed(THREE, root, { at: [0, 1.118, 0.019], r: 0.007 });
+      const light = pointLight(THREE, root, [0, 1.6, 0.4], { hex: 0xFFF6E8 }); // in front of the panel, so it lights the room it faces
       const WARM = new THREE.Color(0xFFB46B), COOL = new THREE.Color(0xDDEBFF), tmp = new THREE.Color();
       let shown = '';
       return {
         root,
         update(s, t) {
           const b = clamp01(s.brightness), k = clamp01((num(s.kelvin) - 2700) / 3800), key = `${b.toFixed(3)}|${k.toFixed(3)}`;
-          if (key !== shown) { shown = key; tmp.lerpColors(WARM, COOL, k); panelMat.emissive.copy(tmp); panelMat.emissiveIntensity = b * 1.6; }
+          if (key !== shown) { shown = key; tmp.lerpColors(WARM, COOL, k); panelMat.emissive.copy(tmp); panelMat.emissiveIntensity = b * 1.6; light.color.copy(tmp); light.intensity = b * 2.4; }
           led.set(s, t);
         },
       };

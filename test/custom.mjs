@@ -314,6 +314,44 @@ export async function customChecks({ report, guardHits }) {
     eq(meshes, 0, 'no device meshes left in the scene');
   }));
 
+  await check('room3d · the light budget goes to lit lights, and every light type lights the room', need(ui, r3)(async ({ eq, ok }) => {
+    const { THREE, R, room } = await room3dOn();
+    const { emptyLayout, addDevice } = lay, { DEVICE_UI } = ui;
+    const lightsOf = (id) => { const l = []; room.objectFor(id).traverse((x) => { if (x.isLight) l.push(x); }); return l; };
+    const visibleCount = () => { let n = 0; R.scene.traverse((o) => { if (o.isPointLight && o.visible) n++; }); return n; };
+    const withState = (on) => { const st = { env: { hour: 20 }, hub: { status: 'online', led: 1 }, plan: {} }; for (const id of on) st[id] = { brightness: 1, status: 'online' }; return st; };
+    let L = emptyLayout(); for (let i = 0; i < 5; i++) L = addDevice(L, 'floor_lamp', DEVICE_UI.floor_lamp.size).layout;
+    room.sync(L); eq(r3.LIGHT_BUDGET, 4, 'the budget');
+    room.update(withState([]), 1);
+    ok(!lightsOf('floor_lamp_5')[0].visible && visibleCount() === 4, 'all dark: the first four in layout order hold the slots');
+    room.update(withState(['floor_lamp_5']), 2);
+    ok(lightsOf('floor_lamp_5')[0].visible && lightsOf('floor_lamp_5')[0].intensity > 0, 'only the fifth is on: it gets a slot');
+    eq(visibleCount(), 4, 'the number of visible lights stays at the budget');
+    room.update(withState(['floor_lamp_5', 'floor_lamp_2']), 3);
+    ok(lightsOf('floor_lamp_5')[0].visible && lightsOf('floor_lamp_2')[0].visible && visibleCount() === 4, 'two on: both lit, still four');
+    room.update(withState(['floor_lamp', 'floor_lamp_2', 'floor_lamp_3', 'floor_lamp_4', 'floor_lamp_5']), 4);
+    eq(visibleCount(), 4, 'all five on: still four');
+    ok(lightsOf('floor_lamp')[0].visible && !lightsOf('floor_lamp_5')[0].visible, 'all lit: layout order decides');
+    room.update(withState([]), 5); eq(visibleCount(), 4, 'back to dark: still four');
+    // visible flags change only when the set of lit lights changes
+    const flips = []; for (const id of ['floor_lamp', 'floor_lamp_5']) { const l = lightsOf(id)[0]; let v = l.visible; Object.defineProperty(l, 'visible', { get: () => v, set: (x) => { if (x !== v) flips.push(id); v = x; } }); }
+    for (let f = 0; f < 20; f++) room.update(withState(['floor_lamp_5']), 6 + f / 30);
+    eq(flips.length, 1, `one change when the 5th goes on, none after (flips: ${flips})`);
+    // every light-type device carries a point light that follows its brightness
+    const kinds = ['floor_lamp', 'night_light', 'hall_light', 'key_light', 'ceiling_light', 'colour_bulb'];
+    let K = emptyLayout(); for (const type of kinds) K = addDevice(K, type, DEVICE_UI[type].size).layout;
+    room.sync(K);
+    for (const type of kinds) {
+      const ls = lightsOf(type); ok(ls.length === 1 && ls[0].isPointLight, `${type}: one point light`);
+      room.update({ env: { hour: 20 }, hub: { status: 'online' }, [type]: { ...cat.typeOf(type).initial, brightness: 0, status: 'online' } }, 20);
+      eq(ls[0].intensity, 0, `${type}: dark at brightness 0`);
+      room.update({ env: { hour: 20 }, hub: { status: 'online' }, [type]: { ...cat.typeOf(type).initial, brightness: 1, status: 'online' } }, 21);
+      ok(ls[0].intensity > 0.3, `${type}: lights the room at full (${ls[0].intensity})`);
+    }
+    room.update({ env: { hour: 20 }, hub: { status: 'online' }, colour_bulb: { brightness: 1, color: 'green', status: 'online' } }, 22);
+    ok(lightsOf('colour_bulb')[0].color.g > lightsOf('colour_bulb')[0].color.r, 'the colour bulb lights in its colour');
+  }));
+
   await check('scene · sceneFor names and orders devices', need(ui, sc)(({ eq, ok }) => {
     const { emptyLayout, addDevice } = lay;
     let L = emptyLayout(); for (const type of ['floor_lamp', 'floor_lamp', 'blinds']) L = addDevice(L, type).layout;

@@ -20,9 +20,18 @@ import { mergeMeshes } from './devices/kit.js';
 import { START_HOUR } from './scene.js';
 
 const HX = ROOM.w / 2, HZ = ROOM.d / 2;
-// Real point lights in the room at once, in layout order. A lamp past the budget still glows (shade and bulb) but
-// lights nothing: twenty point lights in every lit fragment would not stay smooth on a phone.
+// Real point lights in the room at once. Lit lights take the slots first (in layout order), then dark ones fill what is
+// left; a light past the budget still glows (shade and bulb) but lights nothing: twenty point lights in every lit
+// fragment would not stay smooth on a phone. The count of visible lights stays at the budget (a change in it would
+// recompile every material), and the slots are only re-dealt when the set of lit lights changes, not every frame.
 export const LIGHT_BUDGET = 4;
+// Which of `lights` (in layout order, each with an intensity) get a slot: the lit ones first, then dark ones up to the budget.
+export function dealLights(lights, budget = LIGHT_BUDGET) {
+  const out = new Set(); let n = 0;
+  for (const L of lights) if (L.intensity > 0.001 && n < budget) { out.add(L); n++; }
+  for (const L of lights) if (n < budget && !out.has(L)) { out.add(L); n++; }
+  return out;
+}
 // How light it is outside at an hour, 0 (night) to 1 (midday), with a little left at dawn and dusk: the renderer's
 // daylight() curve, for the parts of a model that show the sky.
 export function skyAt(hour) {
@@ -59,6 +68,14 @@ export function createRoom3d({ R, P, M, THREE }) {
   })();
 
   const objs = new Map(); // id → { type, holder, root, model, lights, idle, hi, shells, cut }
+  let order = [], litKey = null; // the layout's device ids in order; what the slots were last dealt for
+  function dealSlots() {
+    const lights = []; let key = '';
+    for (const id of order) for (const L of objs.get(id)?.lights ?? []) { lights.push(L); key += L.intensity > 0.001 ? '1' : '0'; }
+    if (key === litKey) return;
+    litKey = key;
+    const give = dealLights(lights); for (const L of lights) L.visible = give.has(L);
+  }
 
   function add(d, ui) {
     const model = ui.model({ THREE, P, M });
@@ -92,13 +109,13 @@ export function createRoom3d({ R, P, M, THREE }) {
     hub.root.position.set(layout.hub.x, 0, layout.hub.z);
     const want = new Map(layout.devices.map((d) => [d.id, d]));
     for (const [id, o] of [...objs]) if (want.get(id)?.type !== o.type) drop(id);
-    let lit = 0;
+    order = [];
     for (const d of layout.devices) {
       const t = typeOf(d.type), ui = DEVICE_UI[d.type]; if (!t || !ui) continue;
       const o = objs.get(d.id) || add(d, ui);
-      place(o, d, t.mount, ui);
-      for (const L of o.lights) L.visible = lit++ < LIGHT_BUDGET;
+      place(o, d, t.mount, ui); order.push(d.id);
     }
+    litKey = null; dealSlots();
   }
 
   // A tapped device's highlight pulse (parts.js highlighter), made on its first focus: its shells are a second mesh per
@@ -123,6 +140,7 @@ export function createRoom3d({ R, P, M, THREE }) {
         const s = state?.[id] || (o.idle ||= { ...typeOf(o.type).initial, status: 'online' });
         o.model.update(s, t, env); pulse(o);
       }
+      dealSlots();
     },
     reset() { for (const o of [hub, ...objs.values()]) if (o.hi) { o.cut = true; for (const s of o.shells) s.visible = false; } },
     objectFor: (id) => (id === 'hub' ? hub.root : objs.get(id)?.holder ?? null),
