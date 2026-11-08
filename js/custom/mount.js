@@ -32,6 +32,7 @@ const NOTICE_MS = 4500;
 const safeStorage = () => { try { return globalThis.localStorage ?? null; } catch { return null; } };
 
 export async function mountCustom({ app, isCurrent, setCurrent }) {
+  if (!isCurrent()) return; // this module arrived after the visitor routed elsewhere: their page stays as it is
   app.classList.remove('picker-mode', 'failed');
   app.innerHTML = `
     <header class="top custom-top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(C.cardTitle)}</div>
@@ -136,12 +137,14 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     };
     // A live session for this room (controller.done with a new device list).
     function makeLive(sc, devices) {
+      // The last panel goes first, before the store changes: its render reads every device it was made for, and restore
+      // drops the slices of devices that left (a TypeError in it would leave done() with no live). Its DOM listeners go
+      // with its element, which a fresh one replaces.
+      for (const off of panelSubs) off(); panelSubs = []; panel = null;
+      const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh;
       scene = sc;
       R.clearMarkers(); room3d.reset();
       store.restore(initialFor(sc)); baseline = store.snapshot();
-      // A fresh panel element and store subscriptions each time: the last panel's listeners and renders go with them.
-      for (const off of panelSubs) off(); panelSubs = [];
-      const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh;
       const scoped = { ...store, subscribe: (fn) => { const off = store.subscribe(fn); panelSubs.push(off); return off; } };
       panel = createPanel(panelEl, sc, scoped, { onSelect: ping });
       chatLog.replaceChildren(); chat.enableInput(false); chat.live(false);

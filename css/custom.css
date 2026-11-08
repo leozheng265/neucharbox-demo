@@ -82,16 +82,17 @@
   /* gate: the room, then the access card */
   .stage.custom[data-mode="gate"] { grid-template-rows: auto minmax(0, 1fr); }
   /* build: the room fills the stage above the collapsed sheet; the sheet opens over it */
-  .stage.custom[data-mode="build"] { display: block; position: relative; --peek: 164px; }
+  .stage.custom[data-mode="build"] { display: block; position: relative; --peek: 180px; }
   .stage.custom[data-mode="build"] .room { position: absolute; left: 0; right: 0; top: 0; bottom: calc(var(--peek) - 14px); }
   .stage.custom[data-mode="build"] .room canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   .stage.custom[data-mode="build"] .room .empty-note { top: 46%; }
   .empty-note .wide { display: none; } .empty-note .narrow { display: inline; }
   .stage.custom .inventory { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; height: var(--peek); border-radius: 16px 16px 0 0; box-shadow: 0 -6px 24px rgba(38,56,66,.14); border-top: 1px solid var(--line); transition: height .22s ease; overflow: hidden; }
   .stage.custom .inventory.open { height: min(60vh, calc(100% - 40px)); height: min(60dvh, calc(100% - 40px)); }
-  .inv-head { position: relative; padding: 16px 12px 8px; }
-  .inv-grip { display: block; position: absolute; left: 50%; top: 0; transform: translateX(-50%); width: 64px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; }
-  .inv-grip span { display: block; width: 40px; height: 4px; margin: 7px auto 0; border-radius: 4px; background: var(--line-2); }
+  /* the grip: the sheet's whole top strip, 32 px tall (a touch target), its thin bar centred in it */
+  .inv-head { flex-wrap: wrap; padding: 0 12px 8px; }
+  .inv-grip { display: grid; place-items: center; flex: 0 0 auto; width: calc(100% + 24px); height: 32px; margin: 0 -12px; padding: 0; border: 0; background: none; cursor: pointer; }
+  .inv-grip span { width: 40px; height: 4px; border-radius: 4px; background: var(--line-2); }
   .inv-grip:focus-visible span { background: var(--accent-a); }
   .inv-search { height: 40px; font-size: 16px; } /* 16 px: no zoom-in on focus in iOS Safari */
   /* collapsed: one row of tiles, scrolled sideways; no chips or foot */
