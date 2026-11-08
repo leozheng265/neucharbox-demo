@@ -98,6 +98,21 @@ try {
   soil._drag = true; store.set('soil.moisture', 40); ok(soil.value === '22', 'a slider mid-drag is not moved');
   soil._drag = false; store.set('soil.moisture', 41); ok(soil.value === '41', 'and follows again after');
 
+  // a real press and release (the controls stop pointerup from bubbling): the drag ends, the store lands on the slider
+  const rel = sliders('soil')[0];
+  rel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ok(rel._drag === true, 'pointerdown starts a drag');
+  rel.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); ok(rel._drag === false, 'a real pointerup ends the drag');
+  await new Promise((r) => setTimeout(r, 30));
+  store.set('soil.moisture', 55); ok(rel.value === '55', `after a real release a store update lands (got ${rel.value})`);
+  // a rejected edit's rollback inside the 1.2 s window of use still lands once the window ends
+  rel.focus(); rel.value = '10'; fire(rel, 'input'); fire(rel, 'change'); store.set('soil.moisture', 56);
+  ok(rel.value === '10', 'a write inside the window of use leaves the slider alone');
+  await new Promise((r) => setTimeout(r, 1400));
+  ok(rel.value === '56' && $('.eval', card('soil')).textContent === '56%', `after the window the slider shows the store value (got ${rel.value})`);
+  rel.blur();
+  // roles: a group with its name while editing, a button otherwise
+  ok($$('#panel .ent').filter((c) => c.classList.contains('has-edits')).every((c) => c.getAttribute('role') === 'group' && c.getAttribute('aria-label') && c.tabIndex === 0), 'edit mode: has-edits cards are role=group with aria-label, tabbable');
+
   // fault / offline / busy disable the controls
   store.set('lamp.status', 'fault');
   ok(card('lamp').classList.contains('bad') && sliders('lamp')[0].disabled, 'lamp fault disables its slider');
@@ -111,6 +126,7 @@ try {
   panel.editable(false);
   ok(!$('#panel input, #panel button, #panel .edits') && !$('.has-edits'), 'editable(false) removes the controls');
   ok(!$('#panel.editable'), 'panel class removed');
+  ok($$('#panel .ent').every((c) => c.getAttribute('role') === 'button' && !c.hasAttribute('aria-label')), 'edit off: role=button again, no aria-label');
   ok($$('#panel .ctl').filter((c) => !c.hidden).length >= 4, 'display bars/switches are back');
   ok($$('#panel .ent').every((c) => c.children.length === 3), 'cards have icon, text and badge again');
 
