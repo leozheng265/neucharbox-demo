@@ -21,7 +21,8 @@ import { createCustomController } from './controller.js';
 import { passGate } from './gate.js';
 import { sceneFor, initialFor, CAMERA } from './scene.js';
 import { createRoom3d } from './room3d.js';
-import { createInventory } from './inventory.js';
+import { createInventory, tileOrder } from './inventory.js';
+import { createThumbs } from './thumbs.js';
 import { createPlacement } from './placement.js';
 import { liveUiFor, createSessionWiring } from './liveui.js';
 
@@ -29,6 +30,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 const ORBIT_HINT = coarse ? 'drag · pinch · tap a device' : 'drag to orbit · scroll to zoom · right-drag to pan · tap a device';
 const NOTICE_MS = 4500;
+const THUMB_IDLE_MS = 60000; // build mode closed this long: the pictures' WebGL context goes (it is built again on return)
 // localStorage itself throws in some browsers with site data blocked; the layout and code stores then work in memory only.
 const safeStorage = () => { try { return globalThis.localStorage ?? null; } catch { return null; } };
 
@@ -59,12 +61,14 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   const storage = safeStorage(), codes = codeStore(), base = liveApiBase();
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots)
   const R = createRenderer($('room'), { camera: CAMERA, ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null;
+  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0;
+  const thumbsDone = new Set();
   const baselineRef = { current: null };
   let noticeTimer = 0, doneBusy = false, shownCanBuild = null, torn = false;
   const teardown = () => {
     if (torn) return; torn = true;
-    clearTimeout(noticeTimer);
+    clearTimeout(noticeTimer); clearTimeout(thumbTimer);
+    thumbs?.dispose();
     controller?.teardown(); placement?.dispose(); inventory?.dispose();
     wiring?.dispose();
     R.dispose();
@@ -109,12 +113,24 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     runBtn.onclick = finish;
     buildBtn.onclick = () => { if (controller?.mode === 'run') controller.toBuild(); };
 
+    // Each tile's icon gives way to a picture of the device's model (thumbs.js), type by type as they are drawn; where
+    // WebGL is missing the icons stay. Entering build mode again asks only for the types still without one.
+    function fillThumbs() {
+      clearTimeout(thumbTimer); thumbTimer = 0;
+      if (!inventory) return;
+      thumbs ||= createThumbs({ THREE: R.THREE, parts: partsMod });
+      for (const t of tileOrder()) {
+        if (thumbsDone.has(t.type)) continue;
+        thumbs.get(t.type).then((url) => { if (url && !torn) { thumbsDone.add(t.type); inventory.setThumb(t.type, url); } });
+      }
+    }
+
     function showMode(m) {
       stage.dataset.mode = m;
       invEl.hidden = m !== 'build'; panelEl.hidden = m !== 'run'; chatEl.hidden = m === 'build'; statusEl.hidden = m !== 'run';
       hintEl.textContent = m === 'build' ? C.hint : ORBIT_HINT;
       if (m !== 'build') placement?.clear();
-      if (m === 'build') inventory?.refresh();
+      if (m === 'build') { inventory?.refresh(); fillThumbs(); } else if (thumbs && !thumbTimer) thumbTimer = setTimeout(() => { thumbTimer = 0; thumbs.dispose(); }, THUMB_IDLE_MS);
       updateBar();
     }
 

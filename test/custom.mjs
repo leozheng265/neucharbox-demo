@@ -545,6 +545,17 @@ export async function customChecks({ report, guardHits }) {
       { id: 'blinds', name: 'Blinds', rotate: false, remove: true }, null], 'selection');
   }));
 
+  // ---- Task 10: inventory pictures (the QA page test/custom-build.html renders them in a browser) ----
+  await check('thumbs · null without WebGL', async ({ eq, ok }) => {
+    const th = await import('../js/custom/thumbs.js'), { THREE, parts } = await env();
+    const t = th.createThumbs({ THREE, parts });
+    eq(await t.get('floor_lamp'), null, 'no document: null'); eq(await t.get('nope'), null, 'unknown type: null');
+    t.dispose(); eq(await t.get('blinds'), null, 'still null after dispose');
+    const fake = th.createThumbs({ THREE, parts, makeCanvas: () => ({ addEventListener() {}, width: 1, height: 1 }) });
+    let threw = false; const r = await fake.get('floor_lamp').catch(() => { threw = true; }); ok(!threw && r === null, 'a canvas with no WebGL context: null, no throw');
+    eq(await fake.get('blinds'), null, 'and it stays null'); fake.dispose();
+  });
+
   await check('copy · CUSTOM_COPY passes the guardrails', live2(cpy)(({ eq, ok }) => {
     const C = cpy.CUSTOM_COPY, hits = [];
     for (const [k, v] of Object.entries(C)) for (const text of typeof v === 'function' ? [v(0), v(1), v(20)] : [v]) { ok(typeof text === 'string' && text, `${k} is a string`); hits.push(...guardHits(text).map((g) => `${k}: ${g}`)); }
