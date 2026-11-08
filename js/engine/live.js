@@ -38,6 +38,7 @@ export const LIVE_COPY = {
   limitRun: "I stopped there: this request reached the live demo's limit for one run. What I did so far is above.",
   tooLong: 'That request is over 400 characters. Try a shorter one.',
   error: 'Something went wrong on the live server, not with a device. Try again.',
+  badRoom: "This room couldn't be set up. Go back to building and try again.",
   lost: 'I lost the connection to the live AI. The room shows the last thing I heard.',
   reconnect: 'Reconnect',
   timedOut: 'Your live session timed out, so I started a fresh room.',
@@ -536,6 +537,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     else if (k === 'budget') view.ncb(LIVE_COPY.limitGlobal);
     else if (k === 'code_limit') view.ncb(LIVE_COPY.limitCode);
     else if (k === 'live_off') view.ncb(LIVE_COPY.offline);
+    else if (k === 'bad_room') view.ncb(LIVE_COPY.badRoom); // the custom scene's room was refused
     else view.ncb(LIVE_COPY.error);
     if (k === 'budget' || k === 'live_off') available = false; // /health says off from here on too
     exit();

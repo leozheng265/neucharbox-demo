@@ -3,7 +3,7 @@
 // createMockLive(opts) → { fetch(url, init) → Promise<Response>, calls, push(sid, kind, data), drop(sid), expire(sid), set(opts) }.
 // Node built-ins only; no timers unless `pace` > 0 (so it runs on test/clock.mjs's virtual clock too).
 
-import { typeOf, validId } from '../../js/custom/catalog.js';
+import { typeOf, validId, nameOf, CATALOG } from '../../js/custom/catalog.js';
 
 export const MOCK_CODE = 'NCB-TEST-CASE';
 
@@ -17,6 +17,19 @@ const homeState = () => ({
 });
 const SUGGESTIONS = ['Movie night, but keep an eye on the plant', "I'm away for the weekend", 'Water the plant if it is dry'];
 const clone = (v) => JSON.parse(JSON.stringify(v));
+
+// A custom room's suggestions, as the server's CustomRoom.Build makes them: catalog templates whose needs are all present,
+// in catalog order, at most 4, each {type} becoming the ref of the first device of that type.
+function customSuggestions(list) {
+  const firstRef = {}; for (const d of list) firstRef[d.type] ??= nameOf(d.type, d.id).ref;
+  const out = [];
+  for (const s of CATALOG.suggestions) {
+    if (out.length >= 4) break;
+    if (!s.needs.every((n) => n in firstRef)) continue;
+    out.push(s.needs.reduce((t, n) => t.replaceAll(`{${n}}`, firstRef[n]), s.text));
+  }
+  return out;
+}
 
 // ---------------- scripted runs ----------------
 // A script is a list of segments { on: 'request'|'approve'|'decline'|'whatif', kind?, events: [[kind, data], …] }.
@@ -213,13 +226,14 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       if (body?.scene === 'custom' && cfg.scenes.includes('custom')) { // the custom room: the visitor's own device list
         const list = body.devices, seen = new Set();
         const good = Array.isArray(list) && list.length >= 1 && list.length <= 20 && list.every((d) => d && typeof d.type === 'string' && typeOf(d.type) && validId(d.type, d.id) && !seen.has(d.id) && seen.add(d.id));
-        if (!good) return fail(400, 'bad_room', 'That room is not valid.');
+        if (!good) return fail(400, 'bad_room', "That room can't be set up. Check its devices and try again.");
+        // (Scripted runs still emit Home's ids even in a custom session: they exercise the client, not the room.)
         const state = { env: { hour: CLOCK.hour } };
         for (const d of list) state[d.id] = { ...clone(typeOf(d.type).initial), status: 'online' };
         const id = `sess-${++nSession}`;
         const editable = customEditable(Object.fromEntries(list.map((d) => [d.id, d.type])));
         sessions.set(id, { id, initial: clone(state), editable, events: [], streams: new Set(), state, clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
-        return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: ["Check each device and tell me what it's doing"] });
+        return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: customSuggestions(list) });
       }
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
       const id = `sess-${++nSession}`;

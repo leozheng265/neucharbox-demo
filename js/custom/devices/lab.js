@@ -5,7 +5,7 @@
 import { HEX, num, clamp01, statusLed, mergeMeshes, breadboard, BOARD_TOP, ease, stepper } from './kit.js';
 
 const Y0 = BOARD_TOP; // the breadboard's top
-const deg = (v) => { const x = num(v); return Math.abs(x) < 0.005 ? '+0.00°' : `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(2)}°`; }; // +0.12°, −0.02°
+const deg = (v) => { const x = num(v); return Math.abs(x) < 0.05 ? '+0.0°' : `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}°`; }; // +0.1°, −2.5°: one decimal, as its slider reads
 
 export default {
   // A laser head on a breadboard, firing along the board into a beam dump. A flip-up shutter sits in front of the

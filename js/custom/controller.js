@@ -5,6 +5,8 @@ import { addDevice, removeDevice, moveDevice, moveHub, rotateDevice, clearDevice
 import { sceneFor } from './scene.js';
 import { DEVICE_UI } from './devices/index.js';
 
+const sizeOf = (t) => DEVICE_UI[t]?.size;
+
 export function createCustomController({ storage, makeLive, ui }) {
   let layout = loadLayout(storage), mode = 'gate', live = null, liveLayout = null;
 
@@ -26,7 +28,7 @@ export function createCustomController({ storage, makeLive, ui }) {
     get canBuild() { return canBuild(); },
     get changedSinceRun() { return changed(); },
     add(type) {
-      const r = addDevice(layout, type, DEVICE_UI[type]?.size);
+      const r = addDevice(layout, type, DEVICE_UI[type]?.size, sizeOf);
       if (r.error === 'full') { ui.notice('full'); return null; }
       if (r.error) return null;
       commit(r.layout, { devices: true });
@@ -43,6 +45,7 @@ export function createCustomController({ storage, makeLive, ui }) {
     gated() { if (mode === 'gate') setMode('build'); },
     async done() {
       if (!layout.devices.length) return;
+      // Removing a type's last device and re-adding it leaves an identical device list: no net change, so the same conversation stays.
       if (live && live.active && sameDevices(layout, liveLayout)) { setMode('run'); return; }
       live?.close(); // its stream ends before the new session is made
       const next = makeLive(sceneFor(layout), devicesForSession(layout));
