@@ -95,6 +95,20 @@ export default {
     },
     {
       "needs": [
+        "ev_charger",
+        "energy_meter"
+      ],
+      "text": "Start charging {ev_charger}, then read {energy_meter}"
+    },
+    {
+      "needs": [
+        "printer_3d",
+        "label_printer"
+      ],
+      "text": "Start {printer_3d}, then print 3 labels on {label_printer}"
+    },
+    {
+      "needs": [
         "thermostat"
       ],
       "text": "Keep {thermostat} at 19 °C overnight"
@@ -140,6 +154,18 @@ export default {
         "smart_plug"
       ],
       "text": "Switch {smart_plug} off at midnight"
+    },
+    {
+      "needs": [
+        "sprinkler_valve"
+      ],
+      "text": "Run {sprinkler_valve} for 10 minutes"
+    },
+    {
+      "needs": [
+        "temp_humidity_sensor"
+      ],
+      "text": "Tell me what {temp_humidity_sensor} reads"
     },
     {
       "needs": [],
@@ -3241,6 +3267,606 @@ export default {
             },
             {
               "text": "{name} → closing"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "temp_humidity_sensor",
+      "name": "Temperature & humidity sensor",
+      "ref": "the temperature and humidity sensor",
+      "category": "Sensors",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "temperature": 21.5,
+        "humidity": 45
+      },
+      "faultText": "no signal",
+      "edit": [
+        {
+          "field": "temperature",
+          "kind": "number",
+          "min": -10,
+          "max": 45
+        },
+        {
+          "field": "humidity",
+          "kind": "number",
+          "min": 0,
+          "max": 100
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read the temperature in degrees Celsius and the humidity percentage at {ref}.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "temperature",
+              "round": 1,
+              "unit": "°C"
+            },
+            {
+              "field": "humidity",
+              "round": 0,
+              "unit": "%"
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "water_leak_sensor",
+      "name": "Water-leak sensor",
+      "ref": "the water-leak sensor",
+      "category": "Sensors",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "leak": false
+      },
+      "faultText": "no signal",
+      "edit": [
+        {
+          "field": "leak",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether {ref} senses water on the floor.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "leak",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "presence_sensor",
+      "name": "Presence sensor",
+      "ref": "the presence sensor",
+      "category": "Sensors",
+      "mount": "ceiling",
+      "new": true,
+      "initial": {
+        "present": false
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "present",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read whether {ref} sees someone in the room.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "present",
+              "round": 0,
+              "unit": ""
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "energy_meter",
+      "name": "Energy meter",
+      "ref": "the energy meter",
+      "category": "Energy",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "watts": 420,
+        "kwh_today": 3.2
+      },
+      "faultText": "reads not trusted",
+      "edit": [
+        {
+          "field": "watts",
+          "kind": "number",
+          "min": 0,
+          "max": 10000
+        }
+      ],
+      "drift": [
+        {
+          "field": "kwh_today",
+          "perHour": 0.42
+        }
+      ],
+      "actions": [
+        {
+          "verb": "read",
+          "kind": "Read",
+          "outcome": "confirmed",
+          "description": "Read the power draw in watts and the energy used today in kilowatt-hours at {ref}.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "reads": [
+            {
+              "field": "watts",
+              "round": 0,
+              "unit": " W"
+            },
+            {
+              "field": "kwh_today",
+              "round": 1,
+              "unit": " kWh"
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → read"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ev_charger",
+      "name": "EV charger",
+      "ref": "the EV charger",
+      "category": "Energy",
+      "mount": "wall",
+      "new": true,
+      "initial": {
+        "charging": false,
+        "battery": 40
+      },
+      "faultText": "off the network",
+      "edit": [
+        {
+          "field": "charging",
+          "kind": "bool"
+        },
+        {
+          "field": "battery",
+          "kind": "number",
+          "min": 0,
+          "max": 100
+        }
+      ],
+      "drift": [
+        {
+          "field": "battery",
+          "perHour": 8,
+          "while": {
+            "charging": true
+          },
+          "max": 100
+        }
+      ],
+      "actions": [
+        {
+          "verb": "set",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Start or stop charging with {ref} (true starts charging, false stops it).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "charging": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "charging"
+            ],
+            "additionalProperties": false
+          },
+          "safeWhen": {
+            "charging": false
+          },
+          "effects": [
+            {
+              "set": "charging",
+              "arg": "charging",
+              "ms": 800
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "charging": true
+              },
+              "text": "{name} → charging"
+            },
+            {
+              "text": "{name} → stopped"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sprinkler_valve",
+      "name": "Sprinkler valve",
+      "ref": "the sprinkler valve",
+      "category": "Outdoor",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "open": false
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "open",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "run",
+          "kind": "Write",
+          "outcome": "commanded",
+          "description": "Open {ref} for a number of minutes, from 1 to 60. The valve cannot confirm that the lawn got water.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "minutes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60
+              }
+            },
+            "required": [
+              "minutes"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "open",
+              "value": true
+            },
+            {
+              "set": "open",
+              "value": false,
+              "afterArg": "minutes",
+              "msPerUnit": 500,
+              "minMs": 2500
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → run {minutes} min"
+            }
+          ]
+        },
+        {
+          "verb": "close",
+          "kind": "Safe",
+          "outcome": "confirmed",
+          "description": "Close {ref} right away.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "open",
+              "value": false
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → closed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "printer_3d",
+      "name": "3D printer",
+      "ref": "the 3D printer",
+      "category": "Work",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "printing": false,
+        "progress": 0
+      },
+      "faultText": "not responding",
+      "edit": [
+        {
+          "field": "printing",
+          "kind": "bool"
+        },
+        {
+          "field": "progress",
+          "kind": "number",
+          "min": 0,
+          "max": 100
+        }
+      ],
+      "drift": [
+        {
+          "field": "progress",
+          "perHour": 25,
+          "while": {
+            "printing": true
+          },
+          "max": 100
+        }
+      ],
+      "actions": [
+        {
+          "verb": "start",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Start the loaded print job on {ref}, from the beginning.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "printing",
+              "value": true
+            },
+            {
+              "set": "progress",
+              "value": 0
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → start"
+            }
+          ]
+        },
+        {
+          "verb": "cancel",
+          "kind": "Safe",
+          "outcome": "confirmed",
+          "description": "Cancel the print on {ref} right away.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "printing",
+              "value": false
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → cancelled"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "robot_arm",
+      "name": "Robot arm",
+      "ref": "the robot arm",
+      "category": "Work",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "pose": "home",
+        "holding": false
+      },
+      "faultText": "controller offline",
+      "edit": [
+        {
+          "field": "holding",
+          "kind": "bool"
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "move",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Move {ref} to its home, pick or place position.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "pose": {
+                "type": "string",
+                "enum": [
+                  "home",
+                  "pick",
+                  "place"
+                ]
+              }
+            },
+            "required": [
+              "pose"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "pose",
+              "arg": "pose",
+              "ms": 2500
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → {pose}"
+            }
+          ]
+        },
+        {
+          "verb": "grip",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Close or open the gripper of {ref} (true holds, false lets go).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "hold": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "hold"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "set": "holding",
+              "arg": "hold",
+              "ms": 800
+            }
+          ],
+          "label": [
+            {
+              "when": {
+                "hold": true
+              },
+              "text": "{name} → grip"
+            },
+            {
+              "text": "{name} → release"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "label_printer",
+      "name": "Label printer",
+      "ref": "the label printer",
+      "category": "Work",
+      "mount": "floor",
+      "new": true,
+      "initial": {
+        "printed": 0
+      },
+      "faultText": "out of paper",
+      "edit": [
+        {
+          "field": "printed",
+          "kind": "number",
+          "min": 0,
+          "max": 999
+        }
+      ],
+      "drift": [],
+      "actions": [
+        {
+          "verb": "print",
+          "kind": "Write",
+          "outcome": "confirmed",
+          "description": "Print a number of labels on {ref}, from 1 to 20.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "copies": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            },
+            "required": [
+              "copies"
+            ],
+            "additionalProperties": false
+          },
+          "effects": [
+            {
+              "add": "printed",
+              "arg": "copies",
+              "ms": 1500
+            }
+          ],
+          "label": [
+            {
+              "text": "{name} → print {copies}"
             }
           ]
         }
