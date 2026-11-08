@@ -181,6 +181,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     const [root, sid, sub, rid, action] = parts;
     if (root === 'health' && method === 'GET') return json(200, { ok: true, liveEnabled: cfg.liveEnabled, scenes: cfg.scenes });
     if (root === 'access' && sid === 'check' && method === 'POST') {
+      if (cfg.checkRate) return fail(429, 'rate', 'Too many tries. Wait a minute.');
       return norm(body?.code) === norm(cfg.code) ? json(200, { ok: true, remainingToday: cfg.remaining }) : fail(401, 'bad_code', 'That code is not valid.');
     }
     if (root === 'apply' && method === 'POST') return json(202, {});
@@ -189,6 +190,8 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     if (!sid) {
       if (method !== 'POST') return fail(400, 'bad_request', 'Bad request.');
       const o = offAnswer(); if (o) return o;
+      if (cfg.sessionCap === 'global_limit') return fail(429, 'global_limit', 'Live AI is at its session capacity right now.');
+      if (cfg.sessionCap === 'code_limit') return fail(429, 'code_limit', 'All of the live sessions for this code are busy.');
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
       const id = `sess-${++nSession}`;
       const sess = { id, events: [], streams: new Set(), state: homeState(), clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() };
@@ -295,6 +298,6 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     push(sid, kind, data = {}) { const s = sessions.get(sid); if (!s) throw new Error(`no session ${sid}`); return emit(s, kind, data, data.rid ?? s.curRid ?? 'r0'); },
     drop(sid) { const s = sessions.get(sid); if (!s) return; for (const e of s.streams) { try { e.controller.close(); } catch { /* closed */ } } s.streams.clear(); },
     expire(sid) { const s = sessions.get(sid); if (!s) return; this.drop(sid); sessions.delete(sid); },
-    set(opts) { for (const k of ['remaining', 'liveEnabled', 'off', 'mode', 'code']) if (k in opts) cfg[k] = opts[k]; },
+    set(opts) { for (const k of ['remaining', 'liveEnabled', 'off', 'mode', 'code', 'checkRate', 'sessionCap']) if (k in opts) cfg[k] = opts[k]; },
   };
 }

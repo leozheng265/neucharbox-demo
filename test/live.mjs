@@ -474,6 +474,21 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     }
   });
 
+  await check('access · 429 rate → rate copy, not offline; stored nothing', async () => {
+    const t = await harness(); await t.live.open();
+    t.mock.set({ checkRate: true }); eq(await t.lastAccess.code(MOCK_CODE), LIVE_COPY.rate); eq(t.codes.get(), null); eq(posts(t.mock).length, 0, 'no session opened'); eq(t.live.phase, 'access');
+    t.mock.set({ checkRate: false }); eq(await t.lastAccess.code(MOCK_CODE), null, 'works again');
+    t.live.close();
+  });
+
+  await check('session · POST sessions 429 global_limit → busy copy; code_limit keeps the daily copy', async () => {
+    for (const [sessionCap, line] of [['global_limit', LIVE_COPY.sessionsBusy], ['code_limit', LIVE_COPY.limitCode]]) {
+      const t = await harness(); await t.live.open(); t.mock.set({ sessionCap });
+      eq(await t.lastAccess.code(MOCK_CODE), null, sessionCap); eq(t.find('view', 'ncb')[0], line, sessionCap); ok(t.has('ui', 'offerGuided'), 'guided'); eq(t.live.active, false);
+      eq(eventGets(t.mock).length, 0, 'no stream opened');
+    }
+  });
+
   await check('close · silent after close(); exit() and ui death too', async () => {
     const t = await harness({ entered: true }), sid = t.live.sessionId, n0 = t.log.length;
     t.live.close(); t.mock.push(sid, 'room', { state: { lamp: { brightness: 0.7 } }, clock: { iso: 'x', label: 'x', hour: 3 } }); await sleep(2000);
