@@ -76,3 +76,31 @@ export function mergeMeshes(THREE, meshes, material, { tint = false, consume = f
   if (consume) for (const m of meshes) { m.removeFromParent(); m.geometry.dispose(); }
   return out;
 }
+
+// A small repeating canvas texture (a new texture each call, so a model can scroll its own offset). draw(g, w, h) paints it.
+export function canvasTex(THREE, draw, w = 64, h = 64) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// A small optical breadboard w × d m with four feet: the plate's top is at y = BOARD_TOP. Its 25 mm hole grid is drawn
+// on a texture. Returns the parts, for P.group.
+export const BOARD_TOP = 0.09;
+export function breadboard(THREE, P, M, w, d) {
+  const grid = canvasTex(THREE, (g, cw, ch) => {
+    g.fillStyle = '#7A838C'; g.fillRect(0, 0, cw, ch); g.fillStyle = '#2A2F34';
+    for (const x of [16, 48]) for (const y of [16, 48]) { g.beginPath(); g.arc(x, y, 4, 0, Math.PI * 2); g.fill(); }
+  });
+  grid.repeat.set(w / 0.05, d / 0.05);
+  const mat = new THREE.MeshStandardMaterial({ map: grid, roughness: 0.6, metalness: 0.05 });
+  const plate = P.box(w, 0.03, d, mat, 0, BOARD_TOP - 0.015, 0, 0.004);
+  const feet = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sz]) => P.cyl(0.016, 0.02, BOARD_TOP - 0.03, M.black, sx * (w / 2 - 0.035), (BOARD_TOP - 0.03) / 2, sz * (d / 2 - 0.035), 10));
+  return [plate, ...feet];
+}
+
+// Per-frame helpers for models that animate toward their state. ease(): move `cur` toward `target` by a share of the gap
+// per second (k), snapping when close. stepper(): a function (t) → seconds since its last call, at most 0.2 (so a long pause
+// is a short step); the first call gives a whole step, so a model starts at its state.
+export const ease = (cur, target, dt, k = 8) => (Math.abs(target - cur) < 0.002 ? target : cur + (target - cur) * Math.min(1, dt * k));
+export function stepper() { let last = null; return (t) => { const dt = last == null ? 1 : Math.min(0.2, Math.max(0, t - last)); last = t; return dt; }; }
