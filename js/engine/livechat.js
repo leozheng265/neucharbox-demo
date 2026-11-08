@@ -180,7 +180,7 @@ export function createLiveView({ chat, scene }) {
   }
 
   // ---- access: invite code, application, or offline ----
-  function access({ mode, note }, { onCode, onApply, onBack }) {
+  function access({ mode, note, backLabel }, { onCode, onApply, onBack }) {
     const offline = mode === 'offline';
     const labelled = (text, control) => `<label class="fld"><span>${esc(text)}</span>${control}</label>`;
     const body = offline
@@ -198,7 +198,7 @@ export function createLiveView({ chat, scene }) {
            <button class="btn primary send" type="submit">Send application</button>
          </form>`;
     let codeInput = null;
-    const node = parse(`<div class="card access${offline ? ' offline' : ''}">${body}${offline ? '' : '<p class="err" role="alert" hidden></p>'}<button class="lnk back" type="button">${esc(LIVE_COPY.back)}</button></div>`);
+    const node = parse(`<div class="card access${offline ? ' offline' : ''}">${body}${offline ? '' : '<p class="err" role="alert" hidden></p>'}<button class="lnk back" type="button">${esc(backLabel ?? LIVE_COPY.back)}</button></div>`);
     node.querySelector('.back').onclick = () => onBack();
     if (!offline) {
       const err = node.querySelector('.err'), codeForm = node.querySelector('form.code'), applyForm = node.querySelector('form.apply');

@@ -3,6 +3,8 @@
 // createMockLive(opts) → { fetch(url, init) → Promise<Response>, calls, push(sid, kind, data), drop(sid), expire(sid), set(opts) }.
 // Node built-ins only; no timers unless `pace` > 0 (so it runs on test/clock.mjs's virtual clock too).
 
+import { typeOf, validId } from '../../js/custom/catalog.js';
+
 export const MOCK_CODE = 'NCB-TEST-CASE';
 
 const norm = (c) => String(c ?? '').toUpperCase().replace(/\s+/g, '');
@@ -192,6 +194,16 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       const o = offAnswer(); if (o) return o;
       if (cfg.sessionCap === 'global_limit') return fail(429, 'global_limit', 'Live AI is at its session capacity right now.');
       if (cfg.sessionCap === 'code_limit') return fail(429, 'code_limit', 'All of the live sessions for this code are busy.');
+      if (body?.scene === 'custom' && cfg.scenes.includes('custom')) { // the custom room: the visitor's own device list
+        const list = body.devices, seen = new Set();
+        const good = Array.isArray(list) && list.length >= 1 && list.length <= 20 && list.every((d) => d && typeof d.type === 'string' && typeOf(d.type) && validId(d.type, d.id) && !seen.has(d.id) && seen.add(d.id));
+        if (!good) return fail(400, 'bad_room', 'That room is not valid.');
+        const state = { env: { hour: CLOCK.hour } };
+        for (const d of list) state[d.id] = { ...clone(typeOf(d.type).initial), status: 'online' };
+        const id = `sess-${++nSession}`;
+        sessions.set(id, { id, events: [], streams: new Set(), state, clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
+        return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: ["Check each device and tell me what it's doing"] });
+      }
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
       const id = `sess-${++nSession}`;
       const sess = { id, events: [], streams: new Set(), state: homeState(), clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() };
@@ -297,6 +309,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     calls,
     push(sid, kind, data = {}) { const s = sessions.get(sid); if (!s) throw new Error(`no session ${sid}`); return emit(s, kind, data, data.rid ?? s.curRid ?? 'r0'); },
     drop(sid) { const s = sessions.get(sid); if (!s) return; for (const e of s.streams) { try { e.controller.close(); } catch { /* closed */ } } s.streams.clear(); },
+    openStreams(sid) { return sessions.get(sid)?.streams.size ?? 0; }, // read-only: how many event streams are open on a session
     expire(sid) { const s = sessions.get(sid); if (!s) return; this.drop(sid); sessions.delete(sid); },
     set(opts) { for (const k of ['remaining', 'liveEnabled', 'off', 'mode', 'code', 'checkRate', 'sessionCap']) if (k in opts) cfg[k] = opts[k]; },
   };

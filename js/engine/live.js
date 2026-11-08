@@ -79,7 +79,7 @@ const okOf = (d) => d.ok === true || (d.ok == null && d.outcome !== 'failed');
 const stepsOf = (list) => (Array.isArray(list) ? list : []).filter((s) => isObj(s) && typeof s.id === 'string')
   .map((s) => ({ id: s.id, text: str(s.text), devices: Array.isArray(s.devices) ? s.devices.filter((d) => typeof d === 'string') : [] }));
 
-export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now() }) {
+export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now(), sessionExtra = () => ({}) }) {
   let code = null;            // the code for this visit (kept here too, so a blocked store still works)
   const api = createLiveApi({ base, fetch: doFetch, getCode: () => code ?? codes.get() });
   let closed = false, active = false, available = false, phase = 'off';
@@ -421,7 +421,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     stream?.close(); stream = null;
     let s;
     try {
-      s = await api.createSession(scene.id);
+      s = await api.createSession(scene.id, sessionExtra());
       if (!s || typeof s.sessionId !== 'string' || !isObj(s.state)) throw new LiveError(200, 'bad_response');
     } catch (e) { if (!gone()) failed(e); return false; }
     if (gone()) return false;
