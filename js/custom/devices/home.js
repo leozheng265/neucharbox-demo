@@ -38,7 +38,7 @@ export default {
   // "open" and "closed" at the ends of the travel, as in Home.
   blinds: {
     icon: 'blinds', size: 1.2, mountY: 1.5, plural: true,
-    edit: [{ field: 'closed', kind: 'slider', step: 0.01, scale: 100, unit: '%' }],
+    edit: [{ field: 'closed', kind: 'slider', step: 0.01, scale: 100, unit: '%', top: 'closed' }],
     format: (s) => { const r = pct(s.closed); return r <= 0 ? 'open' : r >= 100 ? 'closed' : `${r}% closed`; },
     control: { kind: 'bar', field: 'closed', min: 0, max: 1 },
     model({ THREE, P, M }) {
@@ -81,7 +81,7 @@ export default {
   // Soil moisture probe in a potted plant; the soil darkens as it takes up water (20% reads dry and pale, 45% dark).
   soil_sensor: {
     icon: 'moisture', size: 0.8,
-    edit: [{ field: 'moisture', kind: 'slider', step: 1, unit: '%' }],
+    edit: [{ field: 'moisture', kind: 'slider', step: 1, unit: '%', top: 'saturated' }],
     format: (s) => { const m = Math.round(num(s.moisture)); return m >= 100 ? 'saturated' : `${Math.max(0, m)}% moisture`; },
     control: false,
     model({ THREE, P, M }) {

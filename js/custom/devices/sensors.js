@@ -17,7 +17,7 @@ export default {
   // when hot; a fault turns the screen red and offline shows dashes.
   temp_humidity_sensor: {
     icon: 'thermohygro', size: 0.14, mountY: 1.5,
-    edit: [{ field: 'temperature', kind: 'slider', step: 0.5, unit: '°C', label: 'temp' }, { field: 'humidity', kind: 'slider', step: 1, unit: '%', label: 'humidity' }],
+    edit: [{ field: 'temperature', kind: 'slider', step: 0.5, unit: '°C', label: 'temp' }, { field: 'humidity', kind: 'slider', step: 1, unit: '%', label: 'humidity', top: 'saturated' }],
     format: (s) => `${oneDecimal(s.temperature)}°C · humidity ${percent(s.humidity)}`,
     control: false,
     model({ THREE, P, M }) {

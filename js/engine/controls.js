@@ -21,10 +21,11 @@ export function controlFor(device, slice, state) {
   return s ? { kind: 'switch', field: s, on: !!slice[s] } : null;
 }
 
-// Hand edits: what a device card lets the visitor change. A scene lists them on the device as `edit: [{ field, kind: 'slider'|'switch', min, max, step, scale, unit, label }]`.
+// Hand edits: what a device card lets the visitor change. A scene lists them on the device as `edit: [{ field, kind: 'slider'|'switch', min, max, step, scale, unit, label, top? }]`
+// (`top`: a percent slider's readout at 100, default "full"; see panel.js editValueText).
 // Returns one entry per field, in that order, with the live value in store units (`scale` is only for showing it, e.g. 100 for a 0–1 value shown as a percent).
 export function editsFor(id, device, slice) {
   const list = device && device.edit;
   if (!Array.isArray(list) || !slice || typeof slice !== 'object') return [];
-  return list.map((e) => ({ kind: e.kind, path: `${id}.${e.field}`, value: slice[e.field], min: e.min, max: e.max, step: e.step, scale: e.scale ?? 1, unit: e.unit, label: e.label }));
+  return list.map((e) => ({ kind: e.kind, path: `${id}.${e.field}`, value: slice[e.field], min: e.min, max: e.max, step: e.step, scale: e.scale ?? 1, unit: e.unit, label: e.label, top: e.top }));
 }

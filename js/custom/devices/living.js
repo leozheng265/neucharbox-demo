@@ -321,7 +321,7 @@ export default {
   // on top while on.
   humidifier: {
     icon: 'humidifier', size: 0.4,
-    edit: [{ field: 'on', kind: 'switch' }, { field: 'humidity', kind: 'slider', step: 1, unit: '%', label: 'humidity' }],
+    edit: [{ field: 'on', kind: 'switch' }, { field: 'humidity', kind: 'slider', step: 1, unit: '%', label: 'humidity', top: 'saturated' }],
     format: (s) => `${s.on ? 'on' : 'off'} · humidity ${percent(s.humidity)}`,
     active: (s) => !!s.on,
     control: { kind: 'switch', field: 'on' },

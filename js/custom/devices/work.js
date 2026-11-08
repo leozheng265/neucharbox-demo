@@ -12,7 +12,7 @@ export default {
   // and a row of ten lights on the base fills with the progress.
   printer_3d: {
     icon: 'printer3d', size: 0.5,
-    edit: [{ field: 'printing', kind: 'switch' }, { field: 'progress', kind: 'slider', step: 1, unit: '%', label: 'progress' }],
+    edit: [{ field: 'printing', kind: 'switch' }, { field: 'progress', kind: 'slider', step: 1, unit: '%', label: 'progress', top: 'done' }],
     format: (s) => {
       const p = whole(s.progress);
       if (p >= 100) return 'print done';
