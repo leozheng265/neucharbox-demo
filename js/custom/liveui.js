@@ -13,7 +13,8 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 // current live), shows the clock control (js/engine/clockctl.js) and marks editRoot `live-edit`; clock(c) renders the
 // clock control. statusTextEl is the status row's text (the row also holds the clock control); while the clock control
 // shows, a status line that is only the clock's label is dropped, as on Home. autos is the Automations section
-// (js/engine/automations.js), one for the page: automations(list | null) renders it, automationFlash(id, kind) flashes a card.
+// (js/engine/automations.js), one for the page: automations(list | null) renders it, automationFlash(id, kind) flashes a card,
+// attention() folds its list when it lies over the chat and a plan waits for approval.
 export function liveUiFor({ statusEl, statusTextEl = statusEl, getPanel, room3d, R, baselineRef, onBackToBuilding, chat, alive, doc = globalThis.document,
   clockCtl = null, editRoot = null, getLive = () => null, autos = null }) {
   let clockOn = false, clockText = null;
@@ -28,6 +29,7 @@ export function liveUiFor({ statusEl, statusTextEl = statusEl, getPanel, room3d,
     clock: (c) => { clockText = c?.label || null; clockCtl?.render(c); },
     automations: (list) => autos?.render(list),
     automationFlash: (id, kind) => autos?.flash(id, kind),
+    attention: () => autos?.attention(),
     beats: () => {}, // no beat bar in this scene
     track: (on) => getPanel()?.track(on),
     rewind: () => getPanel()?.rewind(),

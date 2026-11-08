@@ -194,17 +194,22 @@ shade stand-ins (no visible light leak in a 20-device room at night).
 Spec: `../docs/superpowers/specs/2026-11-08-automations-design.md`. With an API base (`js/live-config.js`, or
 `?liveApi=` on localhost) and a `/health` that lists the scene:
 
-- **Live AI** in the scene header (beside "‹ Scenes"; `js/engine/liveentry.js`) opens live mode straight away, as an end
+- **Live AI** in the scene header (just before "‹ Scenes", so hiding it under a double-click moves nothing under the
+  pointer; `js/engine/liveentry.js`) opens live mode straight away, as an end
   card's live button does: `flow.stop()` first stops a guided run where it is (setup plays to its end at once; a card
   waiting for an answer closes as "Stopped · nothing ran"), and the room goes back to right after setup. It shows only
   while live mode is available and not open; the public site (no API base) never shows it. The custom scene has none:
   its gate and "Done building →" are its way in.
 - **Automations** (`js/engine/automations.js`), below the device cards in live mode only: a card per rule or schedule
-  the AI set up (kind icon, text, "ran N× today" or "Off", an on/off switch), straight from the server's `automations`
+  the AI set up (kind icon, text, "ran N× today", "Off" or, for a one-off whose time has passed, "Done" and no switch),
+  straight from the server's `automations`
   events. A switch shows at once and posts `…/automations/{id}`; the visitor's value stays until the server's list
   agrees, and a refusal puts it back with a short line (`js/engine/live.js`). A timeline row with an `automation` id
   flashes its card (JUST RAN, HELD). Reset room clears the section; a what-if's `room` replaces it. Phones get one 36 px
-  summary line ("Automations · 2 on"; the room gives up that height, not the chat) whose list drops over the chat.
+  summary line ("Automations · 2 on"; the room gives up that height, not the chat) whose list drops over the chat (a tap
+  elsewhere, Escape or a plan waiting for approval folds it); held sideways, the line sits under the room instead. On a
+  desktop it starts open below the cards (folded on windows under 900 px tall), capped at 220 px, and the live chat
+  keeps at least min(45%, 280 px).
 
 Try it against the mock: `python serve.py` and `node test/mock-live.mjs 8787`, open
 `http://localhost:8765/?liveApi=http://localhost:8787#home`, press Live AI, enter `NCB-TEST-CASE` and ask something with

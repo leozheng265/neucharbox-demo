@@ -40,6 +40,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
   let starting = null;  // start()'s promise (setup), and the request or what-if running: what stop() waits for
   let current = null;
   let halting = false;  // stop() is ending the run: it neither ends with a card nor records its choices
+  let stopping = false; // stop() is under way: setup ending under it offers no chips (their heading would stay above live mode's card)
   const going = () => u.alive() && !halting;
   const used = new Set();
   const lastChoices = new Map(); // prompt → plan and ask answers of the visitor's last clean run of it: what a what-if replays
@@ -96,7 +97,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
       await player.play(setupSteps(scene));
       if (!u.alive()) return;
       baseline = store.snapshot();
-      offerChips();
+      if (!stopping) offerChips();
     })());
   }
   function offerChips(heading, list = remaining()) {
@@ -193,13 +194,17 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
   // where it is (setup first plays to its end at once: live mode starts from the room right after setup), nothing guided
   // stays offered or pressable, and the room goes back to right after setup. Resolves once nothing runs any more.
   async function stop() {
-    if (phase === 'live') return;
-    if (phase === 'setup') { player.skipTo('ask'); await starting; if (!u.alive()) return; }
-    if (phase === 'prompt') {
-      halting = true; player.halt();
-      try { await current; } finally { halting = false; player.resume(); }
-      if (!u.alive()) return;
-    }
+    if (phase === 'live' || stopping) return;
+    stopping = true;
+    try {
+      if (phase === 'setup') { player.skipTo('ask'); await starting; if (!u.alive()) return; }
+      if (phase === 'prompt') {
+        if (running && !running.whatIf) used.delete(running.prompt); // it never finished: it is offered again when live mode ends
+        halting = true; player.halt();
+        try { await current; } finally { halting = false; player.resume(); }
+        if (!u.alive()) return;
+      }
+    } finally { stopping = false; }
     phase = 'live'; running = null; afterRun = null; quietNow = false;
     chat.closeChips(); chat.closeFailures(); chat.closeEnds(); chat.enableInput(false); u.track(false);
     if (baseline && dirty) freshRoom(); else u.clearMarkers(); // no fault ring or setup label left in the room either

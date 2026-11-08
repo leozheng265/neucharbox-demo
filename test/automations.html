@@ -22,14 +22,14 @@
   <div class="fakechat" id="fakechat">The chat would be here.</div>
 </div>
 <script type="module">
-import { createAutomations, startFolded } from '../js/engine/automations.js';
+import { createAutomations, foldMedia } from '../js/engine/automations.js';
 import { LIVE_COPY } from '../js/engine/live.js';
 
 const problems = [];
 const ok = (cond, what) => { if (!cond) problems.push(what); };
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-const phone = matchMedia('(max-width: 959px)').matches;
+const phone = matchMedia('(max-width: 959px)').matches, folded = foldMedia().fold.matches;
 const items = [
   { id: 'rule1', kind: 'rule', text: 'When Soil sensor is below 30% → Water pump: run 10 s', devices: ['soil', 'pump'], enabled: true, firedToday: 0 },
   { id: 'sched1', kind: 'schedule', text: 'Every day at 19:00 → Floor lamp → 35%', devices: ['lamp'], enabled: true, firedToday: 2 },
@@ -38,7 +38,7 @@ const items = [
 
 try {
   const root = $('#autos'), toggles = [];
-  const a = createAutomations(root, { onToggle: (id, on) => toggles.push([id, on]), collapsed: startFolded(), emptyText: LIVE_COPY.autosEmpty });
+  const a = createAutomations(root, { onToggle: (id, on) => toggles.push([id, on]), ...foldMedia(), emptyText: LIVE_COPY.autosEmpty });
   ok(root.hidden && getComputedStyle(root).display === 'none', 'hidden until live mode');
   a.render([]);
   ok(getComputedStyle(root).display !== 'none', 'shown once rendered');
@@ -60,10 +60,13 @@ try {
     ok(r.width >= 26 && r.height >= 15, `the switch is at least the card switch's size (${r.width} x ${r.height})`);
     root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     ok(body.hidden && document.activeElement === head, 'Escape folds it and focuses the summary line');
+    head.click(); const lb = body.getBoundingClientRect().bottom;
+    ok(lb <= innerHeight + 1, `the open list ends inside the window (${Math.round(lb)} > ${innerHeight})`);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ok(body.hidden, 'a tap elsewhere folds it');
     head.click(); // leave it open for the eye
   } else {
-    ok(head.getAttribute('aria-expanded') === (startFolded() ? 'false' : 'true'), 'desktop: open unless the window is short');
-    if (!startFolded()) ok(getComputedStyle($('.autos-body', root)).position === 'static', 'desktop: the list is in the flow, under the cards');
+    ok(head.getAttribute('aria-expanded') === (folded ? 'false' : 'true'), 'desktop: open unless the window is under 900 px tall');
+    if (!folded) ok(getComputedStyle($('.autos-body', root)).position === 'static', 'desktop: the list is in the flow, under the cards');
   }
   // a switch is a button: a keyboard Space / Enter presses it (the browser turns them into a click)
   if ($('.autos-body', root).hidden) head.click(); // a folded list's switches can't take focus

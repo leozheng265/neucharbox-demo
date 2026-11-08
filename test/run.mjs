@@ -825,14 +825,18 @@ async function engineChecks(fixture) {
       const lastStatus = (t) => t.ev.filter((e) => e.startsWith('status:')).at(-1);
       const WAITING = `status:${['lamp', 'pump', 'fan'].length} devices connected · waiting for your request`;
       const gateOf = () => { let release; const gate = new Promise((r) => { release = r; }); return { gate, release }; };
-      // during setup: setup plays to its end at once (live mode starts from the room right after it), then nothing is offered
+      // during setup: setup plays to its end at once (live mode starts from the room right after it), then nothing is offered:
+      // no chips, and no chips heading left above live mode's card
       {
         const t = mk(fixture, { chatExtra: extra }); evs.length = 0;
         const started = t.flow.start(), phase0 = t.flow.phase; await t.flow.stop(); await started;
         if (phase0 !== 'setup' || t.flow.phase !== 'live' || !t.flow.baseline || t.store.get('hub.status') !== 'on') problems16h.push(`stop during setup: phase ${phase0} → ${t.flow.phase}, baseline ${!!t.flow.baseline}, hub ${t.store.get('hub.status')}`);
-        if (t.chips.length !== 1 || evs.indexOf('closeChips') < 0 || !evs.includes('input:false')) problems16h.push(`stop during setup leaves the chips: ${t.chips.length} lists, ${evs.join(' / ')}`);
+        if (t.chips.length !== 0 || !evs.includes('input:false')) problems16h.push(`stop during setup offered chips: ${t.chips.length} lists, ${evs.join(' / ')}`);
         const b = t.beats.at(-1); if (b.current !== 'ask' || b.skippable.length || lastStatus(t) !== WAITING) problems16h.push(`stop during setup: beat ${JSON.stringify(b)}, status ${lastStatus(t)}`);
-        await t.chips[0].onPick(P); if (t.flow.phase !== 'live' || t.ends.length) problems16h.push(`a chip from before stop() ran a request: phase ${t.flow.phase}, ${t.ends.length} end cards`);
+        await t.flow.runPrompt(P); if (t.flow.phase !== 'live' || t.ends.length) problems16h.push(`a request picked after stop() ran: phase ${t.flow.phase}, ${t.ends.length} end cards`);
+        // in the chips phase, the chips go
+        const c = mk(fixture, { chatExtra: extra }); await c.flow.start(); evs.length = 0; await c.flow.stop();
+        if (c.flow.phase !== 'live' || !evs.includes('closeChips')) problems16h.push(`stop with the chips up: phase ${c.flow.phase}, ${evs.join(' / ')}`);
       }
       // mid-request: it stops where it is (no end card, nothing recorded for a what-if), the room is back to right after
       // setup, the card waiting closes as stopped; then the chips come back and a request runs to its end card again
@@ -844,6 +848,7 @@ async function engineChecks(fixture) {
         const mid = t.flow.phase; t.ev.length = 0;
         const stopping = t.flow.stop(); release(); await stopping; await run;
         if (mid !== 'prompt' || t.flow.phase !== 'live' || t.ends.length || t.flow.lastChoices.has(gated) || t.flow.running !== null) problems16h.push(`stop mid-request: phase ${mid} → ${t.flow.phase}, ${t.ends.length} end cards, choices kept ${t.flow.lastChoices.has(gated)}`);
+        if (t.flow.used.has(gated)) problems16h.push('a request stopped halfway still counts as used (it would not be offered first when live mode ends)');
         if (JSON.stringify(t.store.snapshot()) !== base) problems16h.push('stop mid-request: the room is not back to right after setup');
         if (!evs.includes('stopPending') || t.flow.player.halted) problems16h.push(`stop mid-request: the waiting card ${evs.includes('stopPending') ? 'closed' : 'not closed'} as stopped; player halted after: ${t.flow.player.halted}`);
         if (t.log.some(([k]) => k === 'end') || lastStatus(t) !== WAITING || t.ev.some((e) => e.startsWith('ping:') || e.startsWith('pop:'))) problems16h.push(`stop mid-request said or showed more: ${t.ev.join(' / ')}`);

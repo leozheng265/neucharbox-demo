@@ -78,6 +78,8 @@ export const LIVE_COPY = {
   autoSchedule: 'Schedule',
   autoRan: (n) => `ran ${n}× today`,
   autoOff: 'Off',
+  autoDone: 'Done', // a one-off schedule whose time has passed
+  autosAllDone: 'all done',
   autoJustRan: 'JUST RAN',
   autoHeldBadge: 'HELD',
   autoRejected: "That switch didn't go through, so the automation is back as it was.",
@@ -108,13 +110,13 @@ const okOf = (d) => d.ok === true || (d.ok == null && d.outcome !== 'failed');
 // Steps as the contract sends them ({ id, text, devices }); anything else is dropped.
 const stepsOf = (list) => (Array.isArray(list) ? list : []).filter((s) => isObj(s) && typeof s.id === 'string')
   .map((s) => ({ id: s.id, text: str(s.text), devices: Array.isArray(s.devices) ? s.devices.filter((d) => typeof d === 'string') : [] }));
-// Automations as the contract sends them ({ id, kind, text, devices, enabled, firedToday }), in the server's order; an
-// item without an id, or a repeated id, is dropped.
+// Automations as the contract sends them ({ id, kind, text, devices, enabled, firedToday, done }), in the server's order; an
+// item without an id, or a repeated id, is dropped. done: a one-off schedule whose time has passed.
 export const automationsOf = (list) => {
   const seen = new Set();
   return (Array.isArray(list) ? list : []).filter((a) => isObj(a) && typeof a.id === 'string' && a.id && !seen.has(a.id) && seen.add(a.id))
     .map((a) => ({ id: a.id, kind: a.kind === 'schedule' ? 'schedule' : 'rule', text: str(a.text), devices: Array.isArray(a.devices) ? a.devices.filter((d) => typeof d === 'string') : [],
-      enabled: a.enabled !== false, firedToday: Number.isInteger(a.firedToday) && a.firedToday > 0 ? a.firedToday : 0 }));
+      enabled: a.enabled !== false, firedToday: Number.isInteger(a.firedToday) && a.firedToday > 0 ? a.firedToday : 0, done: a.done === true }));
 };
 
 export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now(), sessionExtra = () => ({}) }) {
@@ -140,7 +142,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // visitor flipped: each shows the visitor's value until the server's list agrees (a toggle made mid-request is applied
   // at the runner's next servicing point, after its 202), or goes back when the server refuses it.
   let autos = [];
-  const autoWant = new Map(); // id → { on, n }
+  const autoWant = new Map(); // id → { on, n, text }: the flip shown, its number, and the text of the automation flipped
+  const autoFlying = new Map(); // id → its switch POSTs not answered yet
   let autoN = 0, announced = null;
 
   // The clock control: usable only between requests (idle), while no advance runs, and while a session exists.
@@ -169,14 +172,17 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // ---- automations ----
   const shownAutos = () => autos.map((a) => { const w = autoWant.get(a.id); return w && w.on !== a.enabled ? { ...a, enabled: w.on } : a; });
   const showAutos = () => { if (!dead()) ui.automations?.(shownAutos()); };
+  // A flipped switch is settled once the server's list agrees and none of its POSTs is still out (a list that agrees
+  // while one is out may predate both flips), or once its automation is gone or replaced (a re-plan can reuse an id).
+  const settled = (id, w) => { const a = autos.find((x) => x.id === id); return !a || a.text !== w.text || (a.enabled === w.on && !autoFlying.get(id)); };
   // A list from the server (last one wins). fresh (a new session, a reset, a what-if's room): flipped switches go too.
   function setAutos(list, { fresh = false } = {}) {
     autos = automationsOf(list);
     if (fresh) autoWant.clear();
-    else for (const [id, w] of [...autoWant]) { const a = autos.find((x) => x.id === id); if (!a || a.enabled === w.on) autoWant.delete(id); }
+    else for (const [id, w] of [...autoWant]) if (settled(id, w)) autoWant.delete(id);
     showAutos();
   }
-  const noAutos = () => { autos = []; autoWant.clear(); if (!dead()) ui.automations?.(null); }; // live mode is over: the section goes
+  const noAutos = () => { autos = []; autoWant.clear(); autoFlying.clear(); if (!dead()) ui.automations?.(null); }; // live mode is over: the section goes
   // A timeline row an automation made (a rule fired, a schedule ran, a rule held back): its card flashes.
   function flashAuto(d) {
     if (dead() || typeof d.automation !== 'string' || !autos.some((a) => a.id === d.automation)) return;
@@ -256,6 +262,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         const c = d.kind === 'replan' ? replanCard : card;
         if (!c) break;
         waiting = c; setPhase('awaiting'); ui.status(LIVE_COPY.statusApproval); view.input(true); c.enable(); // a typed change re-plans
+        ui.attention?.(); // an Automations list lying over the chat (phones) folds: the card needs the visitor
         break;
       }
       case 'cannot_do':
@@ -508,16 +515,20 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // during an advance (the server applies it where it owns the room); it shares the edit rate limit. A refusal puts the
   // switch back to the server's value, unless a later flip of it has moved it on meanwhile.
   async function setAutomation(id, on) {
-    if (gone() || !sessionId || typeof on !== 'boolean' || !autos.some((a) => a.id === id)) return;
+    const a = autos.find((x) => x.id === id);
+    if (gone() || !sessionId || typeof on !== 'boolean' || !a || a.done) return; // a done one-off never runs again: no switch
     const sid = sessionId, k = ++autoN;
-    autoWant.set(id, { on, n: k }); showAutos();
-    try { await api.automation(sid, id, on); } catch (e) {
-      if (gone() || sid !== sessionId) return;
-      if (status(e) === 401) return unauthorized();
-      if (kindOf(e) === 'no_session') return regenerate();
-      if (autoWant.get(id)?.n === k) { autoWant.delete(id); showAutos(); }
-      if (kindOf(e) === 'rate') sayRate(); else view.ncb(kindOf(e) === 'no_automation' ? LIVE_COPY.autoGone : LIVE_COPY.autoRejected);
-    }
+    autoWant.set(id, { on, n: k, text: a.text }); autoFlying.set(id, (autoFlying.get(id) || 0) + 1); showAutos();
+    let err = null;
+    try { await api.automation(sid, id, on); } catch (e) { err = e; }
+    if (sid === sessionId) { const left = (autoFlying.get(id) || 1) - 1; if (left > 0) autoFlying.set(id, left); else autoFlying.delete(id); }
+    if (gone() || sid !== sessionId) return;
+    const settle = () => { const w = autoWant.get(id); if (w && settled(id, w)) { autoWant.delete(id); showAutos(); } };
+    if (!err) return settle(); // the server's list may have agreed while this POST was out
+    if (status(err) === 401) return unauthorized();
+    if (kindOf(err) === 'no_session') return regenerate();
+    if (autoWant.get(id)?.n === k) { autoWant.delete(id); showAutos(); } else settle(); // a later flip moved it on: that one stands
+    if (kindOf(err) === 'rate') sayRate(); else view.ncb(kindOf(err) === 'no_automation' ? LIVE_COPY.autoGone : LIVE_COPY.autoRejected);
   }
 
   async function advance(hours) {
@@ -569,7 +580,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   function forget() {
     if (answer) answer.over = true;
     rid = null; lastRid = null; holding = null; answer = null; pendingText = null; held = null; isWhatIf = false; requesting = false;
-    busy.clear(); begin(); autos = []; autoWant.clear();
+    busy.clear(); begin(); autos = []; autoWant.clear(); autoFlying.clear();
   }
   // Makes a session and its stream. false when it failed (already handled) or the visit moved on.
   async function newSession({ notice } = {}) {

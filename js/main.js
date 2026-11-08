@@ -9,7 +9,7 @@ import { SOCIAL, socialLinks } from './engine/social.js';
 import { createLive, LIVE_COPY } from './engine/live.js';
 import { createLiveView } from './engine/livechat.js';
 import { createClockCtl } from './engine/clockctl.js';
-import { createAutomations, startFolded } from './engine/automations.js';
+import { createAutomations, foldMedia } from './engine/automations.js';
 import { createLiveEntry } from './engine/liveentry.js';
 import { liveApiBase } from './live-config.js';
 
@@ -46,7 +46,7 @@ function renderPicker() {
 async function mountScene(meta, gen) {
   app.classList.remove('picker-mode', 'failed', 'live-edit');
   app.innerHTML = `
-    <header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(meta.title)}</div><div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a><button class="btn small primary live-top" id="liveTop" type="button" title="${esc(LIVE_COPY.headerButtonTitle)}" hidden><span class="spark" aria-hidden="true">✨ </span>${esc(LIVE_COPY.headerButton)}</button>${follow()}</header>
+    <header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(meta.title)}</div><div class="spacer"></div><button class="btn small primary live-top" id="liveTop" type="button" title="${esc(LIVE_COPY.headerButtonTitle)}" hidden><span class="spark" aria-hidden="true">✨ </span>${esc(LIVE_COPY.headerButton)}</button><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a>${follow()}</header>
     <nav class="beats" id="beats" aria-label="Demo steps">${BEATS.map(([id, label]) => `<button data-beat="${id}" disabled${id === 'recover' ? ' hidden' : ''}>${label}</button>`).join('')}</nav>
     <div class="stage">
       <div class="room"><canvas id="room"></canvas><div class="hint">${coarse ? 'drag · pinch · tap a device' : 'drag to orbit · scroll to zoom · right-drag to pan · tap a device'}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button></div>
@@ -66,7 +66,7 @@ async function mountScene(meta, gen) {
   const store = createStore(initial);
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots); no watchdog
   const R = createRenderer(document.getElementById('room'), { camera: scene.camera, ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let flow = null, live = null;
+  let flow = null, live = null, autos = null;
   try {
   const M = partsMod.materials(); const P = partsMod.parts(R.scene, M);
   const sv = Number(new URLSearchParams(location.search).get('speed')); const speed = Number.isFinite(sv) && sv > 0 ? Math.min(sv, 6) : 1; // ?speed= review mode (≤ 6), also for room-side motion
@@ -163,7 +163,7 @@ async function mountScene(meta, gen) {
   const clockCtl = createClockCtl(document.getElementById('clockctl'), { onAdvance: (h) => live?.advance(h) });
   // The Automations section under the device cards (live mode only; js/engine/automations.js) and the header's Live AI
   // button (shown while live mode is available here and not open). Neither exists on the public site (no API base).
-  const autos = base ? createAutomations(document.getElementById('autos'), { onToggle: (id, on) => live?.setAutomation(id, on), collapsed: startFolded(),
+  autos = base ? createAutomations(document.getElementById('autos'), { onToggle: (id, on) => live?.setAutomation(id, on), ...foldMedia(),
     emptyText: scene.devices.soil && scene.devices.pump ? LIVE_COPY.autosEmpty : LIVE_COPY.autosEmptyAny }) : null;
   const liveTop = document.getElementById('liveTop');
   let entry = null;
@@ -174,22 +174,30 @@ async function mountScene(meta, gen) {
     clock: (c) => { clockText = c?.label || null; clockCtl.render(c); },
     automations: (list) => autos?.render(list),
     automationFlash: (id, kind) => autos?.flash(id, kind),
+    attention: () => autos?.attention(),
     availability: () => entry?.sync(),
     offerGuided: (h) => { chat.closeEnds(); chat.closeFailures(); if (flow.baseline) { store.restore(flow.baseline); room.reset?.(); R.clearMarkers(); } flow.offerChips(h); },
   } }) : null;
-  entry = createLiveEntry({ live, flow, show: (on) => { liveTop.hidden = !on; }, alive: () => gen === mountGen });
+  // The button sits before "‹ Scenes", so hiding it under a double-click moves nothing under the pointer. Pressed from the
+  // keyboard, focus goes to the conversation, where live mode's card comes, not to the page top.
+  const chatLog = document.getElementById('chatLog');
+  entry = createLiveEntry({ live, flow, alive: () => gen === mountGen, show: (on) => {
+    if (!on && document.activeElement === liveTop) chatLog?.focus({ preventScroll: true });
+    liveTop.hidden = !on;
+  } });
   liveTop.onclick = () => entry.open();
   entry.sync();
   beatBtns.forEach((b) => (b.onclick = () => flow.skipTo(b.dataset.beat)));
 
-  current = { scene, teardown() { live?.close(); flow?.cancel(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
+  current = { scene, teardown() { live?.close(); flow?.cancel(); autos?.dispose(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   // QA hooks (visual harness): the host's phase, the quiet-replay flag and the recorded choices.
   window.__ncb = { live, store, panel, autos, entry, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
   live?.probe(); // fired and forgotten: it never rejects, and the scripted setup must not wait for /health
   await flow.start();
   } catch (e) {
     if (gen === mountGen) current = null;
-    live?.close(); flow?.cancel(); R.dispose();
+    live?.close(); flow?.cancel(); autos?.dispose(); R.dispose();
+    const top = document.getElementById('liveTop'); if (top) top.hidden = true; // live is closed: the button would do nothing
     throw e;
   }
 }

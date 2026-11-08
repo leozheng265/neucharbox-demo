@@ -3,9 +3,9 @@
 //   automationChecks({ report }) runs them (test/run.mjs, in the `live` group).
 import { readFileSync } from 'node:fs';
 import { virtualTime } from './clock.mjs';
-import { createAutomations, subLine, summaryOf, startFolded } from '../js/engine/automations.js';
+import { createAutomations, subLine, summaryOf, foldMedia, FOLD_QUERY, OVERLAY_QUERY } from '../js/engine/automations.js';
 import { LIVE_COPY as C, automationsOf } from '../js/engine/live.js';
-import { RULE1, SCHED1 } from './fixtures/live-mock.mjs';
+import { RULE1, SCHED1, RULE2, ONCE1 } from './fixtures/live-mock.mjs';
 
 // Just what the section uses: createElement, children, attributes, classList, textContent, hidden, focus. innerHTML
 // throws: the server's text must never be parsed as HTML. A removed element loses focus, as in a browser.
@@ -49,6 +49,12 @@ export function fakeDoc() {
     one(cls) { return this.all(cls)[0] ?? null; }
   }
   doc.createElement = (t) => new El(t);
+  // document listeners (the section folds its overlay on a tap elsewhere): add, remove, and fire one by hand
+  const on = [];
+  doc.addEventListener = (type, fn) => on.push([type, fn]);
+  doc.removeEventListener = (type, fn) => { const i = on.findIndex(([t, f]) => t === type && f === fn); if (i >= 0) on.splice(i, 1); };
+  doc.fire = (type, e) => { for (const [t, f] of [...on]) if (t === type) f(e); };
+  doc.listeners = (type) => on.filter(([t]) => t === type).length;
   return doc;
 }
 
@@ -61,7 +67,9 @@ export async function automationChecks({ report }) {
     try { await virtualTime(fn); } catch (e) { problems.push(`threw: ${String(e.stack || e.message || e).split('\n').slice(0, 2).join(' | ')}`); }
     report(tag, problems);
   }
-  const R1 = automationsOf([RULE1])[0], S1 = automationsOf([SCHED1])[0];
+  const R1 = automationsOf([RULE1])[0], S1 = automationsOf([SCHED1])[0], R2 = automationsOf([RULE2])[0], O1 = automationsOf([ONCE1])[0];
+  // a MediaQueryList stand-in: set(v) changes it and tells its listeners
+  const media = (matches) => { const fns = new Set(); return { matches, addEventListener: (t, f) => fns.add(f), removeEventListener: (t, f) => fns.delete(f), set(v) { this.matches = v; for (const f of fns) f({ matches: v }); }, get n() { return fns.size; } }; };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const make = (opts = {}) => {
     const doc = fakeDoc(), root = doc.createElement('div'), toggles = [];
@@ -120,7 +128,7 @@ export async function automationChecks({ report }) {
   });
 
   await check('automations ui · JUST RAN and HELD flash for 2 s, on the card and the folded summary line', async () => {
-    const t = make({ collapsed: true }); t.a.render([R1, S1]);
+    const t = make({ fold: true }); t.a.render([R1, S1]);
     t.a.flash('sched1', 'ran');
     eq([t.card('sched1').classList.contains('flash-ran'), t.card('sched1').one('badge').textContent, t.badge.textContent], [true, C.autoJustRan, C.autoJustRan], 'JUST RAN');
     await sleep(1500); t.a.flash('rule1', 'held');
@@ -133,49 +141,87 @@ export async function automationChecks({ report }) {
     await sleep(200); eq(t.card('rule1').one('badge').textContent, '');
   });
 
-  await check('automations ui · folded (phones): the summary line opens and folds it; Escape folds and gives focus back; open on desktop', () => {
-    const t = make({ collapsed: true }); t.a.render([R1]);
+  await check('automations ui · folded (phones): the summary line opens and folds it; Escape folds and gives focus back, on desktop too', () => {
+    const t = make({ fold: true }); t.a.render([R1]);
     eq([t.body.hidden, t.head.getAttribute('aria-expanded'), t.head.getAttribute('aria-controls')], [true, 'false', t.body.id], 'folded, controls the list');
     t.head.click(); eq([t.body.hidden, t.head.getAttribute('aria-expanded'), t.root.classList.contains('open')], [false, 'true', true], 'open');
     t.sw('rule1').focus(); t.root.onkeydown({ key: 'Escape' }); ok(t.body.hidden === true && t.doc.activeElement === t.head, 'Escape: folded, focus on the summary line');
     t.root.onkeydown({ key: 'Enter' }); eq(t.body.hidden, true, 'another key does nothing');
     t.head.click(); t.a.render(null); t.a.render([]); eq(t.body.hidden, true, 'a new live session starts folded again');
     const d = make(); d.a.render([R1]); eq([d.body.hidden, d.head.getAttribute('aria-expanded')], [false, 'true'], 'desktop: open');
-    d.root.onkeydown({ key: 'Escape' }); eq(d.body.hidden, false, 'Escape leaves the desktop list open (it pushes nothing over the chat)');
-    d.head.click(); eq(d.body.hidden, true, 'the heading folds it on desktop too');
+    d.sw('rule1').focus(); d.root.onkeydown({ key: 'Escape' }); ok(d.body.hidden === true && d.doc.activeElement === d.head, 'Escape folds it on desktop too, focus on the summary line');
+    d.head.click(); eq(d.body.hidden, false, 'and the heading opens it again');
+    d.sw('rule1').focus(); d.head.click(); ok(d.body.hidden && d.doc.activeElement === d.head, 'folding with focus inside the list keeps focus (on the summary line)');
   });
 
-  await check('automations ui · helpers: sub-line, summary, startFolded()', () => {
-    eq([subLine({ kind: 'rule', enabled: true, firedToday: 0 }), subLine({ kind: 'schedule', enabled: true, firedToday: 1 }), subLine({ kind: 'rule', enabled: false, firedToday: 4 })],
-      ['Rule', 'Schedule · ran 1× today', 'Rule · Off']);
-    eq([summaryOf([]), summaryOf([R1]), summaryOf([{ ...R1, enabled: false }])], ['none yet', '1 on', 'all off']);
-    const seen = []; const mm = (q) => { seen.push(q); return { matches: q.includes('959') }; };
-    eq([startFolded(mm), startFolded(() => ({ matches: false })), startFolded(null)], [true, false, false]);
-    eq(seen[0], '(max-width: 959px), (max-height: 760px)', 'phones (the CSS phone breakpoint) and short windows');
+  await check('automations ui · the layout can change under it: entering a folding layout folds it; over the page, a tap elsewhere or attention() folds it', () => {
+    const fold = media(false), overlay = media(false), t = make({ fold, overlay }); t.a.render([R1, S1]);
+    eq(t.body.hidden, false, 'a desktop start: open');
+    t.a.attention(); t.doc.fire('pointerdown', { target: t.doc.createElement('div') }); eq(t.body.hidden, false, 'in the flow (desktop): attention() and a tap elsewhere leave it open');
+    fold.set(true); overlay.set(true); eq(t.body.hidden, true, 'rotated into the phone layout: folded');
+    fold.set(false); eq(t.body.hidden, true, 'leaving it does not open it by itself');
+    t.head.click(); t.doc.fire('pointerdown', { target: t.sw('rule1') }); eq(t.body.hidden, false, 'a tap inside it leaves it open');
+    t.doc.fire('pointerdown', { target: t.doc.createElement('div') }); eq(t.body.hidden, true, 'a tap elsewhere folds it (it lies over the chat)');
+    t.head.click(); t.sw('sched1').focus(); t.a.attention(); ok(t.body.hidden && t.doc.activeElement === t.head, 'a plan waiting for approval folds it, focus on the summary line');
+    eq([fold.n, t.doc.listeners('pointerdown')], [1, 1], 'one listener each'); t.a.dispose(); eq([fold.n, t.doc.listeners('pointerdown')], [0, 0], 'dispose() takes them off');
+    const p = make({ fold: true, overlay: true }); p.a.render([R1]); p.head.click(); p.a.attention(); eq(p.body.hidden, true, 'booleans work too');
+  });
+
+  await check('automations ui · a done one-off: "Done", no switch, not counted as on; never an unnamed switch', () => {
+    const t = make(); t.a.render([R1, O1, R2]);
+    eq(t.count.textContent, ` · ${C.autosOn(3)}`, '3 on');
+    t.sw('sched2').focus(); t.a.render([R1, { ...O1, done: true, firedToday: 1 }, R2]);
+    const c = t.card('sched2');
+    eq([c.one('asub').textContent, c.classList.contains('done'), c.classList.contains('off'), t.sw('sched2').hidden], [`${C.autoSchedule} · ${C.autoDone}`, true, false, true], 'Done, its switch gone');
+    ok(t.doc.activeElement === t.head, 'its focused switch went: focus on the summary line, not lost');
+    eq(t.count.textContent, ` · ${C.autosOn(2)}`, 'a done one-off is not on');
+    t.a.render([{ ...O1, done: true }, { ...O1, id: 'sched3', done: true, enabled: false }]); eq(t.count.textContent, ` · ${C.autosAllDone}`, 'all done');
+    t.a.render([{ ...O1, done: true }, { ...R1, enabled: false }]); eq(t.count.textContent, ` · ${C.autosAllOff}`, 'one done, one off: all off');
+    t.a.render([{ ...R1, text: '' }]); eq(t.sw('rule1').getAttribute('aria-label'), C.autoRule, 'no text: the switch is named by its sub-line');
+    eq(t.card('rule2'), undefined, 'gone from the list');
+    eq(t.card('rule1').one('atext').textContent, '', 'and shows no text of its own');
+  });
+
+  await check('automations ui · helpers: sub-line, summary, foldMedia()', () => {
+    eq([subLine({ kind: 'rule', enabled: true, firedToday: 0 }), subLine({ kind: 'schedule', enabled: true, firedToday: 1 }), subLine({ kind: 'rule', enabled: false, firedToday: 4 }), subLine({ kind: 'schedule', enabled: false, firedToday: 1, done: true })],
+      ['Rule', 'Schedule · ran 1× today', 'Rule · Off', 'Schedule · Done']);
+    eq([summaryOf([]), summaryOf([R1]), summaryOf([{ ...R1, enabled: false }]), summaryOf([{ ...O1, done: true }])], ['none yet', '1 on', 'all off', 'all done']);
+    const seen = []; const mm = (q) => { seen.push(q); return { matches: q === OVERLAY_QUERY }; };
+    const fm = foldMedia(mm); eq([fm.fold.matches, fm.overlay.matches, seen], [false, true, [FOLD_QUERY, OVERLAY_QUERY]]);
+    eq(foldMedia(null), { fold: false, overlay: false }, 'no matchMedia: open, in the flow');
+    eq([FOLD_QUERY, OVERLAY_QUERY], ['(max-width: 959px), (max-height: 899px)', '(max-width: 959px)'], 'phones (the CSS phone breakpoint) and windows under 900 px tall');
   });
 
   // ---- the pages around it (no browser: read the markup and the CSS) ----
   const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
   const main = read('../js/main.js'), mount = read('../js/custom/mount.js'), css = read('../css/app.css').replace(/\r\n/g, '\n'), ccss = read('../css/custom.css');
-  await check('page · the header Live AI button: after "‹ Scenes", hidden until shown, no public-site path; the custom scene has none', () => {
-    ok(/Scenes<\/a><button class="btn small primary live-top" id="liveTop" type="button"[^>]* hidden>/.test(main), 'main.js: the button sits right after Scenes, hidden at first');
-    ok(/\.top \.live-top\[hidden\] \{ display: none; \}/.test(css), 'css: [hidden] beats .btn\'s inline-block');
-    ok(/createLiveEntry\(\{ live, flow, show: \(on\) => \{ liveTop\.hidden = !on; \}/.test(main) && /liveTop\.onclick = \(\) => entry\.open\(\)/.test(main), 'main.js: wired through liveentry.js');
-    ok(/onLive: \(\) => entry\?\.open\(\)/.test(main), 'the end card\'s live button takes the same path');
+  await check('page · the header Live AI button: before "‹ Scenes" (a double-click lands on nothing), hidden until shown, focus kept; no public-site path; the custom scene has none', () => {
+    ok(/<div class="spacer"><\/div><button class="btn small primary live-top" id="liveTop" type="button"[^>]* hidden>.*?<\/button><a class="btn small secondary" href="#"><span class="back"/.test(main), 'main.js: the button sits between the spacer and Scenes, hidden at first');
+    ok(/\.top \.live-top\[hidden\] \{ display: none; \}/.test(css), 'css: [hidden] beats the inline-block of .btn');
+    ok(/\.top \.spacer \+ \.live-top\[hidden\] \+ \.btn \{ margin-left: auto; \}/.test(css), 'css (phones): hidden, it hands its margin to Scenes, which stays where it was');
+    ok(/createLiveEntry\(\{ live, flow,/.test(main) && /if \(!on && document\.activeElement === liveTop\) chatLog\?\.focus\(/.test(main) && /liveTop\.hidden = !on;/.test(main), 'main.js: wired through liveentry.js; focus goes to the conversation when it hides');
+    ok(/liveTop\.onclick = \(\) => entry\.open\(\)/.test(main) && /onLive: \(\) => entry\?\.open\(\)/.test(main), 'the live button of the end card takes the same path');
     ok(/live = base \? createLive\(/.test(main), 'no API base: no live, so the entry never shows the button');
+    ok(/const top = document\.getElementById\('liveTop'\); if \(top\) top\.hidden = true;/.test(main), 'a scene that failed to start hides it (its live is closed)');
     ok(!/live-top|createLiveEntry/.test(mount), 'the custom page has no header button (its gate and Done building → are its entry)');
   });
-  await check('page · the Automations section: between the cards and the chat, live mode only, phones keep the chat\'s height', () => {
+  await check('page · the Automations section: between the cards and the chat, live mode only; phones and desktops keep the chat height', () => {
     ok(/<div class="panel" id="panel"><\/div>\s*<div class="autos" id="autos" hidden><\/div>\s*<div class="chat" id="chat"><\/div>/.test(main), 'main.js: #autos between #panel and #chat, hidden');
     ok(/<div class="panel" id="panel" hidden><\/div>\s*<div class="autos" id="autos" hidden><\/div>\s*<div class="chat" id="chat"><\/div>/.test(mount), 'custom page: the same');
-    ok(/const autos = base \? createAutomations\(/.test(main), 'main.js: no section without an API base');
-    ok(/automations: \(list\) => autos\?\.render\(list\)/.test(main) && /automationFlash: \(id, kind\) => autos\?\.flash\(id, kind\)/.test(main), 'main.js: live\'s hooks reach it');
+    ok(/autos = base \? createAutomations\(/.test(main) && /\.\.\.foldMedia\(\)/.test(main) && /\.\.\.foldMedia\(\)/.test(mount), 'main.js: no section without an API base; both pages pass the live media');
+    ok(/automations: \(list\) => autos\?\.render\(list\)/.test(main) && /automationFlash: \(id, kind\) => autos\?\.flash\(id, kind\)/.test(main) && /attention: \(\) => autos\?\.attention\(\)/.test(main), 'main.js: the hooks of live reach it');
+    ok(/autos\?\.dispose\(\)/.test(main) && /autos\?\.dispose\(\)/.test(mount), 'both pages dispose it at teardown');
     ok(/\.autos\[hidden\][^{]*\{ display: none; \}/.test(css), 'css: hidden means hidden');
     ok(/\.stage \{[^}]*grid-template-rows: auto auto auto auto minmax\(0, 1fr\); \}/.test(css) && /\.stage \.chat \{ grid-row: -2 \/ -1; \}/.test(css), 'css: a row for it, the chat stays in the last (1fr) row');
-    ok(/\.app\.live-edit \.room canvas \{ height: max\(110px, calc\(clamp\(140px, calc\(100dvh - 420px\), min\(75vw, 42dvh\)\) - 110px\)\); \}/.test(css), 'css: on phones the room gives up the summary line\'s 36 px (74 + 36)');
+    ok(/\.app\.live-edit \.room canvas \{ height: max\(110px, calc\(clamp\(140px, calc\(100dvh - 420px\), min\(75vw, 42dvh\)\) - 110px\)\); \}/.test(css), 'css: on portrait phones the room gives up the 36 px of the summary line (74 + 36)');
     const phone = css.slice(css.indexOf('/* Phones: one 36 px summary line'));
-    ok(/\.autos \.autos-body \{ position: absolute;/.test(phone), 'css: unfolded on a phone, the list lies over the chat (no height taken from it)');
+    ok(/\.autos \.autos-body \{ position: absolute;[^}]*var\(--autos-below, 340px\)/.test(phone), 'css: unfolded on a phone, the list lies over the chat, inside the window');
     ok(/\.autos-head \{[^}]*min-height: 35px;/.test(css) && /\.autos \{[^}]*border-top: 1px solid/.test(css), 'css: 35 px + a 1 px border = the 36 px the room gave up');
+    const land = css.slice(css.indexOf('/* Phones held sideways (live mode)'));
+    ok(/\.app\.live-edit \.side \{ display: contents; \}/.test(land) && /\.app\.live-edit \.autos \{ grid-column: 1; grid-row: 3; \}/.test(land) && /\.app\.live-edit \.stage \.chat \{ grid-column: 2; grid-row: 2 \/ -1;/.test(land) && /\.app\.live-edit \.room \{ grid-column: 1; grid-row: 1 \/ 3; \}/.test(land), 'css (landscape phones): the line sits under the room; the chat keeps the side column below the cards');
+    const desk = css.slice(css.indexOf('/* Desktop: open under the device cards'));
+    ok(/max-height: min\(30%, 220px\)/.test(desk) && /\.app\.live-edit \.chat \{ min-height: min\(45%, 280px\); \}/.test(desk) && /\.autos \{ flex: 0 1 auto;/.test(desk), 'css (desktop): the section is capped in px and gives way to the floor of the chat');
+    ok(/\.auto\.off \.atext, \.auto\.done \.atext \{ color: var\(--ink-2\); \}/.test(css), 'css: off and done text stays readable (ink-2, about 4.6:1 on white)');
     ok(/\.stage\.custom:not\(\[data-mode="run"\]\) \.autos \{ display: none; \}/.test(ccss), 'custom.css: run mode only');
   });
 }

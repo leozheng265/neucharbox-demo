@@ -17,7 +17,7 @@ import { createLive, codeStore, LIVE_COPY } from '../engine/live.js';
 import { createLiveView } from '../engine/livechat.js';
 import { createLiveApi } from '../engine/liveapi.js';
 import { createClockCtl } from '../engine/clockctl.js';
-import { createAutomations, startFolded } from '../engine/automations.js';
+import { createAutomations, foldMedia } from '../engine/automations.js';
 import { socialLinks } from '../engine/social.js';
 import { liveApiBase } from '../live-config.js';
 import { CUSTOM_COPY as C } from './copy.js';
@@ -66,7 +66,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   const storage = safeStorage(), codes = codeStore(), base = liveApiBase();
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots)
   const R = createRenderer($('room'), { camera: cameraFor(innerWidth, innerHeight), ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0, gate = null;
+  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0, gate = null, autos = null;
   const thumbsDone = new Set();
   const baselineRef = { current: null };
   let noticeTimer = 0, doneBusy = false, shownCanBuild = null, torn = false;
@@ -76,7 +76,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     clearTimeout(noticeTimer); clearTimeout(thumbTimer);
     thumbs?.dispose();
     controller?.teardown(); placement?.dispose(); inventory?.dispose();
-    wiring?.dispose();
+    wiring?.dispose(); autos?.dispose();
     R.dispose();
     app.classList.remove('live-edit');
     if (window.__ncb === hooks) window.__ncb = null;
@@ -174,7 +174,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     // The clock control beside the status line: shown while a live session's cards are editable, usable between requests.
     const clockCtl = createClockCtl($('clockctl'), { onAdvance: (h) => controller?.live?.advance(h) });
     // The Automations section under the device cards (run mode only, css/custom.css); its switches go to the current live.
-    const autos = createAutomations($('autos'), { onToggle: (id, on) => controller?.live?.setAutomation(id, on), collapsed: startFolded(), emptyText: LIVE_COPY.autosEmptyAny });
+    autos = createAutomations($('autos'), { onToggle: (id, on) => controller?.live?.setAutomation(id, on), ...foldMedia(), emptyText: LIVE_COPY.autosEmptyAny });
     liveUi = liveUiFor({
       statusEl, statusTextEl, getPanel: () => wiring.panel, room3d, R, baselineRef, chat, alive: () => isCurrent() && !torn,
       onBackToBuilding: () => controller.toBuild(),

@@ -3,7 +3,7 @@
 //   also holds the harness they share (check / eq / ok / harness and the stub LiveView, panel and ui).
 import { createStore } from '../js/engine/store.js';
 import { virtualTime } from './clock.mjs';
-import { createMockLive, MOCK_CODE, SCRIPTS, RULE1, SCHED1 } from './fixtures/live-mock.mjs';
+import { createMockLive, MOCK_CODE, SCRIPTS, RULE1, SCHED1, RULE2, ONCE1 } from './fixtures/live-mock.mjs';
 import home from '../js/scenes/home.js';
 import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
 import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
@@ -69,7 +69,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     };
     h.panel = { mark: rec('panel').bind(null, 'mark'), reveal: rec('panel').bind(null, 'reveal') };
     let alive = true;
-    h.ui = { alive: () => alive, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind', 'editing', 'clock', 'automations', 'automationFlash', 'availability'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
+    h.ui = { alive: () => alive, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind', 'editing', 'clock', 'automations', 'automationFlash', 'availability', 'attention'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
     h.ui.kill = () => { alive = false; };
     h.find = (source, method) => log.filter((e) => e[0] === source && e[1] === method).at(-1)?.slice(2);
     h.has = (source, method, ...args) => log.some((e) => e[0] === source && e[1] === method && args.every((a, i) => JSON.stringify(e[2 + i]) === JSON.stringify(a)));
@@ -1488,5 +1488,45 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     await t.live.advance(6); await settle(); eq(lastAutos(t)[0].firedToday, 2, '16:30 → 22:30: the same day');
     await t.live.advance(6); await settle(); eq(lastAutos(t).map((a) => a.firedToday), [0, 0], 'past midnight: back to 0');
     t.live.close();
+  });
+
+  // ---- review fixes: done one-offs, switch reconciling, attention ----
+  await check('automations · a done one-off (contract `done`): kept as sent, its switch posts nothing; the mock marks one done when its time passes', async () => {
+    eq(automationsOf([{ ...ONCE1, done: true }])[0].done, true, 'done: true kept'); eq(automationsOf([{ ...ONCE1, done: 'yes' }])[0].done, false, 'anything else: false');
+    const t = await harness({ entered: true }); await withAutos(t, [ONCE1, RULE1]);
+    await t.live.advance(6); await settle(); eq(lastAutos(t)[0].done, false, 'Fri 22:30: not yet');
+    await t.live.advance(12); await settle();
+    eq([lastAutos(t)[0].done, lastAutos(t)[0].firedToday], [true, 1], 'Sat 10:30: it ran at its time and is done');
+    eq(flashes(t).at(-1), ['sched2', 'ran'], 'its run flashed its card (a src edit timeline row with its id)');
+    const n = autoPosts(t.mock).length; await t.live.setAutomation('sched2', false); await settle();
+    eq([autoPosts(t.mock).length, enabledOf(t, 'sched2')], [n, true], 'a done one-off has no switch: nothing posted, nothing changed');
+    t.live.close();
+  });
+
+  await check('automations · quick off-then-on with a stale list in between: no flicker; a re-plan that reuses the id drops the old flip', async () => {
+    const m = createMockLive(), gates = [];
+    const t = await harness({ mock: { ...m, fetch: (url, init) => (/\/automations\//.test(String(url)) ? new Promise((r) => gates.push(() => r(m.fetch(url, init)))) : m.fetch(url, init)) }, entered: true });
+    const sid = t.live.sessionId; await withAutos(t, [RULE1]);
+    const p1 = t.live.setAutomation('rule1', false), p2 = t.live.setAutomation('rule1', true); await settle();
+    const from = autoLists(t).length;
+    m.push(sid, 'automations', { items: [{ ...RULE1, firedToday: 1 }], rid: 'r9' }); await settle(); // a list from before both flips
+    gates[0](); await p1; await settle(); // the first flip lands: the server's list says off for a moment
+    gates[1](); await p2; await settle();
+    eq(autoLists(t).slice(from).map((l) => l.find((a) => a.id === 'rule1').enabled), autoLists(t).slice(from).map(() => true), 'on all along after the second flip');
+    eq(enabledOf(t, 'rule1'), true, 'and on at the end');
+    m.edit(sid, 'automations', { items: [{ ...RULE1, enabled: false }] }); await settle(); eq(enabledOf(t, 'rule1'), false, 'settled: the next server list rules');
+    // a re-plan drops rule1 and makes another rule1 while a flip of the old one waits to be applied
+    let held = 0;
+    const u = await harness({ mock: { ...m, fetch: (url, init) => (/\/automations\//.test(String(url)) ? (held++, jsonAnswer(202, {})()) : m.fetch(url, init)) }, entered: true });
+    await withAutos(u, [RULE1]); await u.live.setAutomation('rule1', false); await settle(); eq([held, enabledOf(u, 'rule1')], [1, false], 'queued: shown off');
+    m.push(u.live.sessionId, 'automations', { items: [{ ...RULE2, id: 'rule1' }], rid: 'r9' }); await settle();
+    eq([lastAutos(u)[0].text, enabledOf(u, 'rule1')], [RULE2.text, true], 'a new automation under the same id shows its own state');
+    t.live.close(); u.live.close();
+  });
+
+  await check('automations · a plan waiting for approval asks the page to fold a list lying over the chat (ui.attention)', async () => {
+    const t = await harness({ entered: true }); eq(count(t, 'ui', 'attention'), 0);
+    await toPlan(t, MOVIE); eq(count(t, 'ui', 'attention'), 1, 'once the card waits');
+    ok(t.order('ui', 'attention') > t.order('view', 'planCard'), 'after the card is there'); t.live.close();
   });
 }

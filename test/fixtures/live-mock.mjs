@@ -4,7 +4,8 @@
 // Automations (spec 2026-11-08-automations-design.md §3): a session keeps the list its `automations` events last sent;
 // POST sessions / reset answer it (empty), a what-if's `room` carries the list from before the replayed request, and
 // POST sessions/{sid}/automations/{id} { enabled } flips one and streams the list again (src edit), a reset that clears
-// some sends one empty list (src edit, no rid), and an advance past midnight sends the counts back at 0. Scripts emit their own
+// some sends one empty list (src edit, no rid), an advance past midnight sends the counts back at 0, and an advance past a
+// one-off schedule's time ("Once, Sat 08:00 → …") runs it if it is on and marks it done. Scripts emit their own
 // `automations` events and timeline rows with `automation` ids (SCRIPTS.autos); the mock runs no rules of its own.
 // Node built-ins only; no timers unless `pace` > 0 (so it runs on test/clock.mjs's virtual clock too).
 
@@ -44,8 +45,14 @@ const state = (path, value, ms = 0) => ['state', { path, value, ms }];
 const call = (step, callId, device, action, args, label) => ['call', { step, callId, device, action, args, label }];
 const result = (callId, step, device, outcome, text, ok = true) => ['result', { callId, step, device, ok, outcome, text }];
 const DONE_OK = ['done', { outcome: 'ok' }];
-export const RULE1 = { id: 'rule1', kind: 'rule', text: 'When Soil sensor is below 30% → Water pump: run 10 s', devices: ['soil', 'pump'], enabled: true, firedToday: 0 };
-export const SCHED1 = { id: 'sched1', kind: 'schedule', text: 'Every day at 19:00 → Floor lamp → 35%', devices: ['lamp'], enabled: true, firedToday: 0 };
+// In the server's wording (contract "Automations": switches read as what they do, number fields are named).
+export const RULE1 = { id: 'rule1', kind: 'rule', text: 'When Soil sensor is below 30% → Water pump: run 10 s', devices: ['soil', 'pump'], enabled: true, firedToday: 0, done: false };
+export const SCHED1 = { id: 'sched1', kind: 'schedule', text: 'Every day at 19:00 → Floor lamp → 35%', devices: ['lamp'], enabled: true, firedToday: 0, done: false };
+export const RULE2 = { id: 'rule2', kind: 'rule', text: 'When Door camera detects motion → notify: Someone is at the door', devices: ['camera'], enabled: true, firedToday: 0, done: false };
+export const ONCE1 = { id: 'sched2', kind: 'schedule', text: 'Once, Sat 08:00 → Thermostat → 19 °C', devices: ['thermostat'], enabled: true, firedToday: 0, done: false };
+// A one-off schedule's time, in env.hour (the mock's room starts on a Friday): "Once, Sat 08:00 → …" → 32.
+const ONCE_DAY = { Fri: 0, Sat: 1, Sun: 2, Mon: 3, Tue: 4, Wed: 5, Thu: 6 };
+const onceAt = (text) => { const m = /^Once, (Mon|Tue|Wed|Thu|Fri|Sat|Sun) (\d{2}):(\d{2})/.exec(String(text)); return m ? ONCE_DAY[m[1]] * 24 + Number(m[2]) + Number(m[3]) / 60 : null; };
 const AUTO_STEPS = [
   { id: 's1', text: 'Add a rule: when the soil is below 30%, run the pump for 10 s', devices: ['soil', 'pump'] },
   { id: 's2', text: 'Every day at 19:00, set the floor lamp to 35%', devices: ['lamp'] },
@@ -335,6 +342,13 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
           sess.automations = sess.automations.map((a) => ({ ...a, firedToday: 0 }));
           emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' });
         }
+        // a one-off whose time has come: it runs if it is on, and is done either way (done never runs again)
+        const due = sess.automations.filter((a) => a.kind === 'schedule' && !a.done && onceAt(a.text) != null && sess.clock.hour >= onceAt(a.text));
+        for (const a of due) {
+          a.done = true;
+          if (a.enabled) { a.firedToday++; emit(sess, 'timeline', { at: sess.clock.label, text: a.text.split(' → ').slice(1).join(' → '), ok: true, kind: 'action', origin: 'schedule', device: a.devices[0], automation: a.id, src: 'edit' }); }
+        }
+        if (due.length) emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' });
       }
       return json(200, { clock: { ...sess.clock } });
     }
