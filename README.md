@@ -189,6 +189,28 @@ Known limits: the phone camera is chosen once at page load (rotating the phone m
 second finger put down while one is on a device does not start a pinch-zoom; a lamp added after the page loaded has no
 shade stand-ins (no visible light leak in a 20-device room at night).
 
+## Live mode: automations and the Live AI button
+
+Spec: `../docs/superpowers/specs/2026-11-08-automations-design.md`. With an API base (`js/live-config.js`, or
+`?liveApi=` on localhost) and a `/health` that lists the scene:
+
+- **Live AI** in the scene header (beside "‹ Scenes"; `js/engine/liveentry.js`) opens live mode straight away, as an end
+  card's live button does: `flow.stop()` first stops a guided run where it is (setup plays to its end at once; a card
+  waiting for an answer closes as "Stopped · nothing ran"), and the room goes back to right after setup. It shows only
+  while live mode is available and not open; the public site (no API base) never shows it. The custom scene has none:
+  its gate and "Done building →" are its way in.
+- **Automations** (`js/engine/automations.js`), below the device cards in live mode only: a card per rule or schedule
+  the AI set up (kind icon, text, "ran N× today" or "Off", an on/off switch), straight from the server's `automations`
+  events. A switch shows at once and posts `…/automations/{id}`; the visitor's value stays until the server's list
+  agrees, and a refusal puts it back with a short line (`js/engine/live.js`). A timeline row with an `automation` id
+  flashes its card (JUST RAN, HELD). Reset room clears the section; a what-if's `room` replaces it. Phones get one 36 px
+  summary line ("Automations · 2 on"; the room gives up that height, not the chat) whose list drops over the chat.
+
+Try it against the mock: `python serve.py` and `node test/mock-live.mjs 8787`, open
+`http://localhost:8765/?liveApi=http://localhost:8787#home`, press Live AI, enter `NCB-TEST-CASE` and ask something with
+"when", "rule" or "schedule" in it (the mock's `autos` script makes a rule and a schedule). `test/automations.html` checks
+the section with the real CSS in a browser (open it at a phone size and at a desktop size).
+
 ## Deploy
 
 See **DEPLOY.md** (English + 中文) for the hosting requirements. In short: this
@@ -226,6 +248,8 @@ js/engine/whatif.js   what-ifs: the picker's list, scenario defaults, the generi
 js/engine/chat.js     conversation UI: messages, chips, plan/ask/replan/end cards, the picker of failures
 js/engine/social.js   NeuCharBox's official accounts: header icons, the end cards' follow line
 js/engine/panel.js    device dashboard tiles from the store (on phones the strip follows the request, a fault stays in view)
+js/engine/automations.js  live mode's Automations section under the cards (cards, switches, JUST RAN / HELD)
+js/engine/liveentry.js    the header's Live AI button and the end cards' live button: flow.stop(), then live.open()
 js/engine/icons.js    line icons for the tiles
 js/engine/match.js    typed text → run / refuse / clarify (interpret)
 js/engine/renderer.js Three.js setup, effects, quality tiers, picking, ping labels, daylight

@@ -111,6 +111,9 @@ export function createChat(root, { onPromptText } = {}) {
       push(el(`<div class="msg ncb alert${note ? ' note' : ''}" role="${note ? 'status' : 'alert'}"><b>${esc(title)}</b>${esc(text)}</div>`));
     },
     resolvePending() { for (const p of [...pending]) p.settle(p.skipValue()); },
+    // Live mode took over mid-request (the player's halt): each open card closes as stopped. Nothing of it ran, so a plan
+    // reads "Stopped · nothing ran", never "Skipped ahead · ran as shown", and an ask shows no answer.
+    stopPending() { for (const p of [...pending]) { p.node.classList.add('stopped'); p.settle(p.skipValue()); } },
 
     button(label) {
       const node = push(el(`<div class="card action"><button class="btn primary">${esc(label)}</button></div>`));
@@ -150,6 +153,7 @@ export function createChat(root, { onPromptText } = {}) {
       declineBtn.onclick = () => { declined = true; node._settle({ approved: false, alts: {} }); };
       if (skipped) node._settle({ approved: true, alts: {} });
       return done.then((v) => {
+        if (node.classList.contains('stopped')) { declineBtn.remove(); approveBtn.textContent = 'Stopped · nothing ran'; return v; }
         if (declined) { node.classList.add('declined'); declineBtn.textContent = 'Not run ✕'; declineBtn.classList.add('chosen'); return v; }
         declineBtn.remove();
         approveBtn.textContent = clicked ? 'Approved ✓' : 'Skipped ahead · ran as shown'; if (!clicked) node.classList.add('skipped');
@@ -165,7 +169,7 @@ export function createChat(root, { onPromptText } = {}) {
       const done = interactive(node, () => def);
       spec.options.forEach((o, i) => { const b = el(`<button class="btn ${o.primary ? 'approve' : ''}">${esc(o.label)}</button>`); b.onclick = () => { b.classList.add('chosen'); b.textContent += ' ✓'; node._settle(i); }; row.appendChild(b); });
       if (skipped) node._settle(def);
-      return done.then((i) => { const b = row.children[i]; if (b) { b.classList.add('chosen'); if (!b.textContent.includes('✓')) b.textContent += ' ✓ (skipped ahead)'; } return i; }); // no ✓ yet = not clicked
+      return done.then((i) => { if (node.classList.contains('stopped')) return i; const b = row.children[i]; if (b) { b.classList.add('chosen'); if (!b.textContent.includes('✓')) b.textContent += ' ✓ (skipped ahead)'; } return i; }); // no ✓ yet = not clicked
     },
     replan(spec) {
       push(el(`<div class="card replan"><p class="intro">${esc(spec.intro)}</p><ul>${(spec.changes || []).map((c) => `<li>${esc(c)}</li>`).join('')}</ul>${spec.needsYou ? `<p class="needs"><b>Needs you:</b> ${esc(spec.needsYou)}</p>` : ''}</div>`));

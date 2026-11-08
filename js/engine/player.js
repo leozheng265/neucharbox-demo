@@ -49,6 +49,9 @@
 //            { stopped: true }. What-if replays stop at a top-level { failPoint } (test/run.mjs keeps them there).
 //   carry    this play continues the request of the previous one: a beat skip in progress carries on into it. By
 //            default each play() starts at normal speed.
+// halt() stops every play, the one running and any started before resume(), where it is: no further step runs, nothing
+// more is said or shown (an fn step still finishing gets the silent chat, its plans declined), and the card waiting for
+// an answer closes as stopped (chat.stopPending). flow.stop() uses it when live mode takes over mid-request.
 // Headless (tests): cards never show; autoPlan(spec) gives a plan's alts (or false: "Not this"), autoAsk(spec) an index.
 
 // A card's words: what makes an fn step's card, built anew each run, the same card as last time.
@@ -60,6 +63,7 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
   let stopAt = null;         // beat name to stop fast-forwarding at
   let currentBeat = 'setup';
   let cancelled = false;
+  let halted = false;        // halt(): live mode took over; nothing more runs, nothing more is said, until resume()
   let declined = false;      // the visitor answered a plan with "Not this": the rest of the request doesn't run
   let until = null, stopped = false; // the current play's `until`, and whether it has matched (nothing more runs)
   let rec = { choices: [], replay: [] }; // the current play's answers, and the replay entries it may use
@@ -91,6 +95,7 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
     if (hit) { hit.used = true; rec.choices.push(hit.e); return valueOf(hit.e, kind); }
     let v;
     if (headless) { const a = kind === 'plan' ? autoPlan(spec) : null; v = kind === 'plan' ? (a === false ? { approved: false, alts: {} } : { approved: true, alts: a || {} }) : autoAsk(spec) || 0; }
+    else if (halted) v = kind === 'plan' ? { approved: false, alts: {} } : primaryOf(spec); // an fn step still finishing after halt(): no card, nothing approved
     else if (quiet) v = kind === 'plan' ? { approved: true, alts: {} } : primaryOf(spec);
     else { if (kind === 'plan') onPlan(spec); v = await chat[kind](spec, { skipped: fast, ...opts }); } // the host can say "waiting for your approval" if the scene didn't
     const e = entry(kind, spec, v, via); rec.choices.push(e);
@@ -105,14 +110,14 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
     if (k === 'button' || k === 'qr') return () => Promise.resolve();
     return () => undefined;
   } });
-  const out = () => (quiet ? silent : loud);
+  const out = () => (quiet || halted ? silent : loud);
 
-  const say = async (text) => { if (!isFast()) { chat.typing(true); await sleep(typing(text)); chat.typing(false); } if (cancelled) return; out().ncb(text); await sleep(400); };
-  const status = (text) => { if (!quiet) onStatus(text); };
+  const say = async (text) => { if (!isFast()) { chat.typing(true); await sleep(typing(text)); chat.typing(false); } if (cancelled || halted) return; out().ncb(text); await sleep(400); };
+  const status = (text) => { if (!quiet && !halted) onStatus(text); };
   const ctx = { store, get chat() { return out(); }, tween, sleep, say, status, get fast() { return isFast(); } };
 
   async function run(step) {
-    if (cancelled || declined || stopped) return;
+    if (cancelled || halted || declined || stopped) return;
     if (until && until(step)) { stopped = true; return; } // the play stops here (see the header)
     if (step.failPoint != null) return; // a marker for what-if replays; nothing happens here
     if (step.beat) {
@@ -171,7 +176,7 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
     let hit = false;
     try {
       for (const s of steps) {
-        if (cancelled || declined || stopped) break;
+        if (cancelled || halted || declined || stopped) break;
         await run(s);
       }
     } finally { hit = stopped; ({ rec, quiet, until, stopped } = outer); }
@@ -183,8 +188,12 @@ export function createPlayer({ store, chat, headless = false, onBeat = () => {},
   function skipTo(beat) { stopAt = beat; fast = true; store.finishTweens(); releaseSleeps(); chat.resolvePending(); }
   // cancel (teardown): also settles in-flight store tweens, which only finish on frames that no longer come.
   function cancel() { cancelled = true; fast = true; store.finishTweens(); releaseSleeps(); chat.resolvePending(); }
+  // halt (live mode takes the conversation mid-request, flow.stop()): like cancel, but it lasts only until resume(). The
+  // card waiting for an answer closes as stopped (nothing of it ran), not as skipped ahead.
+  function halt() { halted = true; fast = true; store.finishTweens(); releaseSleeps(); if (chat.stopPending) chat.stopPending(); else chat.resolvePending(); }
+  function resume() { halted = false; fast = headless; stopAt = null; }
 
-  return { play, run, skipTo, cancel, get beat() { return currentBeat; }, get fast() { return isFast(); }, get quiet() { return quiet; } };
+  return { play, run, skipTo, cancel, halt, resume, get halted() { return halted; }, get beat() { return currentBeat; }, get fast() { return isFast(); }, get quiet() { return quiet; } };
 }
 
 // The setup beat is generic: power the hub, scan, discover devices in order.

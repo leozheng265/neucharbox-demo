@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Automations QA</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+  body { height: auto; overflow-y: auto; }
+  #qaResult { font: 12px/1.4 monospace; padding: 8px 14px; background: #fff; border-bottom: 1px solid var(--line); }
+  #qaResult.bad { color: var(--red); white-space: pre-wrap; }
+  .qa { max-width: 440px; margin: 0 auto; display: flex; flex-direction: column; }
+  .qa .fakechat { height: 260px; background: var(--bg); border-top: 1px solid var(--line); padding: 12px; font-size: 13px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<!-- The Automations section (js/engine/automations.js) in a real browser, with the real CSS: what test/automations.mjs
+     can't see. Open it at a phone size (375 x 812, 360 x 640) and at a desktop size: the checks follow the CSS of each. -->
+<div id="qaResult">running…</div>
+<div class="qa">
+  <div class="autos" id="autos" hidden></div>
+  <div class="fakechat" id="fakechat">The chat would be here.</div>
+</div>
+<script type="module">
+import { createAutomations, startFolded } from '../js/engine/automations.js';
+import { LIVE_COPY } from '../js/engine/live.js';
+
+const problems = [];
+const ok = (cond, what) => { if (!cond) problems.push(what); };
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const phone = matchMedia('(max-width: 959px)').matches;
+const items = [
+  { id: 'rule1', kind: 'rule', text: 'When Soil sensor is below 30% → Water pump: run 10 s', devices: ['soil', 'pump'], enabled: true, firedToday: 0 },
+  { id: 'sched1', kind: 'schedule', text: 'Every day at 19:00 → Floor lamp → 35%', devices: ['lamp'], enabled: true, firedToday: 2 },
+  { id: 'sched2', kind: 'schedule', text: 'Mon, Wed, Fri at 07:00 → Blinds → open', devices: ['blinds'], enabled: false, firedToday: 0 },
+];
+
+try {
+  const root = $('#autos'), toggles = [];
+  const a = createAutomations(root, { onToggle: (id, on) => toggles.push([id, on]), collapsed: startFolded(), emptyText: LIVE_COPY.autosEmpty });
+  ok(root.hidden && getComputedStyle(root).display === 'none', 'hidden until live mode');
+  a.render([]);
+  ok(getComputedStyle(root).display !== 'none', 'shown once rendered');
+  const head = $('.autos-head', root);
+  // phones: the summary line is the 36 px the room gave up (css/app.css: the live-edit canvas height minus 74 + 36 px)
+  if (phone) ok(Math.round(root.getBoundingClientRect().height) === 36, `folded on a phone, the section is 36 px tall (got ${root.getBoundingClientRect().height})`);
+  a.render(items);
+  ok($$('.auto', root).length === 3, 'three cards');
+  ok($$('.auto .sw', root).every((s) => s.getAttribute('role') === 'switch' && s.getAttribute('aria-label') && s.hasAttribute('aria-checked')), 'labelled switches');
+  if (phone) {
+    const before = $('#fakechat').getBoundingClientRect().top;
+    ok(head.getAttribute('aria-expanded') === 'false', 'phones start folded');
+    head.click();
+    const body = $('.autos-body', root);
+    ok(getComputedStyle(body).position === 'absolute', 'unfolded on a phone, the list lies over the chat');
+    ok(Math.abs($('#fakechat').getBoundingClientRect().top - before) < 1, 'and the chat does not move');
+    ok(Math.round(root.getBoundingClientRect().height) === 36, 'the section itself stays 36 px');
+    const sw = $('.auto[data-id="rule1"] .sw', root), r = sw.getBoundingClientRect();
+    ok(r.width >= 26 && r.height >= 15, `the switch is at least the card switch's size (${r.width} x ${r.height})`);
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    ok(body.hidden && document.activeElement === head, 'Escape folds it and focuses the summary line');
+    head.click(); // leave it open for the eye
+  } else {
+    ok(head.getAttribute('aria-expanded') === (startFolded() ? 'false' : 'true'), 'desktop: open unless the window is short');
+    if (!startFolded()) ok(getComputedStyle($('.autos-body', root)).position === 'static', 'desktop: the list is in the flow, under the cards');
+  }
+  // a switch is a button: a keyboard Space / Enter presses it (the browser turns them into a click)
+  if ($('.autos-body', root).hidden) head.click(); // a folded list's switches can't take focus
+  const sw =$('.auto[data-id="sched1"] .sw', root); sw.focus(); sw.click();
+  ok(toggles.at(-1)?.[0] === 'sched1' && toggles.at(-1)?.[1] === false, 'a press asks to turn it off');
+  a.render(items.map((x) => (x.id === 'sched1' ? { ...x, enabled: false } : x)));
+  ok(document.activeElement === sw, 'the focused switch keeps focus through a re-render');
+  ok($('.auto[data-id="sched1"] .asub', root).textContent === 'Schedule · Off', 'off on its sub-line');
+  a.flash('rule1', 'ran');
+  ok(getComputedStyle($('.auto[data-id="rule1"] .badge', root)).display !== 'none', 'JUST RAN shows');
+  ok(document.documentElement.scrollWidth <= innerWidth, `no horizontal page scroll (${document.documentElement.scrollWidth} > ${innerWidth})`);
+} catch (e) {
+  problems.push(`threw: ${e.stack || e}`);
+}
+const out = $('#qaResult');
+window.__qa = { problems };
+out.textContent = problems.length ? `FAIL (${problems.length})\n${problems.join('\n')}` : `OK: all automations checks passed (${phone ? 'phone' : 'desktop'} layout)`;
+out.className = problems.length ? 'bad' : '';
+</script>
+</body>
+</html>

@@ -1,6 +1,11 @@
 // An in-memory server that speaks the live API contract (docs/superpowers/specs/2026-11-07-live-api-contract.md),
 // for the live-client checks (test/live.mjs) and, over HTTP, for browser checks (test/mock-live.mjs).
 // createMockLive(opts) → { fetch(url, init) → Promise<Response>, calls, push(sid, kind, data), drop(sid), expire(sid), set(opts) }.
+// Automations (spec 2026-11-08-automations-design.md §3): a session keeps the list its `automations` events last sent;
+// POST sessions / reset answer it (empty), a what-if's `room` carries the list from before the replayed request, and
+// POST sessions/{sid}/automations/{id} { enabled } flips one and streams the list again (src edit), a reset that clears
+// some sends one empty list (src edit, no rid), and an advance past midnight sends the counts back at 0. Scripts emit their own
+// `automations` events and timeline rows with `automation` ids (SCRIPTS.autos); the mock runs no rules of its own.
 // Node built-ins only; no timers unless `pace` > 0 (so it runs on test/clock.mjs's virtual clock too).
 
 import { typeOf, validId, nameOf, CATALOG } from '../../js/custom/catalog.js';
@@ -39,6 +44,15 @@ const state = (path, value, ms = 0) => ['state', { path, value, ms }];
 const call = (step, callId, device, action, args, label) => ['call', { step, callId, device, action, args, label }];
 const result = (callId, step, device, outcome, text, ok = true) => ['result', { callId, step, device, ok, outcome, text }];
 const DONE_OK = ['done', { outcome: 'ok' }];
+export const RULE1 = { id: 'rule1', kind: 'rule', text: 'When Soil sensor is below 30% → Water pump: run 10 s', devices: ['soil', 'pump'], enabled: true, firedToday: 0 };
+export const SCHED1 = { id: 'sched1', kind: 'schedule', text: 'Every day at 19:00 → Floor lamp → 35%', devices: ['lamp'], enabled: true, firedToday: 0 };
+const AUTO_STEPS = [
+  { id: 's1', text: 'Add a rule: when the soil is below 30%, run the pump for 10 s', devices: ['soil', 'pump'] },
+  { id: 's2', text: 'Every day at 19:00, set the floor lamp to 35%', devices: ['lamp'] },
+];
+// The automations being set up, one per step (cards appear during the run, not only at done).
+const autoSetup = () => [st('s1', 'running'), ['automations', { items: [RULE1] }], st('s1', 'done'), st('s2', 'running'), ['automations', { items: [RULE1, SCHED1] }], st('s2', 'done'),
+  ['clock', { iso: '2026-11-13T19:00:00', label: 'Fri 19:00', hour: 19 }]];
 const MOVIE_STEPS = [
   { id: 's1', text: 'Dim the floor lamp to 20%', devices: ['lamp'] },
   { id: 's2', text: 'Close the blinds fully', devices: ['blinds'] },
@@ -104,6 +118,16 @@ export const SCRIPTS = {
       ['cannot_do', { reason: 'I can’t order food from here, only control the devices in this home.', suggestions: ['Movie night, but keep an eye on the plant', "I'm away for the weekend"] }],
       ['done', { outcome: 'cannot_do' }]] },
   ],
+  autos: [
+    { on: 'request', events: [['planning', {}], ['plan', { steps: AUTO_STEPS, horizonHours: 4 }], ['awaiting_approval', { kind: 'plan' }]] },
+    { on: 'approve', events: [...autoSetup(),
+      ['timeline', { at: 'Fri 19:00', text: 'Floor lamp → 35%', ok: true, kind: 'action', origin: 'schedule', device: 'lamp', automation: 'sched1' }],
+      state('lamp.on', true), state('lamp.brightness', 0.35),
+      ['automations', { items: [RULE1, { ...SCHED1, firedToday: 1 }] }],
+      ['clock', { iso: '2026-11-13T20:30:00', label: 'Fri 20:30', hour: 20.5 }],
+      ['summary', { text: 'The rule waters the plant when the soil is dry, and the floor lamp comes on at 19:00 every day.' }], DONE_OK] },
+    { on: 'decline', events: [['declined', {}], ['done', { outcome: 'declined' }]] },
+  ],
   limitCalls: [
     { on: 'request', events: [['planning', {}], ['plan', { steps: [
       { id: 's1', text: 'Dim the floor lamp to 20%', devices: ['lamp'] },
@@ -123,7 +147,14 @@ SCRIPTS.movie.whatif = [
   state('blinds.closed', 1, 3000), result('c2', 's2', 'blinds', 'confirmed', 'confirmed'), st('s2', 'done'),
   ['summary', { text: 'The floor lamp did not respond, so the room stayed lit as it was. The blinds are closed.' }], DONE_OK,
 ];
-export const SCRIPT_PICK = [[/pizza/i, 'cannot'], [/movie/i, 'movie'], [/limit/i, 'limitCalls'], [/water|soil/i, 'replan'], [/weekend|week|away/i, 'weekend'], [/.*/, 'movie']];
+// The what-if replay of `autos`: the room before it had no automations, so they are set up again; the lamp fails at 19:00.
+SCRIPTS.autos.whatif = [...autoSetup(),
+  ['fault', { device: 'lamp', text: 'not responding' }], state('lamp.status', 'fault'),
+  ['timeline', { at: 'Fri 19:00', text: 'Floor lamp → 35%', ok: false, kind: 'fault', origin: 'schedule', device: 'lamp', automation: 'sched1' }],
+  ['automations', { items: [RULE1, { ...SCHED1, firedToday: 1 }] }],
+  ['summary', { text: 'At 19:00 the floor lamp did not respond, so the schedule could not set it.' }], DONE_OK,
+];
+export const SCRIPT_PICK = [[/pizza/i, 'cannot'], [/movie/i, 'movie'], [/limit/i, 'limitCalls'], [/automat|\brule\b|schedule|every day|\bwhen\b/i, 'autos'], [/water|soil/i, 'replan'], [/weekend|week|away/i, 'weekend'], [/.*/, 'movie']];
 
 // ---------------- the server ----------------
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
@@ -159,7 +190,8 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     const run = sess.run;
     if (kind === 'state') { const [d, ...f] = data.path.split('.'); if (sess.state[d]) sess.state[d][f.join('.')] = data.value; }
     else if (kind === 'clock') { sess.clock = { iso: data.iso, label: data.label, hour: data.hour }; sess.state.env.hour = data.hour; }
-    else if (kind === 'room') { sess.state = clone(data.state); sess.clock = clone(data.clock); }
+    else if (kind === 'room') { sess.state = clone(data.state); sess.clock = clone(data.clock); sess.automations = clone(data.automations ?? []); }
+    else if (kind === 'automations') sess.automations = clone(data.items ?? []);
     else if (run && kind === 'plan') run.steps = clone(data.steps);
     else if (run && kind === 'replan') run.proposed = clone(data.steps);
     else if (run && kind === 'call') run.calls++;
@@ -232,14 +264,14 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
         for (const d of list) state[d.id] = { ...clone(typeOf(d.type).initial), status: 'online' };
         const id = `sess-${++nSession}`;
         const editable = customEditable(Object.fromEntries(list.map((d) => [d.id, d.type])));
-        sessions.set(id, { id, initial: clone(state), editable, events: [], streams: new Set(), state, clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
-        return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: customSuggestions(list) });
+        sessions.set(id, { id, initial: clone(state), editable, events: [], streams: new Set(), state, clock: { ...CLOCK }, automations: [], active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
+        return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: customSuggestions(list), automations: [] });
       }
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
       const id = `sess-${++nSession}`;
-      const sess = { id, events: [], streams: new Set(), state: homeState(), clock: { ...CLOCK }, active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() };
+      const sess = { id, events: [], streams: new Set(), state: homeState(), clock: { ...CLOCK }, automations: [], active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() };
       sessions.set(id, sess);
-      return json(201, { sessionId: id, state: clone(sess.state), clock: { ...sess.clock }, suggestions: [...SUGGESTIONS] });
+      return json(201, { sessionId: id, state: clone(sess.state), clock: { ...sess.clock }, suggestions: [...SUGGESTIONS], automations: [] });
     }
     const sess = sessions.get(sid);
     if (!sess) return fail(404, 'no_session', 'That session has ended.');
@@ -258,8 +290,22 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     }
     if (sub === 'reset' && method === 'POST') {
       if (sess.active) return fail(409, 'busy', 'A request is still running.');
-      sess.state = sess.initial ? clone(sess.initial) : homeState(); sess.clock = { ...CLOCK }; sess.last = null;
-      return json(200, { state: clone(sess.state), clock: { ...sess.clock } });
+      const had = Array.isArray(sess.automations) && sess.automations.length > 0;
+      sess.state = sess.initial ? clone(sess.initial) : homeState(); sess.clock = { ...CLOCK }; sess.last = null; sess.automations = [];
+      if (had) emit(sess, 'automations', { items: [], src: 'edit' }); // one event, no rid, only when there was something to clear
+      return json(200, { state: clone(sess.state), clock: { ...sess.clock }, automations: [] });
+    }
+    if (sub === 'automations' && method === 'POST') { // an automation's switch: the same rate window as set and advance
+      if (!rid || action) return fail(404, 'bad_request', 'No such route.');
+      const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
+      if (recent.length >= 10) { editTimes.set(sid, recent); return fail(429, 'rate', 'Too many changes at once. Wait a moment.'); }
+      recent.push(now); editTimes.set(sid, recent);
+      if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean') return fail(400, 'bad_request', 'Bad request.');
+      const a = sess.automations.find((x) => x.id === rid);
+      if (!a) return fail(404, 'no_automation', 'There is no such automation.');
+      a.enabled = body.enabled;
+      emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' }, sess.active); // allowed mid-request: it carries that request's rid
+      return json(202, {});
     }
     if ((sub === 'set' || sub === 'advance') && method === 'POST') {
       if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(400, 'bad_request', 'Bad request.');
@@ -281,7 +327,15 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       if (typeof hours !== 'number' || !Number.isFinite(hours) || hours <= 0 || hours > 168) return fail(400, 'bad_value', "That value isn't allowed.");
       if (sess.active) return fail(409, 'busy', 'A request is already running.');
       let left = hours;
-      while (left > 0) { const step = Math.min(6, left); emit(sess, 'clock', { ...clockAfter(sess.clock, step), src: 'edit' }); left -= step; }
+      while (left > 0) {
+        const step = Math.min(6, left), day = Math.floor(sess.clock.hour / 24);
+        emit(sess, 'clock', { ...clockAfter(sess.clock, step), src: 'edit' }); left -= step;
+        // a new sim day: the day's counts go back to 0 (an event only when one changes)
+        if (Math.floor(sess.clock.hour / 24) > day && sess.automations.some((a) => a.firedToday > 0)) {
+          sess.automations = sess.automations.map((a) => ({ ...a, firedToday: 0 }));
+          emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' });
+        }
+      }
       return json(200, { clock: { ...sess.clock } });
     }
     if (sub !== 'requests' || method !== 'POST') return fail(404, 'bad_request', 'No such route.');
@@ -294,7 +348,7 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       if (cfg.remaining <= 0) return fail(429, 'code_limit', 'This code has reached its limit for today.');
       cfg.remaining--;
       const requestId = `r${++sess.nRid}`; sess.known.add(requestId); const name = SCRIPT_PICK.find(([re]) => re.test(text))[1];
-      sess.run = { rid: requestId, name, text, used: new Set(), steps: [], proposed: null, calls: 0, whatif: false, before: { state: clone(sess.state), clock: { ...sess.clock } } };
+      sess.run = { rid: requestId, name, text, used: new Set(), steps: [], proposed: null, calls: 0, whatif: false, before: { state: clone(sess.state), clock: { ...sess.clock }, automations: clone(sess.automations) } };
       sess.active = requestId; sess.curRid = requestId; sess.pending = null;
       const seg = segmentFor(sess.run, 'request');
       runEvents(sess, seg ? seg.events : [['planning', {}], ['cannot_do', { reason: 'Nothing to run.', suggestions: [] }], ['done', { outcome: 'cannot_do' }]], requestId);
@@ -310,7 +364,8 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       const requestId = `r${++sess.nRid}`;
       sess.run = { rid: requestId, name: last.name, used: new Set(), steps: clone(last.steps), proposed: null, calls: 0, whatif: true, before: last.before };
       sess.active = requestId; sess.curRid = requestId; sess.pending = null;
-      runEvents(sess, [['room', clone(last.before)], ['plan', { steps: clone(last.steps), horizonHours: null }], ...extra], requestId);
+      // room (with that room's automations), then the same list as an `automations` event, then the plan (contract)
+      runEvents(sess, [['room', clone(last.before)], ['automations', { items: clone(last.before.automations ?? []) }], ['plan', { steps: clone(last.steps), horizonHours: null }], ...extra], requestId);
       return json(202, { requestId });
     }
     if (action === 'approve' || action === 'decline') {

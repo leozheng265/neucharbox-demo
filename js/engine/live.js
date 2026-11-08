@@ -64,6 +64,24 @@ export const LIVE_COPY = {
   ruleFired: 'Rule fired',
   ruleHeld: 'Rule held back',
   scheduled: 'Scheduled',
+  // the scene header's direct entry (spec 2026-11-08 §4)
+  headerButton: 'Live AI',
+  headerButtonTitle: 'Try your own request with the live AI',
+  // the Automations section (spec 2026-11-08 §1, js/engine/automations.js)
+  autosTitle: 'Automations',
+  autosOn: (n) => `${n} on`,
+  autosAllOff: 'all off',
+  autosNone: 'none yet',
+  autosEmpty: 'No automations yet. Ask for one, like “When the soil is below 30%, run the pump.”',
+  autosEmptyAny: 'No automations yet. Ask for a rule (“when …, do …”) or a schedule (“every day at …”).',
+  autoRule: 'Rule',
+  autoSchedule: 'Schedule',
+  autoRan: (n) => `ran ${n}× today`,
+  autoOff: 'Off',
+  autoJustRan: 'JUST RAN',
+  autoHeldBadge: 'HELD',
+  autoRejected: "That switch didn't go through, so the automation is back as it was.",
+  autoGone: "That automation isn't there any more, so nothing changed.",
 };
 
 export const normalizeCode = (text) => String(text ?? '').toUpperCase().replace(/\s+/g, '');
@@ -90,6 +108,14 @@ const okOf = (d) => d.ok === true || (d.ok == null && d.outcome !== 'failed');
 // Steps as the contract sends them ({ id, text, devices }); anything else is dropped.
 const stepsOf = (list) => (Array.isArray(list) ? list : []).filter((s) => isObj(s) && typeof s.id === 'string')
   .map((s) => ({ id: s.id, text: str(s.text), devices: Array.isArray(s.devices) ? s.devices.filter((d) => typeof d === 'string') : [] }));
+// Automations as the contract sends them ({ id, kind, text, devices, enabled, firedToday }), in the server's order; an
+// item without an id, or a repeated id, is dropped.
+export const automationsOf = (list) => {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).filter((a) => isObj(a) && typeof a.id === 'string' && a.id && !seen.has(a.id) && seen.add(a.id))
+    .map((a) => ({ id: a.id, kind: a.kind === 'schedule' ? 'schedule' : 'rule', text: str(a.text), devices: Array.isArray(a.devices) ? a.devices.filter((d) => typeof d === 'string') : [],
+      enabled: a.enabled !== false, firedToday: Number.isInteger(a.firedToday) && a.firedToday > 0 ? a.firedToday : 0 }));
+};
 
 export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now(), sessionExtra = () => ({}) }) {
   let code = null;            // the code for this visit (kept here too, so a blocked store still works)
@@ -110,6 +136,12 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   const known = new Map();    // path → the room's last value for it (what a refused edit goes back to)
   const busy = new Set();     // the ids live.js marked 'busy': done clears only these, so a JUST SET runs its full 2 s
   const devices = devicesOf(scene), n = devices.length;
+  // The Automations section (spec 2026-11-08): the room's automations as the server last sent them, and the switches the
+  // visitor flipped: each shows the visitor's value until the server's list agrees (a toggle made mid-request is applied
+  // at the runner's next servicing point, after its 202), or goes back when the server refuses it.
+  let autos = [];
+  const autoWant = new Map(); // id → { on, n }
+  let autoN = 0, announced = null;
 
   // The clock control: usable only between requests (idle), while no advance runs, and while a session exists.
   const clockUi = () => {
@@ -131,12 +163,33 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     const ks = path.split('.');
     return ks.length > 1 && Object.prototype.hasOwnProperty.call(store.state, ks[0]) && ks.every((k) => FIELD.test(k) && !NOT_FIELDS.has(k));
   };
+  // The scene header's Live AI button follows this (js/engine/liveentry.js): live mode available here, and open or not.
+  const announce = () => { if (dead()) return; const k = `${available}|${active}`; if (k === announced) return; announced = k; ui.availability?.({ available, active }); };
+
+  // ---- automations ----
+  const shownAutos = () => autos.map((a) => { const w = autoWant.get(a.id); return w && w.on !== a.enabled ? { ...a, enabled: w.on } : a; });
+  const showAutos = () => { if (!dead()) ui.automations?.(shownAutos()); };
+  // A list from the server (last one wins). fresh (a new session, a reset, a what-if's room): flipped switches go too.
+  function setAutos(list, { fresh = false } = {}) {
+    autos = automationsOf(list);
+    if (fresh) autoWant.clear();
+    else for (const [id, w] of [...autoWant]) { const a = autos.find((x) => x.id === id); if (!a || a.enabled === w.on) autoWant.delete(id); }
+    showAutos();
+  }
+  const noAutos = () => { autos = []; autoWant.clear(); if (!dead()) ui.automations?.(null); }; // live mode is over: the section goes
+  // A timeline row an automation made (a rule fired, a schedule ran, a rule held back): its card flashes.
+  function flashAuto(d) {
+    if (dead() || typeof d.automation !== 'string' || !autos.some((a) => a.id === d.automation)) return;
+    if (d.origin === 'held') ui.automationFlash?.(d.automation, 'held');
+    else if (d.origin === 'rule' || d.origin === 'schedule') ui.automationFlash?.(d.automation, 'ran');
+  }
 
   async function probe() {
     try {
       const h = await api.health();
       available = !!(h.ok && h.liveEnabled && h.scenes.includes(scene.id));
     } catch { available = false; }
+    announce();
     return available;
   }
 
@@ -169,7 +222,11 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   function onEvent(ev) {
     const d = ev?.data;
     if (gone() || !isObj(d)) return;
-    if (ev.event === 'room') { if (isObj(d.state)) applyRoom(d.state, d.clock); return; } // any request's (a what-if's comes first)
+    if (ev.event === 'room') { // any request's (a what-if's comes first), with that room's automations
+      if (isObj(d.state)) { applyRoom(d.state, d.clock); if (Array.isArray(d.automations)) setAutos(d.automations, { fresh: true }); }
+      return;
+    }
+    if (ev.event === 'automations') { if (Array.isArray(d.items)) setAutos(d.items); return; } // any rid or src: applied at once, never held
     if (d.src === 'edit') return applyEdit(ev); // before the rid check: a late frame may carry a finished request's rid; never held
     if (rid !== null && d.rid === rid) return handle(ev);
     if (holding && typeof d.rid === 'string') holding.push(ev); // maybe the request whose POST hasn't answered yet
@@ -232,7 +289,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
         if (isWhatIf) beat('recover');
         break;
       case 'clock': setClock(d); break;
-      case 'timeline': checklist?.timeline({ at: str(d.at), text: str(d.text), ok: okOf(d), kind: d.kind, origin: d.origin }); break;
+      case 'timeline': checklist?.timeline({ at: str(d.at), text: str(d.text), ok: okOf(d), kind: d.kind, origin: d.origin }); flashAuto(d); break;
       case 'replan': // its ids are final (contract): approving merges them into the checklist
         replanSteps = stepsOf(d.steps);
         replanCard = planCard({ kind: 'replan', steps: replanSteps, reason: str(d.reason) });
@@ -240,7 +297,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       case 'say': if (typeof d.delta === 'string') view.sayDelta(d.delta); break;
       case 'summary': if (typeof d.text === 'string') view.summary(d.text); break;
       case 'limit':
-        if (d.kind === 'budget') { available = false; exitOnDone = true; view.ncb(LIVE_COPY.limitGlobal); } else view.ncb(LIVE_COPY.limitRun);
+        if (d.kind === 'budget') { available = false; exitOnDone = true; announce(); view.ncb(LIVE_COPY.limitGlobal); } else view.ncb(LIVE_COPY.limitRun);
         break;
       case 'error': view.ncb(LIVE_COPY.error); break;
       case 'done': done(d); break;
@@ -264,6 +321,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     const row = { at: str(d.at), text: str(d.text), ok: okOf(d), kind: d.kind, origin: d.origin };
     if (rid !== null && d.rid === rid && checklist) checklist.timeline(row); else view.ruleLine(row);
     if (isDevice(d.device) && d.ok === true && (d.origin === 'rule' || d.origin === 'schedule')) mark(d.device, 'just');
+    flashAuto(d);
   }
 
   function done(d) {
@@ -420,6 +478,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     }
     if (gone()) return;
     applyRoom(r.state, r.clock);
+    setAutos(Array.isArray(r.automations) ? r.automations : [], { fresh: true }); // a reset clears them all (spec §2)
     lastRid = null; isWhatIf = false; // nothing to replay until the next request
     view.ncb(FRESH_START); beat('ask'); ui.status(LIVE_COPY.statusWaiting(n)); setPhase('idle'); view.input(true);
   }
@@ -442,6 +501,22 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       rollback();
       if (kindOf(e) === 'rate') sayRate(); else view.ncb(LIVE_COPY.editRejected);
       return;
+    }
+  }
+
+  // An automation's switch: shown at once, then POST …/automations/{id}. Free, allowed at any time, even mid-request or
+  // during an advance (the server applies it where it owns the room); it shares the edit rate limit. A refusal puts the
+  // switch back to the server's value, unless a later flip of it has moved it on meanwhile.
+  async function setAutomation(id, on) {
+    if (gone() || !sessionId || typeof on !== 'boolean' || !autos.some((a) => a.id === id)) return;
+    const sid = sessionId, k = ++autoN;
+    autoWant.set(id, { on, n: k }); showAutos();
+    try { await api.automation(sid, id, on); } catch (e) {
+      if (gone() || sid !== sessionId) return;
+      if (status(e) === 401) return unauthorized();
+      if (kindOf(e) === 'no_session') return regenerate();
+      if (autoWant.get(id)?.n === k) { autoWant.delete(id); showAutos(); }
+      if (kindOf(e) === 'rate') sayRate(); else view.ncb(kindOf(e) === 'no_automation' ? LIVE_COPY.autoGone : LIVE_COPY.autoRejected);
     }
   }
 
@@ -494,7 +569,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   function forget() {
     if (answer) answer.over = true;
     rid = null; lastRid = null; holding = null; answer = null; pendingText = null; held = null; isWhatIf = false; requesting = false;
-    busy.clear(); begin();
+    busy.clear(); begin(); autos = []; autoWant.clear();
   }
   // Makes a session and its stream. false when it failed (already handled) or the visit moved on.
   async function newSession({ notice } = {}) {
@@ -513,6 +588,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     suggestions = Array.isArray(s.suggestions) ? s.suggestions.filter((t) => typeof t === 'string') : [];
     applyRoom(s.state, s.clock);
     ui.editing?.(true);
+    setAutos(s.automations, { fresh: true }); // the section shows from here (empty at the start)
     openStream(0);
     if (notice) view.ncb(notice);
     return true;
@@ -547,7 +623,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     release();
     codes.clear(); code = null;
     stream?.close(); stream = null; sessionId = null; forget();
-    ui.editing?.(false); clockUi();
+    ui.editing?.(false); noAutos(); clockUi();
     view.input(false);
     showAccess({ mode: 'code', note: LIVE_COPY.savedCodeGone });
   }
@@ -595,10 +671,10 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   async function open() {
     if (active || closed) return;
-    active = true; setPhase('access');
+    active = true; setPhase('access'); announce();
     const h = await api.health();
     if (gone()) return;
-    available = !!(h.ok && h.liveEnabled && h.scenes.includes(scene.id));
+    available = !!(h.ok && h.liveEnabled && h.scenes.includes(scene.id)); announce();
     if (!available) return showAccess({ mode: 'offline' });
     const stored = codes.get();
     if (!stored) return showAccess({ mode: 'code' });
@@ -619,14 +695,16 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     accessHandle?.close(); accessHandle = null;
     active = false; setPhase('off'); sessionId = null; forget();
     if (dead()) return;
-    ui.track(false); ui.editing?.(false); view.input(false); view.live(false);
+    ui.track(false); ui.editing?.(false); noAutos(); view.input(false); view.live(false);
     ui.offerGuided(heading);
+    announce();
   }
   // Teardown (the visitor left the scene): abort and fall silent, with no view, panel, ui or store call after it.
   function close() { closed = true; active = false; phase = 'off'; stream?.close(); stream = null; forget(); }
 
   return {
-    probe, open, submit, exit, close, edit, advance,
+    probe, open, submit, exit, close, edit, advance, setAutomation,
+    get automations() { return shownAutos(); }, // what the section shows (QA hooks)
     get available() { return available; },
     get active() { return active; },
     get phase() { return phase; },

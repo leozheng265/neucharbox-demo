@@ -1,4 +1,5 @@
-// Live AI demo: the API client (wire contract: docs/superpowers/specs/2026-11-07-live-api-contract.md).
+// Live AI demo: the API client (wire contract: docs/superpowers/specs/2026-11-07-live-api-contract.md; the automations
+// route: 2026-11-08-automations-design.md §3).
 // Every request sends ngrok-skip-browser-warning; protected routes send the invite code as a Bearer token.
 // The code is never put in a URL and never logged.
 
@@ -60,6 +61,7 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
     whatIf: (sid, rid, device) => call('POST', `sessions/${enc(sid)}/requests/${enc(rid)}/whatif`, { body: { device } }),
     set: (sid, path, value) => call('POST', `sessions/${enc(sid)}/set`, { body: { path, value } }),
     advance: (sid, hours) => call('POST', `sessions/${enc(sid)}/advance`, { body: { hours }, ms: 40000 }),
+    automation: (sid, id, enabled) => call('POST', `sessions/${enc(sid)}/automations/${enc(id)}`, { body: { enabled } }),
     reset: (sid) => call('POST', `sessions/${enc(sid)}/reset`, { body: {} }),
     eventsUrl: (sid, after) => `${root}sessions/${enc(sid)}/events${after ? `?after=${Number(after)}` : ''}`,
     headers: () => ({ Authorization: `Bearer ${getCode() ?? ''}`, 'ngrok-skip-browser-warning': '1', Accept: 'text/event-stream' }),

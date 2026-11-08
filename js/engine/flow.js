@@ -5,7 +5,8 @@
 //            (its end card is up: "Another request here", plus "What if something fails?" on a request's success card
 //            or "Try another failure" on a what-if's). One request at a time: a chip, a pick or a what-if button outside
 //            its phase does nothing, except an end-card button pressed while that request's last steps still run (after
-//            its { end }): it acts as soon as they have.
+//            its { end }): it acts as soon as they have. 'live': stop() handed the conversation to live mode; offerChips()
+//            (live mode's way back) leaves it.
 //   running  the request running, or that ran last: { prompt, whatIf } (null while the chips are up, or after a bug)
 //   quiet()  true while a what-if replays the request quietly and NCB introduces it in the replayed room (A2): main.js
 //            hands it to scene.build({ quiet }), and no ping, tile pop or status line comes from store writes meanwhile.
@@ -36,6 +37,10 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
   let baseline = null;  // the room right after setup; every request starts from it
   let dirty = false;    // a request has touched the room since the last reset
   let afterRun = null;  // an end-card button pressed while its request's last steps still ran: done when they have
+  let starting = null;  // start()'s promise (setup), and the request or what-if running: what stop() waits for
+  let current = null;
+  let halting = false;  // stop() is ending the run: it neither ends with a card nor records its choices
+  const going = () => u.alive() && !halting;
   const used = new Set();
   const lastChoices = new Map(); // prompt → plan and ask answers of the visitor's last clean run of it: what a what-if replays
 
@@ -85,12 +90,14 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
   // A request (or a what-if) is over: its end card is up. An end-card button pressed while it still ran acts now.
   function ended() { phase = 'end'; setBeat('end'); const f = afterRun; afterRun = null; if (f) f(); }
 
-  async function start() {
-    setStatus('Hub is off');
-    await player.play(setupSteps(scene));
-    if (!u.alive()) return;
-    baseline = store.snapshot();
-    offerChips();
+  function start() {
+    return (starting ??= (async () => {
+      setStatus('Hub is off');
+      await player.play(setupSteps(scene));
+      if (!u.alive()) return;
+      baseline = store.snapshot();
+      offerChips();
+    })());
   }
   function offerChips(heading, list = remaining()) {
     phase = 'chips'; running = null; afterRun = null; setBeat('ask'); waiting(); u.rewind(); // phones: the strip starts at the first tile again
@@ -99,13 +106,17 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
   // "Another request here": the next request starts from the room right after setup, so show that room (and its
   // dashboard) while the visitor chooses, not the last run's end state and faults.
   function another() {
+    if (phase === 'live') return; // live mode has the conversation: a guided card left on screen offers nothing
     if (phase === 'prompt') { afterRun = another; return; } // the request's end card is up while its last steps still run
     chat.closeFailures(); chat.closeEnds();
     if (dirty && baseline) { freshRoom(); chat.ncb(FRESH_START); }
     offerChips();
   }
-  async function runPrompt(prompt, typed = prompt.chip, fallback = false) {
-    if (phase !== 'chips') return; // one request at a time
+  function runPrompt(prompt, typed = prompt.chip, fallback = false) {
+    if (phase !== 'chips') return Promise.resolve(); // one request at a time
+    return (current = request(prompt, typed, fallback));
+  }
+  async function request(prompt, typed, fallback) {
     phase = 'prompt'; used.add(prompt); running = { prompt, whatIf: false }; afterRun = null; chat.enableInput(false); chat.closeEnds(); chat.closeChips();
     chat.user(typed);
     try {
@@ -116,7 +127,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
       else if (typed !== prompt.chip) chat.ncb(`Understood — treating that as: ${quoted(prompt)}.`);
       const res = await player.play(prompt.steps);
       u.track(false);
-      if (!u.alive()) return;
+      if (!going()) return; // the visitor left, or live mode took over (stop)
       if (res?.declined) { // "Not this" on the plan: nothing ran, so put back anything the lead-up touched and ask again
         used.delete(prompt); if (baseline) freshRoom();
         const others = scene.prompts.filter((p) => p !== prompt), left = others.filter((p) => !used.has(p)); // the others first, the declined one still there last
@@ -125,10 +136,10 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
       lastChoices.set(prompt, res.choices);
     } catch (e) {
       u.error(e); u.track(false);
-      if (!u.alive()) return;
+      if (!going()) return;
       running = null; demoError(); // no what-ifs from a run that broke
     }
-    if (!u.alive()) return;
+    if (!going()) return;
     ended();
   }
 
@@ -149,14 +160,17 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
   // tile, as for a new request), the request replayed quietly with the visitor's recorded choices up to the failure
   // point, NCB's intro, then the Recover beat and the scenario. At its end card the strip shows the device(s) left in fault
   // (the picked one first), not whatever the scenario changed last.
-  async function whatIf(prompt, key) {
+  function whatIf(prompt, key) {
     const choices = lastChoices.get(prompt);
-    if (phase !== 'end' || !choices) return; // one request at a time
+    if (phase !== 'end' || !choices) return Promise.resolve(); // one request at a time
+    return (current = replay(prompt, key, choices));
+  }
+  async function replay(prompt, key, choices) {
     phase = 'prompt'; running = { prompt, whatIf: true }; afterRun = null; chat.enableInput(false); chat.closeFailures(); chat.closeEnds(); chat.closeChips();
     dirty = true;
     try {
       await runWhatIf({ player, scene, prompt, key, choices, host: {
-        alive: () => u.alive(),
+        alive: () => going(),
         quiet: (on) => { quietNow = on; u.track(!on); }, // the dashboard follows the scenario, not the replay
         freshRoom: () => { if (baseline) freshRoom(); dirty = true; u.rewind(); },
         status: (text) => setStatus(text),
@@ -165,18 +179,35 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
       } });
       u.track(false);
       const bad = [...new Set([key, ...ids])].filter((id) => scene.devices[id] && store.state[id]?.status === 'fault');
-      if (bad.length && u.alive()) u.show(bad);
+      if (bad.length && going()) u.show(bad);
     } catch (e) {
       quietNow = false; u.error(e); u.track(false);
-      if (!u.alive()) return;
+      if (!going()) return;
       running = null; demoError();
     }
-    if (!u.alive()) return;
+    if (!going()) return;
     ended();
   }
 
+  // Live mode takes the conversation (the scene header's Live AI button, or an end card's live button): what runs stops
+  // where it is (setup first plays to its end at once: live mode starts from the room right after setup), nothing guided
+  // stays offered or pressable, and the room goes back to right after setup. Resolves once nothing runs any more.
+  async function stop() {
+    if (phase === 'live') return;
+    if (phase === 'setup') { player.skipTo('ask'); await starting; if (!u.alive()) return; }
+    if (phase === 'prompt') {
+      halting = true; player.halt();
+      try { await current; } finally { halting = false; player.resume(); }
+      if (!u.alive()) return;
+    }
+    phase = 'live'; running = null; afterRun = null; quietNow = false;
+    chat.closeChips(); chat.closeFailures(); chat.closeEnds(); chat.enableInput(false); u.track(false);
+    if (baseline && dirty) freshRoom(); else u.clearMarkers(); // no fault ring or setup label left in the room either
+    setBeat('ask'); waiting(); u.rewind(); // no beat to skip to, no stale (red) status line, the strip at its first tile
+  }
+
   return {
-    player, start, runPrompt, openFailures, whatIf, another, offerChips, remaining, lastChoices, used,
+    player, start, runPrompt, openFailures, whatIf, another, offerChips, remaining, lastChoices, used, stop,
     quiet: () => quietNow,
     skipTo: (beat) => player.skipTo(beat),
     cancel: () => player.cancel(),

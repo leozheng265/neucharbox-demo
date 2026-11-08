@@ -30,6 +30,7 @@
 .room .changed-note { position: absolute; left: 50%; bottom: 64px; /* above the selection bar (bottom 14 px), which an added device opens */ transform: translateX(-50%); z-index: 2; margin: 0; width: max-content; max-width: min(440px, calc(100% - 24px)); padding: 7px 14px; font-size: 13px; line-height: 1.35; color: var(--ink); background: rgba(255,255,255,.92); border: 1px solid var(--line-2); border-radius: 12px; text-align: center; pointer-events: none; }
 .empty-note .narrow { display: none; }
 .stage.custom:not([data-mode="build"]) .empty-note { display: none; } /* building is where devices are added */
+.stage.custom:not([data-mode="run"]) .autos { display: none; } /* the Automations section (js/engine/automations.js) is run mode's, under the cards */
 .room.dragging canvas { touch-action: none; cursor: grabbing; } /* every scene's canvas has it already (orbit); here a drag needs it too */
 .room.dragging { user-select: none; -webkit-user-select: none; }
 

@@ -3,12 +3,13 @@
 //   also holds the harness they share (check / eq / ok / harness and the stub LiveView, panel and ui).
 import { createStore } from '../js/engine/store.js';
 import { virtualTime } from './clock.mjs';
-import { createMockLive, MOCK_CODE, SCRIPTS } from './fixtures/live-mock.mjs';
+import { createMockLive, MOCK_CODE, SCRIPTS, RULE1, SCHED1 } from './fixtures/live-mock.mjs';
 import home from '../js/scenes/home.js';
 import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
 import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
 import { createSseParser, openEventStream } from '../js/engine/sse.js';
-import { createLive, codeStore, normalizeCode, LIVE_COPY } from '../js/engine/live.js';
+import { createLive, codeStore, normalizeCode, LIVE_COPY, automationsOf } from '../js/engine/live.js';
+import { createLiveEntry } from '../js/engine/liveentry.js';
 import { FRESH_START } from '../js/engine/flow.js';
 import { REPLAYING } from '../js/engine/whatif.js';
 
@@ -68,7 +69,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     };
     h.panel = { mark: rec('panel').bind(null, 'mark'), reveal: rec('panel').bind(null, 'reveal') };
     let alive = true;
-    h.ui = { alive: () => alive, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind', 'editing', 'clock'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
+    h.ui = { alive: () => alive, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind', 'editing', 'clock', 'automations', 'automationFlash', 'availability'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
     h.ui.kill = () => { alive = false; };
     h.find = (source, method) => log.filter((e) => e[0] === source && e[1] === method).at(-1)?.slice(2);
     h.has = (source, method, ...args) => log.some((e) => e[0] === source && e[1] === method && args.every((a, i) => JSON.stringify(e[2 + i]) === JSON.stringify(a)));
@@ -191,7 +192,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const before = (await kinds(sid)).length;
     const [st, { requestId: w }] = await post(`sessions/${sid}/requests/${rid}/whatif`, { device: 'lamp' }); await settle();
     const wk = (await kinds(sid)).slice(before); eq(st, 202); ok(w !== rid);
-    eq(wk.slice(0, 3), ['room', 'plan', 'step'], 'what-if starts room, plan, run'); ok(!wk.includes('awaiting_approval'), 'what-if asks nothing'); eq(wk.at(-1), 'done');
+    eq(wk.slice(0, 4), ['room', 'automations', 'plan', 'step'], 'what-if starts room, its automations, plan, run'); ok(!wk.includes('awaiting_approval'), 'what-if asks nothing'); eq(wk.at(-1), 'done');
     eq((await post(`sessions/${sid}/requests/${rid}/whatif`, { device: 'lamp' }))[0], 202, 'same rid replays again'); await settle();
     // a declined request is not a what-if target
     [, { requestId: rid }] = await post(`sessions/${sid}/requests`, { text: 'Movie night' }); await settle();
@@ -1235,5 +1236,257 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.live.exit(); eq(t.find('ui', 'editing'), [false]); t.live.close();
     eq([LIVE_COPY.editRejected, LIVE_COPY.editRate, LIVE_COPY.clockBusy, LIVE_COPY.clockPlus1, LIVE_COPY.clockPlus6, LIVE_COPY.clockSet, LIVE_COPY.clockGo, LIVE_COPY.ruleFired, LIVE_COPY.ruleHeld, LIVE_COPY.scheduled],
       ["That change didn't go through, so the card is back to the room's value.", "That's a lot of changes at once. Slow down a little.", 'The clock moves again when this request is done.', '+1 h', '+6 h', 'Set time…', 'Go', 'Rule fired', 'Rule held back', 'Scheduled']);
+  });
+
+  // ---- automations and the direct Live AI entry (spec 2026-11-08-automations-design.md) ----
+  const AUTO = 'When the soil is below 30%, run the pump, and every day at 19:00 dim the lamp';
+  const R1 = automationsOf([RULE1])[0], S1 = automationsOf([SCHED1])[0];
+  const autoLists = (t) => t.log.filter((e) => e[0] === 'ui' && e[1] === 'automations').map((e) => e[2]);
+  const lastAutos = (t) => autoLists(t).at(-1);
+  const enabledOf = (t, id) => lastAutos(t)?.find((a) => a.id === id)?.enabled;
+  const flashes = (t) => t.log.filter((e) => e[0] === 'ui' && e[1] === 'automationFlash').map((e) => [e[2], e[3]]);
+  const autoPosts = (m) => postsTo(m, /\/automations\/[^/]+$/);
+  // A room with rule1 and sched1 in it, as their `automations` event (src edit, no rid) would leave it.
+  const withAutos = async (t, items = [RULE1, SCHED1]) => { t.mock.edit(t.live.sessionId, 'automations', { items }); await settle(); };
+
+  await check('rig · the automations route follows the contract (202 then an event; no_session, no_automation, bad_request, rate shared with set)', async () => {
+    const { m, post, settle: s1, session } = rig(), sid = await session();
+    const frames = async (after = 0) => { const r = await m.fetch(`${BASE}sessions/${sid}/events?after=${after}`, { headers: { authorization: `Bearer ${MOCK_CODE}` } }); const rd = r.body.getReader(), dec = new TextDecoder(); let b = ''; for (;;) { const x = await Promise.race([rd.read(), new Promise((res) => setTimeout(() => res({ done: true }), 5))]); if (x.done) break; b += dec.decode(x.value); } await rd.cancel(); return [...b.matchAll(/event: (\w+)\ndata: (.*)\n/g)].map((a) => [a[1], JSON.parse(a[2])]); };
+    const [st0, s0] = await post('sessions', { scene: 'home' }); eq([st0, s0.automations], [201, []], 'POST sessions answers an empty list');
+    m.edit(sid, 'automations', { items: [RULE1] });
+    eq(await post(`sessions/${sid}/automations/rule1`, { enabled: false }), [202, {}], 'a switch answers 202 {}');
+    const last = (await frames()).at(-1);
+    eq(last, ['automations', { items: [{ ...RULE1, enabled: false }], src: 'edit' }], 'then the whole list again, src edit, no rid while idle');
+    eq((await post(`sessions/${sid}/automations/nope`, { enabled: true }))[1].error, 'no_automation', 'unknown id');
+    eq((await post(`sessions/${sid}/automations/rule1`, {}))[1].error, 'bad_request', 'missing enabled');
+    eq((await post(`sessions/${sid}/automations/rule1`, { enabled: 'yes' }))[1].error, 'bad_request', 'non-bool enabled');
+    eq((await post('sessions/sess-99/automations/rule1', { enabled: true }))[1].error, 'no_session', 'unknown session');
+    await new Promise((r) => setTimeout(r, 5001));
+    for (let i = 0; i < 10; i++) await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: i });
+    eq((await post(`sessions/${sid}/automations/rule1`, { enabled: true }))[1].error, 'rate', 'shares the edit rate window');
+    await new Promise((r) => setTimeout(r, 5001));
+    const [, { requestId: rid }] = await post(`sessions/${sid}/requests`, { text: 'Movie night' }); await s1();
+    eq((await post(`sessions/${sid}/automations/rule1`, { enabled: true }))[0], 202, 'allowed mid-request (never 409 busy)');
+    eq((await frames()).filter((f) => f[0] === 'automations').at(-1)[1].rid, rid, 'mid-request, the event carries the request\'s rid');
+    await post(`sessions/${sid}/requests/${rid}/decline`); await s1();
+    const [rs, r] = await post(`sessions/${sid}/reset`); eq([rs, r.automations], [200, []], 'reset answers an empty list');
+    eq((await post(`sessions/${sid}/automations/rule1`, { enabled: true }))[1].error, 'no_automation', 'and has cleared them');
+  });
+
+  await check('api · automation(sid, id, enabled) posts the contract route', async () => {
+    const m = createMockLive(), api = createLiveApi({ base: 'http://mock', fetch: m.fetch, getCode: () => MOCK_CODE });
+    const { sessionId } = await api.createSession('home'); m.edit(sessionId, 'automations', { items: [SCHED1] });
+    eq(await api.automation(sessionId, 'sched1', false), {}, 'resolves {}');
+    const c = m.calls.at(-1); eq([c.method, c.path, c.body], ['POST', `sessions/${sessionId}/automations/sched1`, { enabled: false }]);
+    let err; try { await api.automation(sessionId, 'gone', true); } catch (e) { err = e; }
+    ok(err instanceof LiveError && err.kind === 'no_automation' && err.status === 404, 'LiveError no_automation');
+  });
+
+  await check('automations · none in guided mode; an empty section once the session exists; gone when live mode ends', async () => {
+    const t = await harness();
+    eq(autoLists(t).length, 0, 'nothing before live mode');
+    await t.live.open(); eq(autoLists(t).length, 0, 'nothing on the access card'); await t.lastAccess.code(MOCK_CODE);
+    eq(autoLists(t), [[]], 'one empty list (the empty-state line)');
+    ok(t.order('ui', 'editing', true) < t.log.findIndex((e) => e[1] === 'automations'), 'with the cards\' edit mode');
+    t.live.exit(); eq(lastAutos(t), null, 'hidden after exit'); t.live.close();
+    const u = await harness({ entered: true }); await withAutos(u); u.mock.set({ code: 'NCB-OTHR-CODE' }); u.mock.drop(u.live.sessionId);
+    await waitFor(() => accessCount(u) === 2); eq(lastAutos(u), null, 'hidden when the code stops working'); u.live.close();
+  });
+
+  await check('automations · cards appear as the AI makes them (during the run), last list wins', async () => {
+    const t = await harness({ entered: true }); await toPlan(t, AUTO); await t.card.approve();
+    await waitFor(() => count(t, 'view', 'endCard') === 1);
+    eq(autoLists(t).map((l) => l.map((a) => a.id)), [[], ['rule1'], ['rule1', 'sched1'], ['rule1', 'sched1']], 'one list per event, in creation order');
+    const firstCard = t.log.findIndex((e) => e[1] === 'automations' && e[2]?.length === 1);
+    ok(firstCard > 0 && firstCard < t.order('view', 'endCard') && firstCard < t.order('checklist', 'step', 's2', 'running'), 'the rule\'s card shows while step 1 runs, before done');
+    eq(lastAutos(t), [R1, { ...S1, firedToday: 1 }], 'the last list: the schedule ran once today');
+    eq(t.live.automations, lastAutos(t), 'live.automations is what shows');
+    t.live.close();
+  });
+
+  await check('automations · applied whatever their rid or src, never held; malformed lists and items are dropped', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId;
+    t.mock.push(sid, 'automations', { items: [RULE1], rid: 'r9' }); await settle(); eq(lastAutos(t), [R1], 'a rid nobody asked for');
+    t.mock.push(sid, 'automations', { items: [SCHED1, { kind: 'rule' }, SCHED1, { ...RULE1, enabled: 'no', firedToday: -2, kind: 'x', devices: 'pump' }], rid: 'r9' }); await settle();
+    eq(lastAutos(t), [S1, { ...R1, devices: [] }], 'no id and repeated ids dropped; odd fields made safe');
+    const n0 = autoLists(t).length; t.mock.push(sid, 'automations', { items: 'x', rid: 'r9' }); await settle(); eq(autoLists(t).length, n0, 'items not a list: ignored');
+    // while a request's POST is in flight (its events are held until it answers), an automations event still applies at once
+    let release; const gate = new Promise((r) => { release = r; });
+    const m = createMockLive(), u = await harness({ mock: { ...m, fetch: (url, init) => (/\/requests$/.test(String(url)) ? gate.then(() => m.fetch(url, init)) : m.fetch(url, init)) }, entered: true });
+    const p = u.live.submit(MOVIE); await settle();
+    m.push(u.live.sessionId, 'automations', { items: [RULE1], rid: 'r1' }); await settle();
+    eq(lastAutos(u), [R1], 'not held behind the request\'s POST');
+    release(); await p; await waitFor(() => count(u, 'view', 'planCard') === 1);
+    t.live.close(); u.live.close();
+  });
+
+  await check('automations · a switch shows at once, posts the route, and the server\'s list then agrees (off and on)', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId; await withAutos(t);
+    const p = t.live.setAutomation('rule1', false);
+    eq(enabledOf(t, 'rule1'), false, 'off before the POST answers'); eq(enabledOf(t, 'sched1'), true, 'the other one untouched');
+    await p; await settle();
+    eq(autoPosts(t.mock).map((c) => [c.path, c.body]), [[`sessions/${sid}/automations/rule1`, { enabled: false }]], 'the route and body');
+    eq(enabledOf(t, 'rule1'), false, 'the server\'s list agrees');
+    await t.live.setAutomation('rule1', true); await settle(); eq(enabledOf(t, 'rule1'), true, 'on again');
+    await t.live.setAutomation('nope', true); await t.live.setAutomation('rule1', 'yes'); await settle();
+    eq(autoPosts(t.mock).length, 2, 'an unknown id or a non-bool value posts nothing');
+    ok(!t.has('view', 'ncb', LIVE_COPY.autoRejected), 'no message when it went through');
+    // mid-request, too (allowed any time): the switch goes, the request runs on
+    await toPlan(t, MOVIE); await t.live.setAutomation('sched1', false); await settle();
+    eq(enabledOf(t, 'sched1'), false, 'switched while the plan waits'); eq(t.live.phase, 'awaiting', 'the request is untouched');
+    t.live.close(); const u = await harness({ entered: true }); u.live.exit(); await u.live.setAutomation('rule1', false); eq(autoPosts(u.mock).length, 0, 'no session, no POST'); u.live.close();
+  });
+
+  await check('automations · until the server applies a switch (a toggle queued mid-request), a stale list keeps the visitor\'s value', async () => {
+    const m = createMockLive(); let held = 0;
+    const t = await harness({ mock: { ...m, fetch: (url, init) => (/\/automations\//.test(String(url)) ? (held++, Promise.resolve(new Response('{}', { status: 202, headers: { 'content-type': 'application/json' } }))) : m.fetch(url, init)) }, entered: true });
+    const sid = t.live.sessionId; await withAutos(t, [RULE1]);
+    await t.live.setAutomation('rule1', false); await settle(); eq(held, 1, '202, no event yet');
+    m.push(sid, 'automations', { items: [{ ...RULE1, firedToday: 1 }], rid: 'r9' }); await settle();
+    eq([enabledOf(t, 'rule1'), lastAutos(t)[0].firedToday], [false, 1], 'a list from before the toggle: still off, the count updates');
+    m.edit(sid, 'automations', { items: [{ ...RULE1, enabled: false, firedToday: 1 }] }); await settle(); eq(enabledOf(t, 'rule1'), false, 'the server agrees');
+    m.edit(sid, 'automations', { items: [{ ...RULE1, enabled: true, firedToday: 1 }] }); await settle(); eq(enabledOf(t, 'rule1'), true, 'from here the server\'s list rules again');
+    t.live.close();
+  });
+
+  await check('automations · a refused switch goes back with a short line: 404 no_automation, 429 rate (once per 10 s), other errors', async () => {
+    for (const [st, kind, line] of [[404, 'no_automation', LIVE_COPY.autoGone], [400, 'bad_request', LIVE_COPY.autoRejected], [500, 'internal', LIVE_COPY.autoRejected], [429, 'rate', LIVE_COPY.editRate]]) {
+      const t = await harness({ mock: failOnce(createMockLive(), /\/automations\//, jsonAnswer(st, { error: kind, message: 'No.' })), entered: true }); await withAutos(t);
+      const p = t.live.setAutomation('rule1', false); eq(enabledOf(t, 'rule1'), false, `${kind}: off at once`);
+      await p; await settle();
+      eq(enabledOf(t, 'rule1'), true, `${kind}: back on`); eq(ncbCount(t, line), 1, `${kind}: one line`);
+      t.live.close();
+    }
+    const n = await harness({ mock: failOnce(createMockLive(), /\/automations\//, () => Promise.reject(new TypeError('Failed to fetch'))), entered: true }); await withAutos(n);
+    await n.live.setAutomation('sched1', false); await settle(); eq(enabledOf(n, 'sched1'), true, 'network: back on'); ok(n.has('view', 'ncb', LIVE_COPY.autoRejected)); n.live.close();
+    // a later flip of the same switch has moved it on: the earlier one's refusal doesn't put it back
+    const m = createMockLive(); let first = true, release; const gate = new Promise((r) => { release = r; });
+    const t = await harness({ mock: { ...m, fetch: (url, init) => { if (/\/automations\//.test(String(url)) && first) { first = false; return gate.then(jsonAnswer(500, { error: 'internal', message: 'No.' })); } return m.fetch(url, init); } }, entered: true });
+    await withAutos(t, [RULE1]);
+    const p1 = t.live.setAutomation('rule1', false); await t.live.setAutomation('rule1', false); await settle();
+    const p2 = t.live.setAutomation('rule1', true); eq(enabledOf(t, 'rule1'), true, 'the latest flip shows'); await p2; await settle();
+    release(); await p1; await settle(); eq(enabledOf(t, 'rule1'), true, 'the older refusal leaves the newer value'); t.live.close();
+    // the code stopped working, or the session expired
+    const a = await harness({ mock: failOnce(createMockLive(), /\/automations\//, jsonAnswer(401, { error: 'bad_code', message: 'No.' })), entered: true }); await withAutos(a);
+    await a.live.setAutomation('rule1', false); await settle(); eq(accessCount(a), 2, '401 asks for the code again'); eq(lastAutos(a), null, 'and the section goes'); a.live.close();
+    const b = await harness({ mock: failOnce(createMockLive(), /\/automations\//, jsonAnswer(404, { error: 'no_session', message: 'Gone.' })), entered: true }); await withAutos(b);
+    const sid = b.live.sessionId; await b.live.setAutomation('rule1', false); await waitFor(() => b.live.sessionId !== sid && b.live.phase === 'idle');
+    eq(lastAutos(b), [], 'no_session: a fresh room, no automations yet'); b.live.close();
+  });
+
+  await check('automations · a timeline row with an automation id flashes its card (rule and schedule: JUST RAN, held: HELD), in a request and outside one', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId; await toPlan(t, AUTO); await t.card.approve();
+    await waitFor(() => count(t, 'view', 'endCard') === 1);
+    eq(flashes(t), [['sched1', 'ran']], 'the schedule ran during the request\'s fast-forward');
+    ok(t.has('checklist', 'timeline', { at: 'Fri 19:00', text: 'Floor lamp → 35%', ok: true, kind: 'action', origin: 'schedule' }), 'its row is in the checklist as before');
+    const row = { at: 'Sat 07:00', text: 'Water pump → on for 10 s', ok: true, kind: 'action', device: 'pump' };
+    t.mock.edit(sid, 'timeline', { ...row, origin: 'rule', automation: 'rule1' });
+    t.mock.edit(sid, 'timeline', { ...row, origin: 'held', kind: 'notify', automation: 'rule1' });
+    t.mock.edit(sid, 'timeline', { ...row, origin: 'schedule', ok: false, automation: 'sched1' });
+    t.mock.edit(sid, 'timeline', { ...row, origin: 'rule', automation: 'rule9' });
+    t.mock.edit(sid, 'timeline', { ...row, automation: 'rule1' });
+    t.mock.edit(sid, 'timeline', { ...row, origin: 'rule' }); await settle();
+    eq(flashes(t).slice(1), [['rule1', 'ran'], ['rule1', 'held'], ['sched1', 'ran']], 'outside a request; an unknown id, a row without origin or without an id flash nothing');
+    eq(count(t, 'view', 'ruleLine'), 6, 'every row still has its chat line');
+    t.live.close();
+  });
+
+  await check('automations · Reset room clears them; a what-if\'s room replaces them (and drops a switch not yet applied)', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId; await toPlan(t, AUTO); await t.card.approve();
+    await waitFor(() => count(t, 'view', 'endCard') === 1); eq(lastAutos(t).length, 2);
+    const acts = t.find('view', 'endCard')[1], n0 = autoLists(t).length;
+    acts.onWhatIf(); t.find('view', 'failures')[1]('lamp');
+    await waitFor(() => count(t, 'view', 'endCard') === 2);
+    const during = autoLists(t).slice(n0);
+    eq(during[0], [], 'the what-if\'s room: the room before the request, which had none');
+    eq(during.map((l) => l.length), [0, 0, 1, 2, 2], 'the same list again as an automations event, then the replay sets them up again');
+    eq(flashes(t).at(-1), ['sched1', 'ran'], 'the failing schedule still flashes (it ran, the lamp did not respond)');
+    t.mock.push(sid, 'room', { state: { lamp: { on: false, brightness: 0, status: 'online' } }, clock: { iso: '2026-11-13T16:30:00', label: 'Fri 16:30', hour: 16.5 }, automations: [{ ...SCHED1, enabled: false }], rid: 'r9' }); await settle();
+    eq(lastAutos(t), [{ ...S1, enabled: false }], 'a room event replaces the list with its own, on/off state included');
+    const n1 = autoLists(t).length; t.mock.push(sid, 'room', { state: { lamp: { on: false } }, clock: { iso: '2026-11-13T16:30:00', label: 'Fri 16:30', hour: 16.5 }, rid: 'r9' }); await settle();
+    eq(autoLists(t).length, n1, 'a room without a list leaves it be');
+    await t.find('view', 'endCard')[1].onReset(); await settle();
+    eq(lastAutos(t), [], 'Reset room: none left'); ok(t.has('view', 'ncb', FRESH_START));
+    // a switch flipped just before the room changes goes with it
+    const m = createMockLive(); let left = 1;
+    const u = await harness({ mock: { ...m, fetch: (url, init) => (/\/automations\//.test(String(url)) && left-- > 0 ? jsonAnswer(202, {})() : m.fetch(url, init)) }, entered: true });
+    await withAutos(u, [RULE1]); await u.live.setAutomation('rule1', false); eq(enabledOf(u, 'rule1'), false);
+    m.push(u.live.sessionId, 'room', { state: {}, clock: { iso: '2026-11-13T16:30:00', label: 'Fri 16:30', hour: 16.5 }, automations: [RULE1], rid: 'r9' }); await settle();
+    eq(enabledOf(u, 'rule1'), true, 'the room\'s own state wins'); t.live.close(); u.live.close();
+  });
+
+  await check('live entry · announced availability: probe, open, exit, a budget stop', async () => {
+    const avail = (t) => t.log.filter((e) => e[0] === 'ui' && e[1] === 'availability').map((e) => e[2]);
+    const t = await harness(); await t.live.probe(); eq(avail(t), [{ available: true, active: false }], 'probe: available, not open');
+    await t.live.probe(); eq(avail(t).length, 1, 'no repeat while nothing changed');
+    await t.live.open(); eq(avail(t).at(-1), { available: true, active: true }, 'open: active at once');
+    t.lastAccess.back(); eq(avail(t).at(-1), { available: true, active: false }, 'Back: not open again');
+    ok(t.order('ui', 'offerGuided') < t.log.findLastIndex((e) => e[1] === 'availability'), 'after the guided requests are back');
+    const u = await harness({ mock: createMockLive({ liveEnabled: false }) }); await u.live.probe(); eq(avail(u), [{ available: false, active: false }], 'live off: not available');
+    const v = await harness({ entered: true }); await toPlan(v, MOVIE); v.mock.push(v.live.sessionId, 'limit', { kind: 'budget', rid: 'r1' }); v.mock.push(v.live.sessionId, 'done', { outcome: 'limit', rid: 'r1' });
+    await waitFor(() => !v.live.active); eq(avail(v).at(-1), { available: false, active: false }, 'the kill switch: not available any more');
+    const w = await harness({ entered: true }); w.live.close(); const n = w.log.length; await w.live.probe(); eq(w.log.length, n, 'silent after close');
+    t.live.close(); u.live.close(); v.live.close();
+  });
+
+  // The header button over the real live client: a stub flow records stop(), show() records what the button does.
+  const entryRig = async ({ live = 'make', mock } = {}) => {
+    const t = await harness(mock ? { mock } : {}), shown = [], order = [];
+    const flow = { stop: async () => { order.push('stop'); await settle(); order.push('stopped'); } };
+    const lv = live === 'make' ? t.live : live;
+    const realOpen = lv?.open; if (lv) lv.open = async (...a) => { order.push('open'); return realOpen.apply(lv, a); };
+    const e = createLiveEntry({ live: lv, flow, show: (on) => shown.push(on) });
+    t.ui.availability = () => e.sync();
+    return { t, e, shown, order };
+  };
+  await check('live entry · the header button shows only with live mode available and not open; hidden without an API base', async () => {
+    const none = await entryRig({ live: null }); none.e.sync(); eq(none.shown, [false], 'no API base (no live): hidden'); await none.e.open(); eq(none.order, [], 'and pressing it does nothing');
+    const { t, e, shown } = await entryRig(); e.sync(); eq(shown, [false], 'before /health answers: hidden');
+    await t.live.probe(); eq(shown.at(-1), true, 'live available: shown');
+    const off = await entryRig({ mock: createMockLive({ scenes: ['lab'] }) }); await off.t.live.probe(); eq(off.shown.at(-1), false, '/health without this scene: hidden');
+    await t.live.open(); eq(shown.at(-1), false, 'live open (the access card): hidden');
+    await t.lastAccess.code(MOCK_CODE); eq(shown.at(-1), false, 'in live mode: hidden'); eq(t.live.phase, 'idle');
+    t.live.exit(); eq(shown.at(-1), true, 'back to guided: shown again');
+    t.live.close(); off.t.live.close();
+  });
+
+  await check('live entry · pressing it stops the guided flow first, then opens live mode (one at a time)', async () => {
+    const { t, e, shown, order } = await entryRig(); await t.live.probe();
+    const p = e.open(); eq(shown.at(-1), false, 'hidden at once'); const q = e.open();
+    await p; await q;
+    eq(order, ['stop', 'stopped', 'open'], 'stop() resolves before live.open(); a second press while opening does nothing');
+    eq(t.find('view', 'access')[0], { mode: 'code' }, 'the access card, as the end card\'s live button gives');
+    await t.lastAccess.code(MOCK_CODE); eq(t.live.active, true); await e.open(); eq(order.length, 3, 'pressing it in live mode does nothing'); t.live.close();
+    const s = await entryRig(); s.t.codes.set(MOCK_CODE); await s.t.live.probe(); await s.e.open();
+    eq([s.t.live.phase, s.shown.at(-1)], ['idle', false], 'a saved code: straight into live mode, the button hidden'); s.t.live.close();
+  });
+
+  await check('automations · Reset room: its answer\'s empty list and the one automations event it sends apply in either order', async () => {
+    const t = await harness({ entered: true }), sid = t.live.sessionId; await toPlan(t, AUTO); await t.card.approve();
+    await waitFor(() => count(t, 'view', 'endCard') === 1);
+    const n0 = autoLists(t).length, k0 = (await streamKinds(t.mock, sid)).filter((k) => k === 'automations').length;
+    await t.find('view', 'endCard')[1].onReset(); await settle();
+    eq((await streamKinds(t.mock, sid)).filter((k) => k === 'automations').length - k0, 1, 'the server sent one automations event for the reset');
+    const after = autoLists(t).slice(n0); ok(after.length >= 1 && after.every((l) => Array.isArray(l) && l.length === 0), `every list since the reset is empty: ${JSON.stringify(after)}`);
+    t.mock.edit(sid, 'automations', { items: [] }); await settle(); eq(lastAutos(t), [], 'the event once more (a late copy): still empty');
+    // the event first, then the answer (as when the stream is quicker than the HTTP answer): the same end
+    const m = createMockLive(); let early = null;
+    const u = await harness({ mock: { ...m, fetch: async (url, init) => { if (/\/reset$/.test(String(url))) { early = autoLists(u).length; m.edit(u.live.sessionId, 'automations', { items: [] }); await settle(); } return m.fetch(url, init); } }, entered: true });
+    await withAutos(u, [RULE1]); await toPlan(u, MOVIE); await u.card.approve(); await waitFor(() => count(u, 'view', 'endCard') === 1);
+    await u.find('view', 'endCard')[1].onReset(); await settle();
+    eq(autoLists(u).slice(early).map((l) => l.length), [0, 0], 'the event\'s empty list, then the answer\'s'); eq(lastAutos(u), [], 'empty');
+    // nothing to clear: no event
+    const v = await harness({ entered: true }), k2 = (await streamKinds(v.mock, v.live.sessionId)).length;
+    eq((await v.mock.fetch(`${BASE}sessions/${v.live.sessionId}/reset`, { method: 'POST', headers: { authorization: `Bearer ${MOCK_CODE}` }, body: '{}' })).status, 200);
+    eq((await streamKinds(v.mock, v.live.sessionId)).length, k2, 'a reset with nothing to clear sends no event');
+    t.live.close(); u.live.close(); v.live.close();
+  });
+
+  await check('automations · an advance past midnight sets the day\'s counts back to 0 (an automations event, src edit, no rid)', async () => {
+    const t = await harness({ entered: true }); await withAutos(t, [{ ...SCHED1, firedToday: 2 }, RULE1]);
+    eq(lastAutos(t)[0].firedToday, 2);
+    await t.live.advance(6); await settle(); eq(lastAutos(t)[0].firedToday, 2, '16:30 → 22:30: the same day');
+    await t.live.advance(6); await settle(); eq(lastAutos(t).map((a) => a.firedToday), [0, 0], 'past midnight: back to 0');
+    t.live.close();
   });
 }

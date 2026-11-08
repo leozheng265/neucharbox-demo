@@ -9,6 +9,8 @@ import { SOCIAL, socialLinks } from './engine/social.js';
 import { createLive, LIVE_COPY } from './engine/live.js';
 import { createLiveView } from './engine/livechat.js';
 import { createClockCtl } from './engine/clockctl.js';
+import { createAutomations, startFolded } from './engine/automations.js';
+import { createLiveEntry } from './engine/liveentry.js';
 import { liveApiBase } from './live-config.js';
 
 // Picker thumbnails: the hub and a few of the devices each room connects (line icons, same as the dashboard tiles).
@@ -40,13 +42,14 @@ function renderPicker() {
 async function mountScene(meta, gen) {
   app.classList.remove('picker-mode', 'failed', 'live-edit');
   app.innerHTML = `
-    <header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(meta.title)}</div><div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a>${follow()}</header>
+    <header class="top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(meta.title)}</div><div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a><button class="btn small primary live-top" id="liveTop" type="button" title="${esc(LIVE_COPY.headerButtonTitle)}" hidden><span class="spark" aria-hidden="true">✨ </span>${esc(LIVE_COPY.headerButton)}</button>${follow()}</header>
     <nav class="beats" id="beats" aria-label="Demo steps">${BEATS.map(([id, label]) => `<button data-beat="${id}" disabled${id === 'recover' ? ' hidden' : ''}>${label}</button>`).join('')}</nav>
     <div class="stage">
       <div class="room"><canvas id="room"></canvas><div class="hint">${coarse ? 'drag · pinch · tap a device' : 'drag to orbit · scroll to zoom · right-drag to pan · tap a device'}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button></div>
       <div class="status" id="status"><span class="stext" id="statusText" role="status">Loading the ${esc(meta.title.toLowerCase())}…</span><span class="clockctl" id="clockctl" hidden></span></div>
       <div class="side">
         <div class="panel" id="panel"></div>
+        <div class="autos" id="autos" hidden></div>
         <div class="chat" id="chat"></div>
       </div>
     </div>`;
@@ -135,9 +138,10 @@ async function mountScene(meta, gen) {
     alive: () => gen === mountGen,
     status: setStatus,
     beats: setBeats,
-    // The guided end cards gain the live button while live mode is available (a /health that said yes).
-    // A guided picker of failures left open goes too: a pick from it would run a scripted what-if while live is on.
-    endExtras: () => (live?.available ? { onLive: () => { chat.closeEnds(); chat.closeFailures(); live.open(); }, liveLabel: LIVE_COPY.button } : {}),
+    // The guided end cards gain the live button while live mode is available (a /health that said yes). It opens live mode
+    // as the header's Live AI button does (js/engine/liveentry.js: flow.stop() first, so a guided picker of failures left
+    // open goes too: a pick from it would run a scripted what-if while live is on).
+    endExtras: () => (live?.available ? { onLive: () => entry?.open(), liveLabel: LIVE_COPY.button } : {}),
     // Discovery and fault effects: the pulse on a faulted device is red, like its ring, and its fault label goes as soon
     // as it is back online (a visitor confirming a stopped cart).
     ping: (id, text, opts) => R.ping(id, text, opts),
@@ -153,18 +157,30 @@ async function mountScene(meta, gen) {
   const base = liveApiBase();
   // The clock control beside the status line: shown in live mode, usable between requests (live.advance).
   const clockCtl = createClockCtl(document.getElementById('clockctl'), { onAdvance: (h) => live?.advance(h) });
+  // The Automations section under the device cards (live mode only; js/engine/automations.js) and the header's Live AI
+  // button (shown while live mode is available here and not open). Neither exists on the public site (no API base).
+  const autos = base ? createAutomations(document.getElementById('autos'), { onToggle: (id, on) => live?.setAutomation(id, on), collapsed: startFolded(),
+    emptyText: scene.devices.soil && scene.devices.pump ? LIVE_COPY.autosEmpty : LIVE_COPY.autosEmptyAny }) : null;
+  const liveTop = document.getElementById('liveTop');
+  let entry = null;
   live = base ? createLive({ scene, store, panel, base, view: createLiveView({ chat, scene }), ui: {
     alive: () => gen === mountGen, status: setStatus, beats: setBeats, track: (on) => panel.track(on), rewind: () => panel.rewind(),
     resetRoom: () => { room.reset?.(); R.clearMarkers(); }, baseline: () => flow.baseline,
     editing: (on) => { clockOn = !!on; app.classList.toggle('live-edit', !!on); panel.editable(on, { onEdit: (p, v) => live.edit(p, v) }); clockCtl.active(on); },
     clock: (c) => { clockText = c?.label || null; clockCtl.render(c); },
+    automations: (list) => autos?.render(list),
+    automationFlash: (id, kind) => autos?.flash(id, kind),
+    availability: () => entry?.sync(),
     offerGuided: (h) => { chat.closeEnds(); chat.closeFailures(); if (flow.baseline) { store.restore(flow.baseline); room.reset?.(); R.clearMarkers(); } flow.offerChips(h); },
   } }) : null;
+  entry = createLiveEntry({ live, flow, show: (on) => { liveTop.hidden = !on; }, alive: () => gen === mountGen });
+  liveTop.onclick = () => entry.open();
+  entry.sync();
   beatBtns.forEach((b) => (b.onclick = () => flow.skipTo(b.dataset.beat)));
 
   current = { scene, teardown() { live?.close(); flow?.cancel(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   // QA hooks (visual harness): the host's phase, the quiet-replay flag and the recorded choices.
-  window.__ncb = { live, store, panel, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
+  window.__ncb = { live, store, panel, autos, entry, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
   live?.probe(); // fired and forgotten: it never rejects, and the scripted setup must not wait for /health
   await flow.start();
   } catch (e) {

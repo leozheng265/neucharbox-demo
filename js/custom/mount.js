@@ -4,17 +4,20 @@
 //   mountCustom({ app, gen, isCurrent, setCurrent }) → Promise<void>
 //     isCurrent() is false once the visitor has routed elsewhere; setCurrent({ teardown }) hands main.js the teardown.
 // Markup: the header (logo, name, Build | Run, Done building →, Scenes, social links) and .stage.custom[data-mode] with
-// .room (canvas, hint, #selbar, #notice, #changedNote, #emptyNote) and .side (#inventory, #panel, #chat). The mode decides what shows:
-//   gate  the chat (the access card)        build  the inventory        run  the device cards and the chat
+// .room (canvas, hint, #selbar, #notice, #changedNote, #emptyNote) and .side (#inventory, #panel, #autos, #chat). The mode decides what shows:
+//   gate  the chat (the access card)        build  the inventory        run  the device cards, the automations and the chat
+// No header "Live AI" button here (the scripted scenes have one, js/engine/liveentry.js): this page's own gate and
+// "Done building →" are its way into live mode.
 // Every live session (controller.done with a new device list) gets a fresh store state (initialFor), a fresh panel and
 // a cleared chat: a new room is a new conversation. The window.__ncb hooks are for QA in the browser.
 import { createStore } from '../engine/store.js';
 import { createChat } from '../engine/chat.js';
 import { createPanel } from '../engine/panel.js';
-import { createLive, codeStore } from '../engine/live.js';
+import { createLive, codeStore, LIVE_COPY } from '../engine/live.js';
 import { createLiveView } from '../engine/livechat.js';
 import { createLiveApi } from '../engine/liveapi.js';
 import { createClockCtl } from '../engine/clockctl.js';
+import { createAutomations, startFolded } from '../engine/automations.js';
 import { socialLinks } from '../engine/social.js';
 import { liveApiBase } from '../live-config.js';
 import { CUSTOM_COPY as C } from './copy.js';
@@ -48,6 +51,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       <div class="side">
         <div class="inventory" id="inventory" hidden></div>
         <div class="panel" id="panel" hidden></div>
+        <div class="autos" id="autos" hidden></div>
         <div class="chat" id="chat"></div>
       </div>
     </div>`;
@@ -141,6 +145,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     // A live session for this room (controller.done with a new device list).
     function makeLive(sc, devices) {
       liveUi.editing(false); // the old room's edit mode, clock control and live-edit go now, not when the new session answers
+      liveUi.automations(null); // and its automations: the new session sends its own (none yet)
       scene = sc;
       wiring.begin(sc); // the old panel's subscriptions go before the store changes (liveui.js)
       chatLog.replaceChildren(); chat.enableInput(false); chat.live(false);
@@ -169,10 +174,12 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     });
     // The clock control beside the status line: shown while a live session's cards are editable, usable between requests.
     const clockCtl = createClockCtl($('clockctl'), { onAdvance: (h) => controller?.live?.advance(h) });
+    // The Automations section under the device cards (run mode only, css/custom.css); its switches go to the current live.
+    const autos = createAutomations($('autos'), { onToggle: (id, on) => controller?.live?.setAutomation(id, on), collapsed: startFolded(), emptyText: LIVE_COPY.autosEmptyAny });
     liveUi = liveUiFor({
       statusEl, statusTextEl, getPanel: () => wiring.panel, room3d, R, baselineRef, chat, alive: () => isCurrent() && !torn,
       onBackToBuilding: () => controller.toBuild(),
-      clockCtl, editRoot: app, getLive: () => controller?.live,
+      clockCtl, editRoot: app, getLive: () => controller?.live, autos,
     });
     room3d.sync(controller.layout);
     R.onFrame((t) => {
@@ -194,7 +201,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     // Tapping or dragging in the room folds the phone sheet back down, so the room shows.
     $('room').addEventListener('pointerdown', () => inventory.open(false), { passive: true });
 
-    hooks = { scene: 'custom', controller, store, R, room3d, placement, inventory, get live() { return controller.live; } };
+    hooks = { scene: 'custom', controller, store, R, room3d, placement, inventory, autos, get live() { return controller.live; } };
     window.__ncb = hooks;
     showMode(controller.mode);
 

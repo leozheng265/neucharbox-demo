@@ -22,6 +22,10 @@ button { font: inherit; color: inherit; }
 .btn.primary { background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); border-color: transparent; color: #12222A; }
 .btn.small { padding: 5px 10px; font-size: 13px; }
 .btn:disabled { opacity: .5; cursor: default; }
+/* the scene header's Live AI button (js/engine/liveentry.js): beside "‹ Scenes", only while live mode is available and not open */
+.top .live-top { flex: 0 0 auto; white-space: nowrap; }
+.top .live-top[hidden] { display: none; } /* .btn's inline-block would beat the hidden attribute */
+.top .live-top:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
 /* NeuCharBox's accounts (js/engine/social.js): icons in the header, named pills in an end card's "Follow NeuCharBox" line */
 .top .social { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .top .social-label { margin-right: 4px; font-size: 13px; color: var(--ink-3); }
@@ -68,7 +72,10 @@ button { font: inherit; color: inherit; }
 .beats button:not(:disabled):not(.now)::after { content: ' ›'; }
 .beats button:not(:disabled):not(.now):hover { color: var(--ink); border-color: var(--accent-a); }
 
-.stage { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, 1fr); }
+/* Stacked (phones): room, status, device cards, automations (live mode only; an empty row otherwise), then the chat in
+   the last row, whatever shows above it (the custom scene's gate has only the room and the chat). */
+.stage { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+.stage .chat { grid-row: -2 / -1; }
 .room { position: relative; background: #DCEBF3; min-height: 0; min-width: 0; overflow: hidden; }
 .room canvas { width: 100%; max-width: 100%; height: min(75vw, 42dvh); display: block; touch-action: none; }
 .room .hint { position: absolute; right: 10px; top: 10px; max-width: calc(100% - 100px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: rgba(255,255,255,.85); background: rgba(20,30,40,.45); padding: 4px 8px; border-radius: 999px; pointer-events: none; }
@@ -158,6 +165,7 @@ button { font: inherit; color: inherit; }
 .card.halt.done .btn.approve:not(.chosen) { background: #fff; color: var(--ink); border-color: var(--line-2); }
 .card.done .btn.chosen { opacity: 1; background: #E7F7F0; color: #1E8F55; border-color: #BFE3DD; }
 .card.plan.skipped .btn.approve { background: #F1F5F4; color: var(--ink-2); }
+.card.plan.stopped .btn.approve { background: #F1F5F4; color: var(--ink-3); } /* live mode took over before it ran (chat.stopPending) */
 .card .btn.decline { background: #fff; color: var(--ink-2); }
 .card.plan.declined .btn.approve { background: #F1F5F4; color: var(--ink-3); }
 .card.plan.declined .btn.decline.chosen { opacity: 1; background: #FDECE8; color: #B5412A; border-color: #F3C4B8; }
@@ -288,8 +296,9 @@ button { font: inherit; color: inherit; }
 @media (max-width: 959px) {
   .room canvas { height: clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)); }
   /* Live mode (.live-edit) adds the editing rows: the thermostat's two 32 px sliders lift the strip from ~50 to ~110 px and the
-     status row takes two lines (the clock beside it). The room gives up that height, not the chat. */
-  .app.live-edit .room canvas { height: max(110px, calc(clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)) - 74px)); }
+     status row takes two lines (the clock beside it); and the Automations summary line (36 px, its list folded). The room
+     gives up that height (74 + 36 px), not the chat. */
+  .app.live-edit .room canvas { height: max(110px, calc(clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)) - 110px)); }
   .app.live-edit .status { min-height: 46px; } /* two lines of status text, always: the row doesn't jump with the message */
   .ent { max-width: 240px; }
   .ent .ctl[hidden] { display: flex; visibility: hidden; } /* same tile height with or without a control */
@@ -421,3 +430,65 @@ button { font: inherit; color: inherit; }
   .status:has(.clk-pick:not([hidden])), .status:has(.clk-why:not([hidden])) { flex-wrap: wrap; }
   .status:has(.clk-pick:not([hidden])) .clockctl, .status:has(.clk-why:not([hidden])) .clockctl { flex: 1 1 100%; flex-wrap: wrap; }
 }
+
+/* ---- live mode: the Automations section under the device cards (js/engine/automations.js; spec 2026-11-08 §1) ---- */
+.autos[hidden], .autos .autos-body[hidden], .autos .alist[hidden], .autos .aempty[hidden] { display: none; }
+.autos { position: relative; min-width: 0; background: var(--panel); border-top: 1px solid var(--line); }
+.autos-head { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 35px; margin: 0; padding: 0 14px; border: 0; background: none; font: inherit; font-size: 13px; line-height: 1.3; color: var(--ink-2); text-align: left; cursor: pointer; }
+.autos-head:hover .autos-title { color: #138a9a; }
+.autos-head:focus-visible { outline: 2px solid var(--accent-a); outline-offset: -2px; border-radius: 6px; }
+.autos-title { font-weight: 650; color: var(--ink); }
+.autos-count { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.autos-chev { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--ink-3); transition: transform .2s; }
+.autos.open .autos-chev { transform: rotate(180deg); }
+/* folded, the summary line carries a card's JUST RAN / HELD */
+.autos-badge { flex: 0 0 auto; font-size: 9.5px; line-height: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; background: #E7F7F0; color: #17744A; }
+.autos-badge:empty, .autos.open .autos-badge { display: none; }
+.autos-head.flash-held .autos-badge { background: #FFF1CC; color: #8A5A00; }
+.autos-body { padding: 2px 12px 10px; }
+.autos .alist { list-style: none; margin: 0; padding: 6px 0 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.autos .aempty { margin: 0; padding: 0 2px; font-size: 13px; line-height: 1.4; color: var(--ink-2); }
+/* a card: like a device card (icon, text, switch), its badge over the top-right corner */
+.auto { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; padding: 7px 10px 7px 8px; background: #fff; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; transition: border-color .15s, box-shadow .15s; }
+.auto .aico { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: #FFF1CC; font-size: 15px; line-height: 1; }
+.auto[data-kind="schedule"] .aico { background: #DCEFFF; }
+.auto .atxt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.auto .atext { font-size: 12.5px; font-weight: 600; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
+.auto .asub { font-size: 11.5px; line-height: 1.3; color: var(--ink-2); }
+.auto.off .atext { color: var(--ink-3); }
+.auto.off .aico { background: #F1F3F3; filter: grayscale(1); opacity: .7; }
+/* the switch: the editable cards' switch (.ent .edit-sw), with a fingertip-sized hit area */
+.auto .sw { position: relative; flex: 0 0 auto; width: 26px; height: 15px; margin: 0 2px 0 4px; padding: 0; border: 0; border-radius: 999px; background: #cfd6dd; cursor: pointer; transition: background .2s; }
+.auto .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.auto .sw.on { background: #36c98a; } .auto .sw.on::after { transform: translateX(11px); }
+.auto .sw::before { content: ''; position: absolute; inset: -12px -8px; }
+.auto .sw:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
+.auto .badge { display: none; position: absolute; top: -7px; right: 6px; font-size: 9.5px; line-height: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
+.auto.flash-ran .badge, .auto.flash-held .badge { display: inline-block; }
+.auto.flash-ran { border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.22); }
+.auto.flash-ran .badge { background: #E7F7F0; color: #17744A; }
+.auto.flash-held { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(228,169,58,.2); }
+.auto.flash-held .badge { background: #FFF1CC; color: #8A5A00; }
+@media (prefers-reduced-motion: reduce) { .autos-chev, .auto .sw, .auto .sw::after { transition: none; } }
+
+/* Desktop: open under the device cards (startFolded() folds it on a short window); a long list scrolls in its own box. */
+@media (min-width: 960px) {
+  .autos { flex: 0 0 auto; display: flex; flex-direction: column; max-height: 30%; min-height: 0; }
+  .autos-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+}
+/* Phones: one 36 px summary line (the room gave up that height, so the chat keeps its own); unfolded, the list drops
+   over the top of the chat instead of pushing it down. Escape or the summary line folds it again. */
+@media (max-width: 959px) {
+  .autos-head { padding: 0 12px; }
+  .autos .autos-body { position: absolute; left: 0; right: 0; top: 100%; z-index: 4; max-height: min(52vh, 340px); max-height: min(52dvh, 340px); overflow-y: auto; padding: 4px 12px 12px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-2); box-shadow: 0 12px 24px rgba(38,56,66,.16); }
+  .auto { padding-top: 6px; padding-bottom: 6px; }
+  .auto .sw { width: 30px; height: 17px; } .auto .sw::after { width: 13px; height: 13px; } .auto .sw.on::after { transform: translateX(13px); }
+}
+/* phones held sideways: the side column is short, so the summary line is too */
+@media (max-width: 959px) and (orientation: landscape) and (max-height: 540px) {
+  .autos-head { min-height: 30px; }
+  .autos { flex: 0 0 auto; }
+}
+/* the header's Live AI on phones: no sparkle, and at 360 px one gap less, so "Home, away for a week" still fits */
+@media (max-width: 520px) { .top .live-top .spark { display: none; } }
+@media (max-width: 380px) { .app:not(.picker-mode) .top:has(.live-top:not([hidden])) { gap: 6px; } }

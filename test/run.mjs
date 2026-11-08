@@ -65,6 +65,9 @@
 //     dashboard strip back to its first tile as a what-if starts and on the faulted device(s) at its end card.
 // 18. (test/live.mjs, --scene live) The live client against the contract mock (test/fixtures/live-mock.mjs): the mock's own
 //     conformance to docs/superpowers/specs/2026-11-07-live-api-contract.md first, then the client's checks.
+//     With them, the automations section (spec 2026-11-08-automations-design.md): live.js's list, switches, flashes and
+//     resets against the mock, the header's Live AI entry (js/engine/liveentry.js), and (test/automations.mjs) the section's
+//     DOM on a stand-in document plus static checks of its markup and CSS. flow.stop() and the player's halt() are 16h.
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
 import { matchPrompt } from '../js/engine/match.js';
@@ -710,11 +713,11 @@ async function engineChecks(fixture) {
   // 16e. the page's request flow (js/engine/flow.js), without a DOM
   {
     const problems = [];
-    const mk = (scene = fixture, { autoPlan = () => ({}), autoAsk = () => 0, onEnd = null, alive = () => true, endExtras = null } = {}) => {
+    const mk = (scene = fixture, { autoPlan = () => ({}), autoAsk = () => 0, onEnd = null, alive = () => true, endExtras = null, chatExtra = {} } = {}) => {
       const log = [], ev = [], ends = [], pickers = [], chips = [], beats = [], noise = [];
       const chat = { ...stubChat(log), closeEnds: () => ev.push('closeEnds'), closeFailures: () => ev.push('closeFailures'),
         end: (spec, opts = {}) => { log.push(['end', spec.headline, spec.body]); ends.push({ spec, opts }); onEnd?.(opts); },
-        failures: (spec, onPick) => pickers.push({ spec, onPick }), chips: (list, onPick, o = {}) => chips.push({ list, onPick, heading: o.heading }) };
+        failures: (spec, onPick) => pickers.push({ spec, onPick }), chips: (list, onPick, o = {}) => chips.push({ list, onPick, heading: o.heading }), ...chatExtra };
       const store = createStore(initialOf(scene), { headless: true });
       const t = { log, ev, ends, pickers, chips, beats, noise, store };
       t.flow = createFlow({ scene, store, chat, player: { headless: true, autoPlan, autoAsk }, ui: {
@@ -814,6 +817,74 @@ async function engineChecks(fixture) {
       if (keys !== 'onMore,onWhatIf,whatIfLabel') problems16g.push(`without endExtras the end-card keys are ${keys}`);
       report('engine · flow: endExtras and baseline', problems16g);
     }
+    // 16h. flow.stop(): live mode takes the conversation (the header's Live AI button, an end card's live button)
+    {
+      const problems16h = [], evs = [];
+      const extra = { closeChips: () => evs.push('closeChips'), stopPending: () => evs.push('stopPending'), enableInput: (on) => evs.push(`input:${on}`) };
+      const tick = () => new Promise((r) => setImmediate(r)); // every step the headless player can take without a gate
+      const lastStatus = (t) => t.ev.filter((e) => e.startsWith('status:')).at(-1);
+      const WAITING = `status:${['lamp', 'pump', 'fan'].length} devices connected · waiting for your request`;
+      const gateOf = () => { let release; const gate = new Promise((r) => { release = r; }); return { gate, release }; };
+      // during setup: setup plays to its end at once (live mode starts from the room right after it), then nothing is offered
+      {
+        const t = mk(fixture, { chatExtra: extra }); evs.length = 0;
+        const started = t.flow.start(), phase0 = t.flow.phase; await t.flow.stop(); await started;
+        if (phase0 !== 'setup' || t.flow.phase !== 'live' || !t.flow.baseline || t.store.get('hub.status') !== 'on') problems16h.push(`stop during setup: phase ${phase0} → ${t.flow.phase}, baseline ${!!t.flow.baseline}, hub ${t.store.get('hub.status')}`);
+        if (t.chips.length !== 1 || evs.indexOf('closeChips') < 0 || !evs.includes('input:false')) problems16h.push(`stop during setup leaves the chips: ${t.chips.length} lists, ${evs.join(' / ')}`);
+        const b = t.beats.at(-1); if (b.current !== 'ask' || b.skippable.length || lastStatus(t) !== WAITING) problems16h.push(`stop during setup: beat ${JSON.stringify(b)}, status ${lastStatus(t)}`);
+        await t.chips[0].onPick(P); if (t.flow.phase !== 'live' || t.ends.length) problems16h.push(`a chip from before stop() ran a request: phase ${t.flow.phase}, ${t.ends.length} end cards`);
+      }
+      // mid-request: it stops where it is (no end card, nothing recorded for a what-if), the room is back to right after
+      // setup, the card waiting closes as stopped; then the chips come back and a request runs to its end card again
+      {
+        const { gate, release } = gateOf(), at = P.steps.findIndex((s) => s.beat === 'run');
+        const gated = { ...P, steps: [...P.steps.slice(0, at + 1), { fn: () => gate }, ...P.steps.slice(at + 1)] };
+        const t = mk({ ...fixture, prompts: [gated] }, { chatExtra: extra }); await t.flow.start(); evs.length = 0;
+        const base = JSON.stringify(t.flow.baseline), run = t.chips[0].onPick(gated); await tick();
+        const mid = t.flow.phase; t.ev.length = 0;
+        const stopping = t.flow.stop(); release(); await stopping; await run;
+        if (mid !== 'prompt' || t.flow.phase !== 'live' || t.ends.length || t.flow.lastChoices.has(gated) || t.flow.running !== null) problems16h.push(`stop mid-request: phase ${mid} → ${t.flow.phase}, ${t.ends.length} end cards, choices kept ${t.flow.lastChoices.has(gated)}`);
+        if (JSON.stringify(t.store.snapshot()) !== base) problems16h.push('stop mid-request: the room is not back to right after setup');
+        if (!evs.includes('stopPending') || t.flow.player.halted) problems16h.push(`stop mid-request: the waiting card ${evs.includes('stopPending') ? 'closed' : 'not closed'} as stopped; player halted after: ${t.flow.player.halted}`);
+        if (t.log.some(([k]) => k === 'end') || lastStatus(t) !== WAITING || t.ev.some((e) => e.startsWith('ping:') || e.startsWith('pop:'))) problems16h.push(`stop mid-request said or showed more: ${t.ev.join(' / ')}`);
+        t.flow.offerChips(); if (t.flow.phase !== 'chips' || t.chips.length !== 2) problems16h.push(`offerChips after stop: phase ${t.flow.phase}`);
+        await t.chips[1].onPick(gated);
+        if (t.flow.phase !== 'end' || t.ends.length !== 1 || !t.flow.lastChoices.has(gated)) problems16h.push(`a request after stop + offerChips: phase ${t.flow.phase}, ${t.ends.length} end cards`);
+        // at an end card: its buttons go, the room is back; the old card's buttons then do nothing; a second stop() is a no-op
+        const e0 = t.ev.length; await t.flow.stop();
+        if (t.flow.phase !== 'live' || !t.ev.slice(e0).includes('closeEnds') || !t.ev.slice(e0).includes('closeFailures') || JSON.stringify(t.store.snapshot()) !== base) problems16h.push(`stop at an end card: phase ${t.flow.phase}, ${t.ev.slice(e0).join(' / ')}`);
+        t.ends[0].opts.onMore(); t.ends[0].opts.onWhatIf();
+        if (t.flow.phase !== 'live' || t.chips.length !== 2 || t.pickers.length) problems16h.push(`an end card's buttons after stop(): phase ${t.flow.phase}, ${t.chips.length} chip lists, ${t.pickers.length} pickers`);
+        const e1 = t.ev.length; await t.flow.stop(); if (t.ev.length !== e1) problems16h.push('a second stop() did something');
+      }
+      // mid what-if: the scenario stops, quiet is off, no second end card, the room back
+      {
+        const { gate, release } = gateOf();
+        const pump = P.whatIf.pump, withGate = { ...P, whatIf: { ...P.whatIf, pump: { ...pump, steps: [pump.steps[0], { fn: () => gate }, ...pump.steps.slice(1)] } } };
+        const t = mk({ ...fixture, prompts: [withGate] }, { chatExtra: extra }); await t.flow.start(); await t.chips[0].onPick(withGate);
+        const base = JSON.stringify(t.flow.baseline); t.ends[0].opts.onWhatIf(); const w = t.pickers[0].onPick('pump'); await tick();
+        const mid = [t.flow.phase, !!t.flow.running?.whatIf];
+        const stopping = t.flow.stop(); release(); await stopping; await w;
+        if (mid.join() !== 'prompt,true' || t.flow.phase !== 'live' || t.ends.length !== 1 || t.flow.quiet() || JSON.stringify(t.store.snapshot()) !== base || t.store.get('pump.status') === 'fault') problems16h.push(`stop mid-what-if: ${mid} → ${t.flow.phase}, ${t.ends.length} end cards, quiet ${t.flow.quiet()}, pump ${t.store.get('pump.status')}`);
+        if (t.beats.at(-1).current !== 'ask' || !t.beats.at(-1).recoverHidden) problems16h.push(`stop mid-what-if: beat bar ${JSON.stringify(t.beats.at(-1))}`);
+      }
+      // the player alone: halt() ends every play until resume(), says nothing more, and a plan an fn step opens is declined
+      {
+        const store = createStore(initialOf(fixture), { headless: true }), log = [];
+        const pl = (await import('../js/engine/player.js')).createPlayer({ store, chat: { ...stubChat(log), stopPending: () => log.push(['stopPending']) }, headless: false });
+        const { gate, release } = gateOf(); let plan = null;
+        const p = pl.play([{ fn: () => gate }, { say: 'after the gate' }, { fn: async (ctx) => { plan = await ctx.chat.plan({ intro: 'x', steps: [{ text: 'y' }] }); ctx.status('z'); ctx.chat.ncb('loud'); } }, { set: 'lamp.on', to: true }]);
+        pl.halt(); release(); const r = await p;
+        const r2 = await pl.play([{ say: 'still halted' }]);
+        pl.resume(); const r3 = await pl.play([{ set: 'lamp.on', to: true }]);
+        if (log.some(([k]) => k === 'ncb' || k === 'plan') || !log.some(([k]) => k === 'stopPending') || plan !== null || store.get('lamp.on') !== true || r.declined || r2.declined || r3.declined) problems16h.push(`player halt/resume: ${JSON.stringify(log)} plan ${JSON.stringify(plan)} lamp ${store.get('lamp.on')}`);
+        const pl2 = (await import('../js/engine/player.js')).createPlayer({ store: createStore(initialOf(fixture), { headless: true }), chat: { ...stubChat(log) }, headless: false });
+        const { gate: g2, release: rel2 } = gateOf(); let got = 'unset';
+        const q = pl2.play([{ fn: async (ctx) => { await g2; got = await ctx.chat.plan({ intro: 'x', steps: [{ text: 'y' }] }); } }]);
+        pl2.halt(); rel2(); await q; if (!got || got.approved !== false) problems16h.push(`a plan an fn step opens after halt(): ${JSON.stringify(got)} (wanted declined, no card)`);
+      }
+      report('engine · flow.stop(): setup, mid-request, at an end card, mid-what-if; player halt() and resume()', problems16h);
+    }
     report('engine · the page\'s request flow: phases, beat bar, end-card buttons, picker, "Not this", quiet, faults', problems);
   }
   // 16f. check 17 (test/build.mjs) sees a replay that differs from the request played in real time: device state written
@@ -863,6 +934,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (scenes.length) { const { controlChecks } = await import('./controls.mjs'); controlChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
   // 18. the live client against the contract mock
   if (!ONLY || ONLY === 'live') { const { liveChecks } = await import('./live.mjs'); await liveChecks({ report, initialOf, guardHits }); }
+  // 18b. the Automations section on a stand-in document, and the page wiring of it and of the header's Live AI button
+  if (!ONLY || ONLY === 'live') { const { automationChecks } = await import('./automations.mjs'); await automationChecks({ report }); }
   // 19. the custom-room catalog copy and layout model
   if (!ONLY || ONLY === 'custom') { const { customChecks } = await import('./custom.mjs'); await customChecks({ report, guardHits }); }
   // 7. room builds (and every what-if through update())
