@@ -11,6 +11,8 @@ export const LIVE_COPY = {
   button: '✨ Try your own request (live AI)',
   accessIntro: 'Live AI is invite-only. Enter your code, or apply.',
   offline: 'Live AI is offline right now. Try the guided requests, or follow NeuCharBox for updates.',
+  rate: 'Too many tries from here. Wait a minute and try again.',
+  sessionsBusy: 'Live AI is busy right now. Try again in a few minutes.',
   badCode: "That code didn't work. Check it, or apply below.",
   savedCodeGone: 'Your saved code no longer works. Enter a new one, or apply below.',
   noneLeft: 'This code has no live requests left today. They reset at midnight US Eastern.',
@@ -444,7 +446,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   function failed(e) {
     const k = kindOf(e);
     if (status(e) === 401) return unauthorized();
-    if (k === 'budget' || k === 'global_limit') view.ncb(LIVE_COPY.limitGlobal);
+    if (k === 'global_limit') view.ncb(LIVE_COPY.sessionsBusy); // the server's session cap, not the daily one
+    else if (k === 'budget') view.ncb(LIVE_COPY.limitGlobal);
     else if (k === 'code_limit') view.ncb(LIVE_COPY.limitCode);
     else if (k === 'live_off') view.ncb(LIVE_COPY.offline);
     else view.ncb(LIVE_COPY.error);
@@ -471,13 +474,13 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     try {
       const r = await api.check(c);
       return finite(r?.remainingToday) ? { left: r.remainingToday } : { err: 'offline' };
-    } catch (e) { return { err: status(e) === 401 ? 'bad' : 'offline' }; }
+    } catch (e) { return { err: status(e) === 401 ? 'bad' : status(e) === 429 && kindOf(e) === 'rate' ? 'rate' : 'offline' }; }
   }
   async function onCode(raw) {
     if (gone()) return null;
     const c = normalizeCode(raw), r = await checkCode(c);
     if (gone() || phase !== 'access') return null; // a second code in flight: the first one already got in
-    if (r.err) return r.err === 'bad' ? LIVE_COPY.badCode : LIVE_COPY.offline;
+    if (r.err) return r.err === 'bad' ? LIVE_COPY.badCode : r.err === 'rate' ? LIVE_COPY.rate : LIVE_COPY.offline;
     if (r.left <= 0) return LIVE_COPY.noneLeft;
     code = c; codes.set(c);
     const handle = accessHandle; accessHandle = null; handle?.close();
