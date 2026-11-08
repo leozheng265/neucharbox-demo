@@ -4,29 +4,19 @@
 // model: the TV's picture, the speaker's LED ring, the vacuum on its round, the fan's blades, air lines from the air
 // conditioner and purifier, mist from the humidifier, the heater's glowing grille. The three lights carry real point
 // lights (kit.pointLight); room3d.js deals the few light slots to the lit ones.
-import { HEX, LIGHT_HEX, num, clamp01, pct, oneDecimal, statusLed, mergeMeshes, pointLight, ease, stepper } from './kit.js';
+import { HEX, LIGHT_HEX, num, clamp01, pct, oneDecimal, statusLed, mergeMeshes, pointLight, ease, stepper, glowMesh as glow, screenTex, glowMap } from './kit.js';
 
 const whole = (v) => Math.round(num(v));
 const dimmer = (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : r >= 100 ? 'full' : `on · ${r}%`; };
 // A 0–100 reading as text: "saturated" at the top, never "100%".
 const percent = (v, full = 'saturated') => { const r = whole(v); return r >= 100 ? full : `${Math.max(0, r)}%`; };
 
-// A mesh with its own glow material (never shared), no shadows.
-function glow(THREE, geo, hex, emissive) {
-  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hex, emissive: emissive ?? hex, emissiveIntensity: 0, roughness: 0.5 }));
-}
 // A flat, see-through, unlit shape (air lines, heat haze): own material so each can fade alone. Hidden until its model
 // shows it, but parked at `y` (where the effect starts) so it never sits under the floor.
 function ghost(THREE, w, h, hex, y = 0) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0, depthWrite: false }));
   m.position.y = y; m.userData.noAO = true; m.raycast = () => {}; m.visible = false;
   return m;
-}
-// A canvas texture the model redraws on change.
-function screenTex(THREE, w, h) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h;
-  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  return { c, tex, g: c.getContext('2d') };
 }
 // 0 → 1 over `period` seconds, offset by `phase` (0–1): for looping effects.
 const cycle = (t, period, phase = 0) => (((t / period + phase) % 1) + 1) % 1;
@@ -150,7 +140,7 @@ export default {
         update(s, t) {
           const lit = !!s.on && s.status !== 'offline', key = `${lit}|${s.status}|${whole(s.volume)}`;
           if (key !== shown) { shown = key; draw(!!s.on, num(s.volume), s.status); screen.material.emissiveIntensity = lit ? 0.9 : 0.05; }
-          led.set(s, t, s.on ? HEX.green : HEX.red, 2);
+          led.set(s, t, s.on ? HEX.green : HEX.amber, s.on ? 2 : 0.7); // standby is a dim amber, never the fault red
         },
       };
     },
@@ -235,7 +225,7 @@ export default {
       }
       const rotor = P.group(...blades); rotor.position.y = -0.35;
       const root = P.group(canopy, rod, motor, cap, rotor);
-      const led = statusLed(THREE, root, { at: [0.098, -0.31, 0], r: 0.006 });
+      const led = statusLed(THREE, root, { at: [0.113, -0.345, 0], r: 0.007 }); // on the motor's rim, outside it
       const step = stepper(); let w = 0; // rad/s now
       return {
         root,
@@ -301,7 +291,7 @@ export default {
       const root = P.group(body, ...feet, grille, slats, dial);
       const led = statusLed(THREE, root, { at: [-0.12, 0.557, 0.0615], r: 0.0055 });
       const waves = [];
-      for (let i = 0; i < 3; i++) { const m = ghost(THREE, 0.2, 0.1, 0xFFB070, 0.65); root.add(m); waves.push({ m, x: (i - 1) * 0.1, ph: i / 3 }); }
+      for (let i = 0; i < 3; i++) { const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowMap(THREE), color: 0xFFB070, transparent: true, depthWrite: false, opacity: 0 })); m.position.y = 0.65; m.visible = false; m.userData.noAO = true; m.raycast = () => {}; root.add(m); waves.push({ m, x: (i - 1) * 0.1, ph: i / 3 }); } // soft round glows, not flat planes
       return {
         root,
         update(s, t) {
@@ -310,7 +300,7 @@ export default {
           for (const w of waves) {
             w.m.visible = on; if (!on) continue;
             const u = cycle(t, 2.2, w.ph);
-            w.m.position.set(w.x + 0.02 * Math.sin(t * 2 + w.ph * 6), 0.62 + 0.35 * u, 0.07); w.m.scale.set(1 + 0.25 * u, 1, 1); w.m.material.opacity = 0.07 * Math.sin(Math.PI * u);
+            w.m.position.set(w.x + 0.02 * Math.sin(t * 2 + w.ph * 6), 0.62 + 0.35 * u, 0.07); w.m.scale.setScalar(0.12 + 0.1 * u); w.m.material.opacity = 0.22 * Math.sin(Math.PI * u);
           }
           led.set(s, t, on ? HEX.amber : HEX.green, on ? 4 : 1.5);
         },

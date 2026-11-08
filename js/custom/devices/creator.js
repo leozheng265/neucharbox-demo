@@ -1,17 +1,11 @@
 // The Creator desk types' card UI and 3D models for the custom room (contract: devices/index.js). Their look follows the
 // creator scene (js/scenes/creator.js): a softbox on a stand, a camera on a tripod, a boom mic, a capture card, the
 // overlay app on a monitor, the on-air sign and an LED strip. Each stands, hangs or mounts on its own with a status LED.
-import { HEX, num, clamp01, pct, statusLed, pointLight } from './kit.js';
+import { HEX, num, clamp01, pct, statusLed, pointLight, screenTex } from './kit.js';
 
 const STRIP = { white: 0xFFFFFF, warm: 0xFFB46B, blue: 0x3A8CFF, purple: 0x8A5CFF, red: 0xFF3A3A, green: 0x3AE07A };
 const level = (s) => { const r = pct(s.brightness); return r <= 0 ? 'off' : r >= 100 ? 'full' : `${r}%`; };
 
-// A canvas texture the model redraws on change.
-function screenTex(THREE, w, h) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h;
-  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  return { c, tex, g: c.getContext('2d') };
-}
 
 export default {
   // A softbox on a stand. The panel glows with the brightness, warmer at 2700 K and cooler at 6500 K.

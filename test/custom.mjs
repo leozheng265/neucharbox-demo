@@ -330,6 +330,26 @@ export async function customChecks({ report, guardHits }) {
     eq(meshes, 0, 'no device meshes left in the scene');
   }));
 
+  await check('room3d · a removed device frees its own materials and textures, never the shared ones, and asks the renderer to prune its shadow twins', need(ui, r3)(async ({ eq, ok }) => {
+    const { THREE, parts } = await env(), R = stubRenderer(), M = parts.materials(), P = parts.parts(R.scene, M);
+    const room = r3.createRoom3d({ R, P, M, THREE, store: null });
+    let pruned = 0; R.pruneTwins = () => { pruned++; };
+    const { emptyLayout, addDevice, removeDevice } = lay;
+    let L = emptyLayout(); for (const type of ['thermostat', 'door_camera']) L = addDevice(L, type, ui.DEVICE_UI[type].size).layout;
+    room.sync(L);
+    const maps = new Set(), mats = new Set(), shared = new Set(); let freedMaps = 0, freedMats = 0, freedShared = 0;
+    room.objectFor('thermostat').traverse((x) => { for (const m of [].concat(x.material || [])) { mats.add(m); for (const k of ['map', 'emissiveMap']) if (m[k]) maps.add(m[k]); } });
+    ok(maps.size > 0, 'the thermostat has a screen texture');
+    for (const t of maps) t.addEventListener('dispose', () => { freedMaps++; });
+    for (const m of mats) m.addEventListener('dispose', () => { freedMats++; });
+    for (const m of Object.values(M)) m?.addEventListener?.('dispose', () => { freedShared++; });
+    room.sync(removeDevice(L, 'thermostat'));
+    eq(pruned, 1, 'pruneTwins asked once for the removed device');
+    eq(freedMaps, maps.size, 'every screen texture is freed');
+    ok(freedMats > 0, 'its own materials are freed');
+    eq(freedShared, 0, 'no shared M material was freed');
+    ok(R.pickIds.has('door_camera'), 'the other device is untouched');
+  }));
   await check('room3d · the light budget goes to lit lights, and every light type lights the room', need(ui, r3)(async ({ eq, ok }) => {
     const { THREE, R, room } = await room3dOn();
     const { emptyLayout, addDevice } = lay, { DEVICE_UI } = ui;
