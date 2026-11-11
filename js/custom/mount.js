@@ -207,7 +207,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     // The gate: the access card in the chat until a code works ("Back to scenes" leaves the page). With no API base
     // (main.js doesn't route here then) it shows the offline card without asking anything.
     const api = createLiveApi({ base, getCode: () => codes.get() });
-    gate = passGate({ api, codes, view: createLiveView({ chat, scene: sceneFor(controller.layout) }), onBack: toScenes, offline: !base });
+    gate = passGate({ api, codes, view: createLiveView({ chat, scene: sceneFor(controller.layout) }), onBack: toScenes, offline: !base, base });
     const passed = await gate;
     if (!passed || !isCurrent() || torn) return;
     chatLog.replaceChildren(); // the spent access card goes; run mode starts its own conversation

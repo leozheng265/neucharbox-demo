@@ -12,6 +12,10 @@ export const LIVE_COPY = {
   button: '✨ Try your own request (live AI)',
   accessIntro: 'Live AI is invite-only. Enter your code, or apply.',
   offline: 'Live AI is offline right now. Try the guided requests, or follow NeuCharBox for updates.',
+  // why a live button could not open live mode (whyOff below)
+  backendDown: (base) => `NCF backend not found at ${base}. Start your NCF site with the NeuCharBox Live module, then press Try it live again.`,
+  backendOff: 'Your NCF backend is running, but live AI is off there. Open NeuCharBox Live, Settings in its admin to see what is missing.',
+  sceneOff: "Your NCF backend is running, but this scene isn't live there yet. Today live AI runs the Home scene and Build your own.",
   rate: 'Too many tries from here. Wait a minute and try again.',
   sessionsBusy: 'Live AI is busy right now. Try again in a few minutes.',
   badCode: "That code didn't work. Check it, or apply below.",
@@ -65,7 +69,7 @@ export const LIVE_COPY = {
   ruleHeld: 'Rule held back',
   scheduled: 'Scheduled',
   // the scene header's direct entry (spec 2026-11-08 §4)
-  headerButton: 'Live AI',
+  headerButton: 'Try it live',
   headerButtonTitle: 'Try your own request with the live AI',
   // the Automations section (spec 2026-11-08 §1, js/engine/automations.js)
   autosTitle: 'Automations',
@@ -118,6 +122,14 @@ export const automationsOf = (list) => {
     .map((a) => ({ id: a.id, kind: a.kind === 'schedule' ? 'schedule' : 'rule', text: str(a.text), devices: Array.isArray(a.devices) ? a.devices.filter((d) => typeof d === 'string') : [],
       enabled: a.enabled !== false, firedToday: Number.isInteger(a.firedToday) && a.firedToday > 0 ? a.firedToday : 0, done: a.done === true }));
 };
+
+// What the offline card says after a /health that did not allow live mode for this scene: no NCF backend at the API
+// base (nothing answered, or not the live API), a backend with live off, or one that does not list the scene.
+export function whyOff(h, sceneId, base) {
+  if (!h?.ok) return LIVE_COPY.backendDown(base);
+  if (!h.liveEnabled) return LIVE_COPY.backendOff;
+  return h.scenes?.includes(sceneId) ? LIVE_COPY.offline : LIVE_COPY.sceneOff;
+}
 
 export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now(), sessionExtra = () => ({}) }) {
   let code = null;            // the code for this visit (kept here too, so a blocked store still works)
@@ -686,7 +698,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     const h = await api.health();
     if (gone()) return;
     available = !!(h.ok && h.liveEnabled && h.scenes.includes(scene.id)); announce();
-    if (!available) return showAccess({ mode: 'offline' });
+    if (!available) return showAccess({ mode: 'offline', offlineText: whyOff(h, scene.id, base) });
     const stored = codes.get();
     if (!stored) return showAccess({ mode: 'code' });
     const r = await checkCode(stored);

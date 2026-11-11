@@ -1,7 +1,8 @@
 // The invite-code gate for the custom scene, before any session exists. It follows createLive.open()'s order (health,
 // the saved code, then the access card) but makes no session: it resolves true once a code works, false on Back or
 // cancel() (the page's teardown). offline: true (no API base) shows the offline card without fetching anything.
-import { LIVE_COPY, normalizeCode } from '../engine/live.js';
+// base (the API base) is named on the offline card when no NCF backend answers there.
+import { LIVE_COPY, normalizeCode, whyOff } from '../engine/live.js';
 import { LiveError } from '../engine/liveapi.js';
 import { CUSTOM_COPY } from './copy.js';
 
@@ -17,7 +18,7 @@ async function checkCode(api, code) {
   } catch (e) { return { err: status(e) === 401 ? 'bad' : status(e) === 429 && kindOf(e) === 'rate' ? 'rate' : 'offline' }; }
 }
 
-export function passGate({ api, codes, view, onBack, offline = false }) {
+export function passGate({ api, codes, view, onBack, offline = false, base = '' }) {
   let cancel = () => {};
   const gate = new Promise((resolve) => {
     let finished = false, handle = null;
@@ -32,7 +33,7 @@ export function passGate({ api, codes, view, onBack, offline = false }) {
     const show = (spec) => {
       if (finished) return;
       const old = handle; handle = null; old?.close?.();
-      handle = view.access({ ...spec, backLabel: CUSTOM_COPY.back, offlineText: CUSTOM_COPY.offline }, { onCode, onApply, onBack: back }) ?? null;
+      handle = view.access({ ...spec, backLabel: CUSTOM_COPY.back, offlineText: spec.offlineText ?? CUSTOM_COPY.offline }, { onCode, onApply, onBack: back }) ?? null;
     };
     async function onCode(raw) {
       if (finished) return null;
@@ -55,7 +56,7 @@ export function passGate({ api, codes, view, onBack, offline = false }) {
       if (offline) return show({ mode: 'offline' });
       const h = await api.health();
       if (finished) return;
-      if (!(h.ok && h.liveEnabled && h.scenes.includes('custom'))) return show({ mode: 'offline' });
+      if (!(h.ok && h.liveEnabled && h.scenes.includes('custom'))) return show({ mode: 'offline', offlineText: whyOff(h, 'custom', base) });
       const stored = codes.get();
       if (!stored) return show({ mode: 'code' });
       const r = await checkCode(api, stored);

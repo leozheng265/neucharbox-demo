@@ -456,14 +456,16 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(c.find('view', 'access')[0], { mode: 'code', note: LIVE_COPY.noneLeft }); eq(c.codes.get(), MOCK_CODE, 'a code with none left is kept');
     const d = await harness(); d.codes.set(MOCK_CODE); await d.live.open(); d.live.close();
     const e = await harness(); e.codes.set(MOCK_CODE); e.mock.set({ mode: 'down' }); await e.live.open();
-    eq(e.find('view', 'access')[0], { mode: 'offline' }); eq(e.codes.get(), MOCK_CODE, 'offline keeps the code');
+    eq(e.find('view', 'access')[0], { mode: 'offline', offlineText: LIVE_COPY.backendDown('http://mock') }); eq(e.codes.get(), MOCK_CODE, 'offline keeps the code');
   });
 
-  await check('access · offline (health html / down / liveEnabled false) → offline panel, live stays inactive', async () => {
-    for (const opts of [{ mode: 'html' }, { mode: 'down' }, { liveEnabled: false }, { scenes: ['lab'] }]) {
+  await check('access · offline (health html / down / liveEnabled false) → offline panel that says why, live stays inactive', async () => {
+    const down = LIVE_COPY.backendDown('http://mock');
+    ok(down.includes('NCF backend not found at http://mock'), 'the card names the address it looked at');
+    for (const [opts, why] of [[{ mode: 'html' }, down], [{ mode: 'down' }, down], [{ liveEnabled: false }, LIVE_COPY.backendOff], [{ scenes: ['lab'] }, LIVE_COPY.sceneOff]]) {
       const t = await harness({ mock: createMockLive(opts) });
       eq(await t.live.probe(), false, JSON.stringify(opts)); eq(t.live.available, false);
-      await t.live.open(); eq(t.find('view', 'access')[0], { mode: 'offline' }, JSON.stringify(opts)); eq(posts(t.mock).length, 0);
+      await t.live.open(); eq(t.find('view', 'access')[0], { mode: 'offline', offlineText: why }, JSON.stringify(opts)); eq(posts(t.mock).length, 0);
       t.lastAccess.back(); ok(t.has('ui', 'offerGuided'), 'offered guided'); eq(t.live.active, false); eq(t.live.phase, 'off'); ok(t.has('access', 'close'));
     }
     const ok1 = await harness(); eq(await ok1.live.probe(), true); eq(ok1.live.available, true);
@@ -816,7 +818,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       await t.lastAccess.code(MOCK_CODE); eq(t.live.available, false, off);
     }
     const t = await harness(); eq(await t.live.probe(), true); t.mock.set({ liveEnabled: false }); await t.live.open();
-    eq(t.find('view', 'access')[0], { mode: 'offline' }); eq(t.live.available, false, 'health off in open()');
+    eq(t.find('view', 'access')[0], { mode: 'offline', offlineText: LIVE_COPY.backendOff }); eq(t.live.available, false, 'health off in open()');
     const u = await harness({ mock: createMockLive({ liveEnabled: false }) }); eq(await u.live.probe(), false); u.mock.set({ liveEnabled: true });
     await u.live.open(); eq(u.live.available, true, 'health back on in open()'); u.live.close();
   });
@@ -1439,11 +1441,15 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.ui.availability = () => e.sync();
     return { t, e, shown, order };
   };
-  await check('live entry · the header button shows only with live mode available and not open; hidden without an API base', async () => {
+  await check('live entry · the header button shows in every scene while live mode is not open, asking nothing first; hidden without an API base', async () => {
     const none = await entryRig({ live: null }); none.e.sync(); eq(none.shown, [false], 'no API base (no live): hidden'); await none.e.open(); eq(none.order, [], 'and pressing it does nothing');
-    const { t, e, shown } = await entryRig(); e.sync(); eq(shown, [false], 'before /health answers: hidden');
-    await t.live.probe(); eq(shown.at(-1), true, 'live available: shown');
-    const off = await entryRig({ mock: createMockLive({ scenes: ['lab'] }) }); await off.t.live.probe(); eq(off.shown.at(-1), false, '/health without this scene: hidden');
+    const { t, e, shown } = await entryRig(); e.sync(); eq(shown, [true], 'shown at once'); eq(t.mock.calls.length, 0, 'and no request was made for it');
+    const off = await entryRig({ mock: createMockLive({ scenes: ['lab'] }) }); off.e.sync(); eq(off.shown.at(-1), true, 'a scene the server does not run: shown too');
+    await off.e.open(); eq(off.t.find('view', 'access')[0], { mode: 'offline', offlineText: LIVE_COPY.sceneOff }, 'pressing it there says why'); eq(off.shown.at(-1), false, 'hidden under its card');
+    off.t.lastAccess.back(); eq(off.shown.at(-1), true, 'Back: shown again');
+    const gone = await entryRig({ mock: createMockLive({ mode: 'down' }) }); await gone.e.open();
+    eq(gone.t.find('view', 'access')[0], { mode: 'offline', offlineText: LIVE_COPY.backendDown('http://mock') }, 'no backend: the card says it was not found');
+    gone.t.live.close();
     await t.live.open(); eq(shown.at(-1), false, 'live open (the access card): hidden');
     await t.lastAccess.code(MOCK_CODE); eq(shown.at(-1), false, 'in live mode: hidden'); eq(t.live.phase, 'idle');
     t.live.exit(); eq(shown.at(-1), true, 'back to guided: shown again');

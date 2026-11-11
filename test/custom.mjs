@@ -616,13 +616,16 @@ export async function customChecks({ report, guardHits }) {
       const mock = mk.createMockLive({ scenes: ['custom'], liveEnabled: false }), codes = lv.codeStore(mem()), p = liveParts([]); codes.set(mk.MOCK_CODE);
       let backed = 0; const r = gate.passGate({ api: mkApi(mock, codes), codes, view: p.view, onBack: () => backed++ });
       await waitFor(() => p.h.lastAccess, 'the offline card');
-      eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.backLabel], ['offline', 'Back to scenes'], 'offline card');
+      eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.backLabel, p.h.lastAccess.spec.offlineText], ['offline', 'Back to scenes', lv.LIVE_COPY.backendOff], 'offline card, saying live is off');
       p.h.lastAccess.back(); eq(await r, false, 'back resolves false'); eq(backed, 1, 'onBack called');
     }
     { // the scene missing from /health counts as off
       const mock = mk.createMockLive({ scenes: ['home'] }), codes = lv.codeStore(mem()), p = liveParts([]);
       const r = gate.passGate({ api: mkApi(mock, codes), codes, view: p.view, onBack() {} });
-      await waitFor(() => p.h.lastAccess, 'the card'); eq(p.h.lastAccess.spec.mode, 'offline', 'custom not in scenes'); p.h.lastAccess.back(); await r;
+      await waitFor(() => p.h.lastAccess, 'the card'); eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.offlineText], ['offline', lv.LIVE_COPY.sceneOff], 'custom not in scenes'); p.h.lastAccess.back(); await r;
+      const down = mk.createMockLive({ mode: 'down' }), q = liveParts([]);
+      const r2 = gate.passGate({ api: mkApi(down, codes), codes, view: q.view, onBack() {}, base: 'http://localhost:5080' });
+      await waitFor(() => q.h.lastAccess, 'the card'); eq(q.h.lastAccess.spec.offlineText, lv.LIVE_COPY.backendDown('http://localhost:5080'), 'no backend: not found at its address'); q.h.lastAccess.back(); await r2;
     }
     { // a saved code that no longer works is cleared, with the note; a code with none left says so
       const mock = mk.createMockLive({ scenes: ['custom'], code: 'OTHER' }), codes = lv.codeStore(mem()), p = liveParts([]); codes.set(mk.MOCK_CODE);

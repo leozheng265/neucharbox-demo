@@ -25,8 +25,8 @@ const follow = () => `<nav class="social" aria-label="Follow NeuCharBox"><span c
 // A thumbnail gradient is dark when its first colour is (lab, creator): the index number and icons then go light.
 const darkThumb = (g) => { const m = /#([0-9a-f]{6})/i.exec(g || ''); if (!m) return false; const n = parseInt(m[1], 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 110; };
 
-// "Build your own" needs the live AI: without an API base (the public site until the live server is hosted) its card
-// isn't shown and #custom opens the picker.
+// "Build your own" needs the live AI: without an API base (js/live-config.js emptied) its card isn't shown and #custom
+// opens the picker.
 const customOn = () => !!liveApiBase();
 
 function renderPicker() {
@@ -142,10 +142,10 @@ async function mountScene(meta, gen) {
     alive: () => gen === mountGen,
     status: setStatus,
     beats: setBeats,
-    // The guided end cards gain the live button while live mode is available (a /health that said yes). It opens live mode
+    // The guided end cards have the live button wherever live mode is offered (an API base). It opens live mode
     // as the header's Live AI button does (js/engine/liveentry.js: flow.stop() first, so a guided picker of failures left
     // open goes too: a pick from it would run a scripted what-if while live is on).
-    endExtras: () => (live?.available ? { onLive: () => entry?.open(), liveLabel: LIVE_COPY.button } : {}),
+    endExtras: () => (live ? { onLive: () => entry?.open(), liveLabel: LIVE_COPY.button } : {}),
     // Discovery and fault effects: the pulse on a faulted device is red, like its ring, and its fault label goes as soon
     // as it is back online (a visitor confirming a stopped cart).
     ping: (id, text, opts) => R.ping(id, text, opts),
@@ -162,7 +162,7 @@ async function mountScene(meta, gen) {
   // The clock control beside the status line: shown in live mode, usable between requests (live.advance).
   const clockCtl = createClockCtl(document.getElementById('clockctl'), { onAdvance: (h) => live?.advance(h) });
   // The Automations section under the device cards (live mode only; js/engine/automations.js) and the header's Live AI
-  // button (shown while live mode is available here and not open). Neither exists on the public site (no API base).
+  // button (shown in every scene while live mode is not open). Neither exists without an API base.
   autos = base ? createAutomations(document.getElementById('autos'), { onToggle: (id, on) => live?.setAutomation(id, on), ...foldMedia(),
     emptyText: scene.devices.soil && scene.devices.pump ? LIVE_COPY.autosEmpty : LIVE_COPY.autosEmptyAny }) : null;
   const liveTop = document.getElementById('liveTop');
@@ -192,7 +192,6 @@ async function mountScene(meta, gen) {
   current = { scene, teardown() { live?.close(); flow?.cancel(); autos?.dispose(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   // QA hooks (visual harness): the host's phase, the quiet-replay flag and the recorded choices.
   window.__ncb = { live, store, panel, autos, entry, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
-  live?.probe(); // fired and forgotten: it never rejects, and the scripted setup must not wait for /health
   await flow.start();
   } catch (e) {
     if (gen === mountGen) current = null;

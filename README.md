@@ -189,16 +189,21 @@ Known limits: the phone camera is chosen once at page load (rotating the phone m
 second finger put down while one is on a device does not start a pinch-zoom; a lamp added after the page loaded has no
 shade stand-ins (no visible light leak in a 20-device room at night).
 
-## Live mode: automations and the Live AI button
+## Live mode: automations and the Try it live button
 
-Spec: `../docs/superpowers/specs/2026-11-08-automations-design.md`. With an API base (`js/live-config.js`, or
-`?liveApi=` on localhost) and a `/health` that lists the scene:
+Spec: `../docs/superpowers/specs/2026-11-08-automations-design.md`. The public page has no API base
+(`js/live-config.js`): it is guided-only, unless `?liveApi=` names a localhost address. The copy an NCF site serves
+itself at `/live/demo/` (the NeuCharBox Live module's `LiveDemo/` folder, written by
+`node tools/sync-module.mjs <module folder>`; run it after changing the demo) has that site as its API base, so there
+every scene offers live mode. Nothing is fetched until a live button is pressed; then `/health` decides. With no NCF
+backend there, live off, or a scene the backend can't run, the card says which (`whyOff` in `js/engine/live.js`) and
+offers the guided requests again.
 
-- **Live AI** in the scene header (just before "‹ Scenes", so hiding it under a double-click moves nothing under the
+- **Try it live** in every scene's header (just before "‹ Scenes", so hiding it under a double-click moves nothing under the
   pointer; `js/engine/liveentry.js`) opens live mode straight away, as an end
   card's live button does: `flow.stop()` first stops a guided run where it is (setup plays to its end at once; a card
-  waiting for an answer closes as "Stopped · nothing ran"), and the room goes back to right after setup. It shows only
-  while live mode is available and not open; the public site (no API base) never shows it. The custom scene has none:
+  waiting for an answer closes as "Stopped · nothing ran"), and the room goes back to right after setup. It shows
+  whenever live mode is not open (never with an empty API base). The custom scene has none:
   its gate and "Done building →" are its way in.
 - **Automations** (`js/engine/automations.js`), below the device cards in live mode only: a card per rule or schedule
   the AI set up (kind icon, text, "ran N× today", "Off" or, for a one-off whose time has passed, "Done" and no switch),
@@ -212,7 +217,7 @@ Spec: `../docs/superpowers/specs/2026-11-08-automations-design.md`. With an API 
   keeps at least min(45%, 280 px).
 
 Try it against the mock: `python serve.py` and `node test/mock-live.mjs 8787`, open
-`http://localhost:8765/?liveApi=http://localhost:8787#home`, press Live AI, enter `NCB-TEST-CASE` and ask something with
+`http://localhost:8765/?liveApi=http://localhost:8787#home`, press Try it live, enter `NCB-TEST-CASE` and ask something with
 "when", "rule" or "schedule" in it (the mock's `autos` script makes a rule and a schedule). `test/automations.html` checks
 the section with the real CSS in a browser (open it at a phone size and at a desktop size).
 
