@@ -182,6 +182,21 @@ export async function automationChecks({ report }) {
     eq(t.card('rule1').one('atext').textContent, '', 'and shows no text of its own');
   });
 
+  await check('automations ui · every card has a remove button; "Clear all" under the list, gone with the last card', () => {
+    const removed = []; let cleared = 0;
+    const t = make({ onRemove: (id) => removed.push(id), onClear: () => cleared++ }), clear = t.root.one('autos-clear');
+    eq([clear.tagName, clear.type, clear.textContent, clear.hidden], ['BUTTON', 'button', C.autosClear, true], 'a real button, hidden before there is a card');
+    t.a.render([]); eq(clear.hidden, true, 'an empty section has nothing to clear');
+    t.a.render([R1, { ...O1, done: true }]);
+    eq(clear.hidden, false, 'shown with cards');
+    const rm = t.card('rule1').one('auto-rm');
+    eq([rm.tagName, rm.type, rm.getAttribute('aria-label'), rm.title], ['BUTTON', 'button', C.autoRemove(RULE1.text), C.autoRemove(RULE1.text)], 'a real button, named by the automation it removes');
+    ok(!!t.card(O1.id).one('auto-rm') && t.card(O1.id).one('auto-sw').hidden, 'a done one-off has no switch but can be removed');
+    rm.click(); eq([removed, t.toggles], [['rule1'], []], 'remove reports the id, and flips nothing');
+    clear.focus(); clear.click(); eq(cleared, 1, 'Clear all reports');
+    t.a.render([]); eq(clear.hidden, true, 'gone with the last card'); ok(t.doc.activeElement === t.head, 'focus on the heading, not lost');
+  });
+
   await check('automations ui · helpers: sub-line, summary, foldMedia()', () => {
     eq([subLine({ kind: 'rule', enabled: true, firedToday: 0 }), subLine({ kind: 'schedule', enabled: true, firedToday: 1 }), subLine({ kind: 'rule', enabled: false, firedToday: 4 }), subLine({ kind: 'schedule', enabled: false, firedToday: 1, done: true })],
       ['Rule', 'Schedule · ran 1× today', 'Rule · Off', 'Schedule · Done']);

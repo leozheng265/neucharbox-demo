@@ -4,7 +4,8 @@
 // Automations (spec 2026-11-08-automations-design.md §3): a session keeps the list its `automations` events last sent;
 // POST sessions / reset answer it (empty), a what-if's `room` carries the list from before the replayed request, and
 // POST sessions/{sid}/automations/{id} { enabled } flips one and streams the list again (src edit), a reset that clears
-// some sends one empty list (src edit, no rid), an advance past midnight sends the counts back at 0, and an advance past a
+// some sends one empty list (src edit, no rid), POST …/automations/{id}/remove drops one and POST …/automations/clear
+// drops them all (each streams the list again, src edit), an advance past midnight sends the counts back at 0, and an advance past a
 // one-off schedule's time ("Once, Sat 08:00 → …") runs it if it is on and marks it done. Scripts emit their own
 // `automations` events and timeline rows with `automation` ids (SCRIPTS.autos); the mock runs no rules of its own.
 // Node built-ins only; no timers unless `pace` > 0 (so it runs on test/clock.mjs's virtual clock too).
@@ -301,6 +302,17 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       sess.state = sess.initial ? clone(sess.initial) : homeState(); sess.clock = { ...CLOCK }; sess.last = null; sess.automations = [];
       if (had) emit(sess, 'automations', { items: [], src: 'edit' }); // one event, no rid, only when there was something to clear
       return json(200, { state: clone(sess.state), clock: { ...sess.clock }, automations: [] });
+    }
+    if (sub === 'automations' && method === 'POST' && ((rid === 'clear' && !action) || (rid && action === 'remove'))) { // "Clear all", or a card's remove button
+      const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
+      if (recent.length >= 10) { editTimes.set(sid, recent); return fail(429, 'rate', 'Too many changes at once. Wait a moment.'); }
+      recent.push(now); editTimes.set(sid, recent);
+      if (action === 'remove') {
+        if (!sess.automations.some((x) => x.id === rid)) return fail(404, 'no_automation', 'There is no such automation.');
+        sess.automations = sess.automations.filter((x) => x.id !== rid);
+      } else sess.automations = [];
+      emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' }, sess.active); // allowed mid-request: it carries that request's rid
+      return json(202, {});
     }
     if (sub === 'automations' && method === 'POST') { // an automation's switch: the same rate window as set and advance
       if (!rid || action) return fail(404, 'bad_request', 'No such route.');

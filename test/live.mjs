@@ -599,7 +599,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(t.find('view', 'summary')[0], 'The lamp is at 20%, the blinds are closed, and the soil reads 34%, so the pump stayed off.', 'the summary event\'s text');
     eq(t.find('view', 'endCard')[0].remainingToday, 19);
     eq(t.find('view', 'endCard')[0], { remainingToday: 19, whatIfLabel: LIVE_COPY.whatIf, whatIf: true });
-    eq(t.find('ui', 'beats')[0].current, 'end'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusDone(19));
+    eq(t.find('ui', 'beats')[0].current, 'ask', 'a finished request ends nothing: no DONE step'); eq(t.find('ui', 'status')[0], LIVE_COPY.statusWaiting(6)); eq(lastInput(t), true, 'and the next request can be typed at once');
     ok(t.has('checklist', 'done')); ok(t.has('ui', 'track', true)); eq(t.find('ui', 'track')[0], false, 'track off at done');
     eq(t.live.phase, 'idle'); eq(lastInput(t), true); ok(!t.has('view', 'ncb', LIVE_COPY.lastOne));
     t.live.close();
@@ -663,7 +663,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(notes, ['not responding'], 'the server text is the fault note before the status turns fault');
     eq(t.checklist.steps, { s1: 'failed', s2: 'done', s3: 'pending' });
     const end = t.find('view', 'endCard'); eq(end[0], { remainingToday: 19, whatIfLabel: LIVE_COPY.anotherFailure, whatIf: true });
-    eq(t.find('ui', 'beats')[0], { current: 'end', recoverHidden: false, skippable: [] });
+    eq(t.find('ui', 'beats')[0], { current: 'ask', recoverHidden: true, skippable: [] }, 'back at ask: a finished what-if ends nothing either');
     // "Try another failure": the movie request's rid again, not the what-if's
     end[1].onWhatIf(); t.find('view', 'failures')[1]('pump');
     await waitFor(() => count(t, 'view', 'endCard') === 3);
@@ -727,7 +727,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(statusesFrom(t, from).filter((s) => /^(Fri|Sat|Sun) \d\d:\d\d$/.test(s)), ['Fri 18:00', 'Fri 22:30', 'Sat 07:10', 'Sat 18:00', 'Sun 09:00', 'Sun 16:30']);
     const rows = t.log.filter((e) => e[0] === 'checklist' && e[1] === 'timeline').map((e) => e[2]);
     eq(rows.map((r) => r.kind), ['action', 'action', 'notify', 'action']); eq(rows[2], { at: 'Sat 19:20', text: 'Sent you: someone at the door', ok: true, kind: 'notify' });
-    eq(t.find('ui', 'status')[0], LIVE_COPY.statusDone(19));
+    eq(t.find('ui', 'status')[0], LIVE_COPY.statusWaiting(6));
     t.live.close();
   });
 
@@ -1374,6 +1374,41 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const b = await harness({ mock: failOnce(createMockLive(), /\/automations\//, jsonAnswer(404, { error: 'no_session', message: 'Gone.' })), entered: true }); await withAutos(b);
     const sid = b.live.sessionId; await b.live.setAutomation('rule1', false); await waitFor(() => b.live.sessionId !== sid && b.live.phase === 'idle');
     eq(lastAutos(b), [], 'no_session: a fresh room, no automations yet'); b.live.close();
+  });
+
+  await check('automations · remove one: the card goes at once, the route is posted, the server\'s list agrees; Clear all removes the rest', async () => {
+    const idsOf = (t) => lastAutos(t)?.map((a) => a.id);
+    const t = await harness({ entered: true }); await withAutos(t);
+    const p = t.live.removeAutomation('rule1'); eq(idsOf(t), ['sched1'], 'gone at once'); await p; await settle();
+    eq(postsTo(t.mock, /\/automations\/rule1\/remove$/).length, 1, 'POST …/automations/rule1/remove'); eq(idsOf(t), ['sched1'], 'the server agrees');
+    await t.live.removeAutomation('rule1'); await t.live.removeAutomation('nope'); await settle();
+    eq(postsTo(t.mock, /\/remove$/).length, 1, 'nothing is posted for one that is not there');
+    await withAutos(t); eq(idsOf(t), ['rule1', 'sched1'], 'a later list that has it again (made again) shows it');
+    const c = t.live.clearAutomations(); eq(idsOf(t), [], 'Clear all: every card goes at once'); await c; await settle();
+    eq(postsTo(t.mock, /\/automations\/clear$/).length, 1, 'POST …/automations/clear'); eq(idsOf(t), [], 'the server agrees');
+    await t.live.clearAutomations(); eq(postsTo(t.mock, /\/automations\/clear$/).length, 1, 'nothing to clear, nothing posted'); t.live.close();
+    // queued mid-request: an older list that still has it does not bring the card back
+    const q = await harness({ mock: failOnce(createMockLive(), /\/remove$/, jsonAnswer(202, {})), entered: true }); await withAutos(q);
+    q.live.removeAutomation('rule1'); await settle(); // answered 202, but the server has not applied it yet
+    q.mock.edit(q.live.sessionId, 'automations', { items: [{ ...RULE1, firedToday: 1 }, SCHED1] }); await settle();
+    eq(idsOf(q), ['sched1'], 'still hidden under a stale list');
+    q.mock.edit(q.live.sessionId, 'automations', { items: [SCHED1] }); await settle(); eq(idsOf(q), ['sched1']);
+    q.mock.edit(q.live.sessionId, 'automations', { items: [{ ...RULE1, text: 'When the door opens, turn on the lamp' }, SCHED1] }); await settle();
+    eq(idsOf(q), ['rule1', 'sched1'], 'the same id with another text is a new automation'); q.live.close();
+  });
+
+  await check('automations · a refused removal brings the cards back with a short line; one already gone stays gone', async () => {
+    const idsOf = (t) => lastAutos(t)?.map((a) => a.id);
+    for (const [st, kind, line] of [[500, 'internal', LIVE_COPY.autoRemoveRejected], [429, 'rate', LIVE_COPY.editRate]]) {
+      const t = await harness({ mock: failOnce(createMockLive(), /\/remove$/, jsonAnswer(st, { error: kind, message: 'No.' })), entered: true }); await withAutos(t);
+      const p = t.live.removeAutomation('rule1'); eq(idsOf(t), ['sched1'], `${kind}: gone at once`); await p; await settle();
+      eq(idsOf(t), ['rule1', 'sched1'], `${kind}: back`); eq(ncbCount(t, line), 1, `${kind}: one line`); t.live.close();
+    }
+    const g = await harness({ mock: failOnce(createMockLive(), /\/remove$/, jsonAnswer(404, { error: 'no_automation', message: 'No.' })), entered: true }); await withAutos(g);
+    await g.live.removeAutomation('rule1'); await settle(); eq(idsOf(g), ['sched1'], '404 no_automation: it stays gone'); g.live.close();
+    const c = await harness({ mock: failOnce(createMockLive(), /\/automations\/clear$/, jsonAnswer(500, { error: 'internal', message: 'No.' })), entered: true }); await withAutos(c);
+    const p = c.live.clearAutomations(); eq(idsOf(c), [], 'cleared at once'); await p; await settle();
+    eq(idsOf(c), ['rule1', 'sched1'], 'refused: all back'); eq(ncbCount(c, LIVE_COPY.autosClearRejected), 1, 'one line'); c.live.close();
   });
 
   await check('automations · a timeline row with an automation id flashes its card (rule and schedule: JUST RAN, held: HELD), in a request and outside one', async () => {

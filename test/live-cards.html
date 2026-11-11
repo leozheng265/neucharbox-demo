@@ -167,8 +167,8 @@ try {
   view.endCard({ remainingToday: 7, whatIfLabel: LIVE_COPY.whatIf, whatIf: true }, { onAnother: () => pressed.push('another'), onWhatIf: () => pressed.push('whatif'), onReset: () => pressed.push('reset') });
   const end = $('.card.end.live');
   ok($('.left', end).textContent === LIVE_COPY.left(7), 'left line');
-  ok($$('.btn', end).map((b) => b.textContent.trim()).join('|') === [LIVE_COPY.another, LIVE_COPY.whatIf, LIVE_COPY.reset, LIVE_COPY.otherScene].join('|'), 'end card buttons');
-  ok($('.follow', end) && $$('.follow .social-link', end).length === 3, 'follow line');
+  ok($$('.btn', end).map((b) => b.textContent.trim()).join('|') === [LIVE_COPY.whatIf, LIVE_COPY.reset].join('|'), 'the follow-ups only: no button to press before the next request');
+  ok(!$('.follow', end) && end.classList.contains('slim'), 'a slim row, no follow line');
   $('.reset', end).click();
   ok(pressed.join() === 'reset' && $$('button', end).every((b) => b.disabled), 'one answer per card');
   const end2h = view.endCard({ remainingToday: 6, whatIfLabel: LIVE_COPY.whatIf, whatIf: true }, { onAnother: noop, onWhatIf: noop, onReset: noop });
