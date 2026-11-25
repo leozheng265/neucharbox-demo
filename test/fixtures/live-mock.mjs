@@ -1,180 +1,124 @@
-// An in-memory server that speaks the live API contract (docs/superpowers/specs/2026-11-07-live-api-contract.md),
-// for the live-client checks (test/live.mjs) and, over HTTP, for browser checks (test/mock-live.mjs).
-// createMockLive(opts) → { fetch(url, init) → Promise<Response>, calls, push(sid, kind, data), drop(sid), expire(sid), set(opts) }.
-// Automations (spec 2026-11-08-automations-design.md §3): a session keeps the list its `automations` events last sent;
-// POST sessions / reset answer it (empty), a what-if's `room` carries the list from before the replayed request, and
-// POST sessions/{sid}/automations/{id} { enabled } flips one and streams the list again (src edit), a reset that clears
-// some sends one empty list (src edit, no rid), POST …/automations/{id}/remove drops one and POST …/automations/clear
-// drops them all (each streams the list again, src edit), an advance past midnight sends the counts back at 0, and an advance past a
-// one-off schedule's time ("Once, Sat 08:00 → …") runs it if it is on and marks it done. Scripts emit their own
-// `automations` events and timeline rows with `automation` ids (SCRIPTS.autos); the mock runs no rules of its own.
-// Node built-ins only; no timers unless `pace` > 0 (so it runs on test/clock.mjs's virtual clock too).
+// An in-memory server that speaks the live API contract (interface-only version of 2026-11-24: the NeuCharBox Live
+// module's docs/live-api-contract.md), for the live-client checks (test/live.mjs, test/custom.mjs) and, over HTTP, for
+// browser checks (test/mock-live.mjs).
+// createMockLive(opts) → { fetch(url, init) → Promise<Response>, calls, push(sid, kind, data), edit(sid, kind, data),
+//   drop(sid), openStreams(sid), expire(sid), set(opts), session(sid) }.
+// Routes: health, access/check, apply, POST sessions (Home or a custom room from the catalog), GET sessions/{sid}/devices,
+// POST sessions/{sid}/devices/{id}/actions/{verb}, POST sessions/{sid}/faults, POST sessions/{sid}/faults/clear, set,
+// advance, reset, and the event stream. There are no requests, approvals, what-ifs or automations: those routes answer
+// 404 bad_request. An action validates its args against the action's JSON schema (a small validator: required, types,
+// enum, minimum / maximum, no extra keys), then streams call → (planted offline: fault + status fault, then a failed
+// result) → state frames → world (if it changed) → result, all src "action" except world, and answers once they have
+// played. opts.actionMs > 0 waits that long between call and result (timers, so the virtual clock of test/clock.mjs
+// runs it too); meanwhile another action, an advance, a fault or a reset answers 409 busy.
+// Node built-ins only.
 
-import { typeOf, validId, nameOf, CATALOG } from '../../js/custom/catalog.js';
+import { typeOf, validId, nameOf } from '../../js/custom/catalog.js';
 
 export const MOCK_CODE = 'NCB-TEST-CASE';
 
 const norm = (c) => String(c ?? '').toUpperCase().replace(/\s+/g, '');
 const CLOCK = { iso: '2026-11-13T16:30:00', label: 'Fri 16:30', hour: 16.5 };
-const homeState = () => ({
-  lamp: { on: false, brightness: 0, status: 'online' }, blinds: { closed: 0, status: 'online' },
-  soil: { moisture: 34, status: 'online' }, pump: { running: false, status: 'online' },
-  camera: { armed: false, motion: false, status: 'online' }, thermostat: { target: 21, current: 21.4, status: 'online' },
+const homeState = () => ({ // scene/home.json's initials (look flags included), online
+  lamp: { on: false, brightness: 0, status: 'online' }, blinds: { closed: 0, flat: false, jammed: false, status: 'online' },
+  soil: { moisture: 34, probeOut: false, status: 'online' }, pump: { running: false, blocked: false, status: 'online' },
+  camera: { armed: false, motion: false, off: false, status: 'online' }, thermostat: { target: 21, current: 21.4, cold: false, status: 'online' },
   env: { hour: CLOCK.hour },
 });
-const SUGGESTIONS = ['Movie night, but keep an eye on the plant', "I'm away for the weekend", 'Water the plant if it is dry'];
+const homeWorld = () => ({ air: { temp: 21.0, humidity: 45, pm25: 12 }, light: { lux: 120 }, outdoor: { temp: 9.5, sun: 0.42 }, soil: { pot: 34.0 }, power: { watts: 61, kwhToday: 0.35 }, people: [], doors: {} });
 const clone = (v) => JSON.parse(JSON.stringify(v));
+const obj = (props, required = Object.keys(props)) => ({ type: 'object', properties: props, required, additionalProperties: false });
+const NONE = obj({});
 
-// A custom room's suggestions, as the server's CustomRoom.Build makes them: catalog templates whose needs are all present,
-// in catalog order, at most 4, each {type} becoming the ref of the first device of that type.
-function customSuggestions(list) {
-  const firstRef = {}; for (const d of list) firstRef[d.type] ??= nameOf(d.type, d.id).ref;
-  const out = [];
-  for (const s of CATALOG.suggestions) {
-    if (out.length >= 4) break;
-    if (!s.needs.every((n) => n in firstRef)) continue;
-    out.push(s.needs.reduce((t, n) => t.replaceAll(`{${n}}`, firstRef[n]), s.text));
+// Home's devices, as the server's GET devices gives them (scene/home.json): verb = the action's name.
+const homeAction = (name, kind, description, parameters = NONE) => ({ verb: name, name, kind, description, parameters });
+export const HOME_DEVICES = [
+  { id: 'lamp', name: 'Floor lamp', edits: [{ field: 'brightness', kind: 'number', min: 0, max: 1 }], faultModes: ['offline', 'stuck'],
+    actions: [homeAction('set_lamp', 'write', 'Set the floor lamp brightness from 0 (off) to 100.', obj({ brightness: { type: 'integer', minimum: 0, maximum: 100 } }))] },
+  { id: 'blinds', name: 'Blinds', edits: [{ field: 'closed', kind: 'number', min: 0, max: 1 }], faultModes: ['offline', 'stuck'],
+    actions: [homeAction('set_blinds', 'write', 'Set how far the blinds are closed, from 0 (open) to 100 (closed).', obj({ closed_percent: { type: 'integer', minimum: 0, maximum: 100 } }))] },
+  { id: 'soil', name: 'Soil sensor', edits: [{ field: 'moisture', kind: 'number', min: 0, max: 100 }], faultModes: ['offline', 'sensorDetached', 'drift'],
+    actions: [homeAction('read_soil', 'read', "Read the plant's current soil moisture percentage.")] },
+  { id: 'pump', name: 'Water pump', edits: [{ field: 'running', kind: 'bool' }], faultModes: ['offline', 'blocked', 'stuck'],
+    actions: [homeAction('run_pump', 'write', 'Run the water pump for a number of seconds.', obj({ seconds: { type: 'integer', minimum: 1, maximum: 30 } })),
+      homeAction('stop_pump', 'safe', 'Stop the water pump right away.')] },
+  { id: 'camera', name: 'Door camera', edits: [{ field: 'armed', kind: 'bool' }, { field: 'motion', kind: 'bool' }], faultModes: ['offline'],
+    actions: [homeAction('set_door_camera', 'write', 'Arm or disarm the door camera.', obj({ armed: { type: 'boolean' } }))] },
+  { id: 'thermostat', name: 'Thermostat', edits: [{ field: 'target', kind: 'number', min: 10, max: 28 }, { field: 'current', kind: 'number', min: 5, max: 35 }], faultModes: ['offline', 'stuck', 'drift'],
+    actions: [homeAction('set_thermostat', 'write', 'Set the thermostat target temperature in degrees Celsius, from 10 to 28.', obj({ celsius: { type: 'number', minimum: 10, maximum: 28 } }))] },
+];
+// Home's look flags for a planted mode (state events src "edit"); cleared again by faults/clear and reset.
+const LOOK = { 'pump:blocked': 'pump.blocked', 'soil:sensorDetached': 'soil.probeOut', 'blinds:stuck': 'blinds.jammed' };
+const pct = (v) => (v === 0 ? 'off' : v === 100 ? 'full' : `${v}%`);
+
+// What one Home action does: { frames: [[kind, data]], outcome, text, result }. `s` is the session.
+function homeRun(s, id, verb, args) {
+  const st = s.state;
+  switch (verb) {
+    case 'set_lamp': return { label: `Floor lamp → ${pct(args.brightness)}`, frames: [['state', { path: 'lamp.on', value: args.brightness > 0, ms: 0 }], ['state', { path: 'lamp.brightness', value: args.brightness / 100, ms: 1200 }]], outcome: 'confirmed', text: 'confirmed', result: { ok: true } };
+    case 'set_blinds': return { label: `Blinds → ${args.closed_percent === 100 ? 'closed' : args.closed_percent === 0 ? 'open' : `${args.closed_percent}% closed`}`, frames: [['state', { path: 'blinds.closed', value: args.closed_percent / 100, ms: 3000 }]], outcome: 'confirmed', text: 'confirmed', result: { ok: true } };
+    case 'read_soil': { const v = s.faults.get('soil') === 'sensorDetached' ? 0 : Math.round(st.soil.moisture); return { label: 'Soil sensor → reading', frames: [], outcome: 'reading', text: `${v}%`, result: { ok: true, reading: v } }; }
+    case 'run_pump': {
+      const blocked = s.faults.get('pump') === 'blocked', frames = [['state', { path: 'pump.running', value: true, ms: 0 }]];
+      if (!blocked) { s.world.soil.pot = Math.round((s.world.soil.pot + args.seconds) * 10) / 10; frames.push(['world', clone(s.world)], ['state', { path: 'soil.moisture', value: Math.min(100, st.soil.moisture + args.seconds), ms: 800 }]); }
+      frames.push(['state', { path: 'pump.running', value: false, ms: 0 }]);
+      return { label: `Water pump → on for ${args.seconds} s`, frames, outcome: 'commanded', text: 'commanded', result: { ok: true } };
+    }
+    case 'stop_pump': return { label: 'Water pump → off', frames: [['state', { path: 'pump.running', value: false, ms: 0 }]], outcome: 'made_safe', text: 'made safe', result: { ok: true } };
+    case 'set_door_camera': return { label: `Door camera → ${args.armed ? 'armed' : 'off'}`, frames: [['state', { path: 'camera.armed', value: args.armed, ms: 0 }]], outcome: 'confirmed', text: 'confirmed', result: { ok: true } };
+    case 'set_thermostat': return { label: `Thermostat → ${args.celsius} °C`, frames: [['state', { path: 'thermostat.target', value: args.celsius, ms: 0 }]], outcome: 'confirmed', text: 'confirmed', result: { ok: true } };
+    default: return null;
   }
-  return out;
 }
 
-// ---------------- scripted runs ----------------
-// A script is a list of segments { on: 'request'|'approve'|'decline'|'whatif', kind?, events: [[kind, data], …] }.
-// A `decline` segment with a `kind` answers only a card of that kind. `whatif` is the events after room + plan.
-const st = (id, status) => ['step', { id, status }];
-const state = (path, value, ms = 0) => ['state', { path, value, ms }];
-const call = (step, callId, device, action, args, label) => ['call', { step, callId, device, action, args, label }];
-const result = (callId, step, device, outcome, text, ok = true) => ['result', { callId, step, device, ok, outcome, text }];
-const DONE_OK = ['done', { outcome: 'ok' }];
-// In the server's wording (contract "Automations": switches read as what they do, number fields are named).
-export const RULE1 = { id: 'rule1', kind: 'rule', text: 'When Soil sensor is below 30% → Water pump: run 10 s', devices: ['soil', 'pump'], enabled: true, firedToday: 0, done: false };
-export const SCHED1 = { id: 'sched1', kind: 'schedule', text: 'Every day at 19:00 → Floor lamp → 35%', devices: ['lamp'], enabled: true, firedToday: 0, done: false };
-export const RULE2 = { id: 'rule2', kind: 'rule', text: 'When Door camera detects motion → notify: Someone is at the door', devices: ['camera'], enabled: true, firedToday: 0, done: false };
-export const ONCE1 = { id: 'sched2', kind: 'schedule', text: 'Once, Sat 08:00 → Thermostat → 19 °C', devices: ['thermostat'], enabled: true, firedToday: 0, done: false };
-// A one-off schedule's time, in env.hour (the mock's room starts on a Friday): "Once, Sat 08:00 → …" → 32.
-const ONCE_DAY = { Fri: 0, Sat: 1, Sun: 2, Mon: 3, Tue: 4, Wed: 5, Thu: 6 };
-const onceAt = (text) => { const m = /^Once, (Mon|Tue|Wed|Thu|Fri|Sat|Sun) (\d{2}):(\d{2})/.exec(String(text)); return m ? ONCE_DAY[m[1]] * 24 + Number(m[2]) + Number(m[3]) / 60 : null; };
-const AUTO_STEPS = [
-  { id: 's1', text: 'Add a rule: when the soil is below 30%, run the pump for 10 s', devices: ['soil', 'pump'] },
-  { id: 's2', text: 'Every day at 19:00, set the floor lamp to 35%', devices: ['lamp'] },
-];
-// The automations being set up, one per step (cards appear during the run, not only at done).
-const autoSetup = () => [st('s1', 'running'), ['automations', { items: [RULE1] }], st('s1', 'done'), st('s2', 'running'), ['automations', { items: [RULE1, SCHED1] }], st('s2', 'done'),
-  ['clock', { iso: '2026-11-13T19:00:00', label: 'Fri 19:00', hour: 19 }]];
-const MOVIE_STEPS = [
-  { id: 's1', text: 'Dim the floor lamp to 20%', devices: ['lamp'] },
-  { id: 's2', text: 'Close the blinds fully', devices: ['blinds'] },
-  { id: 's3', text: 'Read the soil sensor; water only if under 30%', devices: ['soil', 'pump'] },
-];
-const movieRun = () => [
-  st('s1', 'running'), call('s1', 'c1', 'lamp', 'set', { on: true, brightness: 0.2 }, 'Floor lamp → 20%'),
-  state('lamp.on', true), state('lamp.brightness', 0.2, 1200), result('c1', 's1', 'lamp', 'confirmed', 'confirmed'), st('s1', 'done'),
-  st('s2', 'running'), call('s2', 'c2', 'blinds', 'set', { closed: 1 }, 'Blinds → closed'),
-  state('blinds.closed', 1, 3000), result('c2', 's2', 'blinds', 'confirmed', 'confirmed'), st('s2', 'done'),
-];
-const SOIL_READ = (id, callId, text) => [['reading', { device: 'soil' }], call(id, callId, 'soil', 'read', {}, 'Soil sensor → reading'), result(callId, id, 'soil', 'reading', text)];
-export const SCRIPTS = {
-  movie: [
-    { on: 'request', events: [['planning', {}], ['reading', { device: 'soil' }], ['plan', { steps: MOVIE_STEPS, horizonHours: null }], ['awaiting_approval', { kind: 'plan' }]] },
-    { on: 'approve', events: [...movieRun(),
-      st('s3', 'running'), ...SOIL_READ('s3', 'c3', '34%'), st('s3', 'done'),
-      ['say', { delta: 'The lamp is down to 20% and the blinds are closed. ' }], ['say', { delta: 'The soil reads 34%, so the pump stayed off.' }],
-      ['summary', { text: 'The lamp is at 20%, the blinds are closed, and the soil reads 34%, so the pump stayed off.' }], DONE_OK] },
-    { on: 'decline', events: [['declined', {}], ['done', { outcome: 'declined' }]] },
-  ],
-  replan: [
-    { on: 'request', events: [['planning', {}], ['plan', { steps: [
-      { id: 's1', text: 'Read the soil sensor', devices: ['soil'] },
-      { id: 's2', text: 'Leave the pump off if the soil is over 30%', devices: ['pump'] }], horizonHours: null }], ['awaiting_approval', { kind: 'plan' }]] },
-    { on: 'approve', events: [st('s1', 'running'), ...SOIL_READ('s1', 'c1', '28%'), st('s1', 'done'),
-      ['replan', { steps: [
-        { id: 's2', text: 'Water the plant for 6 seconds', devices: ['pump'] },
-        { id: 's3', text: 'Read the soil sensor again', devices: ['soil'] }], reason: 'the soil reads 28%, under the 30% you asked for' }],
-      ['awaiting_approval', { kind: 'replan' }]] },
-    { on: 'approve', events: [st('s2', 'running'),
-      call('s2', 'c2', 'pump', 'set', { running: true, seconds: 6 }, 'Water pump → on for 6 s'), state('pump.running', true),
-      result('c2', 's2', 'pump', 'commanded', 'commanded'), st('s2', 'done'),
-      call(null, 'c3', 'pump', 'set', { running: false }, 'Water pump → off'), state('pump.running', false),
-      result('c3', null, 'pump', 'made_safe', 'made safe'),
-      st('s3', 'running'), ...SOIL_READ('s3', 'c4', '35%'), st('s3', 'done'),
-      ['summary', { text: 'The pump ran for 6 seconds and is off again. The soil now reads 35%.' }], DONE_OK] },
-    { on: 'decline', kind: 'plan', events: [['declined', {}], ['done', { outcome: 'declined' }]] },
-    { on: 'decline', kind: 'replan', events: [['summary', { text: 'I left the pump off, as you asked. The soil sensor read 28%.' }], DONE_OK] },
-  ],
-  weekend: [
-    { on: 'request', events: [['planning', {}], ['plan', { steps: [
-      { id: 's1', text: 'Turn the floor lamp on in the evenings', devices: ['lamp'] },
-      { id: 's2', text: 'Arm the door camera and tell me about visitors', devices: ['camera'] }], horizonHours: 48 }], ['awaiting_approval', { kind: 'plan' }]] },
-    { on: 'approve', events: [
-      st('s1', 'running'), st('s1', 'done'), st('s2', 'running'),
-      ['clock', { iso: '2026-11-13T18:00:00', label: 'Fri 18:00', hour: 18 }],
-      ['timeline', { at: 'Fri 18:00', text: 'Floor lamp → 35%', ok: true, kind: 'action' }],
-      ['clock', { iso: '2026-11-13T22:30:00', label: 'Fri 22:30', hour: 22.5 }],
-      ['clock', { iso: '2026-11-14T07:10:00', label: 'Sat 07:10', hour: 31.17 }],
-      ['timeline', { at: 'Sat 07:10', text: 'Floor lamp → off', ok: true, kind: 'action' }],
-      ['clock', { iso: '2026-11-14T18:00:00', label: 'Sat 18:00', hour: 42 }],
-      ['timeline', { at: 'Sat 19:20', text: 'Sent you: someone at the door', ok: true, kind: 'notify' }],
-      ['clock', { iso: '2026-11-15T09:00:00', label: 'Sun 09:00', hour: 57 }],
-      ['timeline', { at: 'Sun 09:00', text: 'Floor lamp → off', ok: true, kind: 'action' }],
-      ['clock', { iso: '2026-11-15T16:30:00', label: 'Sun 16:30', hour: 64.5 }],
-      st('s2', 'done'),
-      ['summary', { text: 'The lamp followed your evenings and I told you about the visitor at the door.' }], DONE_OK] },
-    { on: 'decline', events: [['declined', {}], ['done', { outcome: 'declined' }]] },
-  ],
-  cannot: [
-    { on: 'request', events: [['planning', {}],
-      ['cannot_do', { reason: 'I can’t order food from here, only control the devices in this home.', suggestions: ['Movie night, but keep an eye on the plant', "I'm away for the weekend"] }],
-      ['done', { outcome: 'cannot_do' }]] },
-  ],
-  autos: [
-    { on: 'request', events: [['planning', {}], ['plan', { steps: AUTO_STEPS, horizonHours: 4 }], ['awaiting_approval', { kind: 'plan' }]] },
-    { on: 'approve', events: [...autoSetup(),
-      ['timeline', { at: 'Fri 19:00', text: 'Floor lamp → 35%', ok: true, kind: 'action', origin: 'schedule', device: 'lamp', automation: 'sched1' }],
-      state('lamp.on', true), state('lamp.brightness', 0.35),
-      ['automations', { items: [RULE1, { ...SCHED1, firedToday: 1 }] }],
-      ['clock', { iso: '2026-11-13T20:30:00', label: 'Fri 20:30', hour: 20.5 }],
-      ['summary', { text: 'The rule waters the plant when the soil is dry, and the floor lamp comes on at 19:00 every day.' }], DONE_OK] },
-    { on: 'decline', events: [['declined', {}], ['done', { outcome: 'declined' }]] },
-  ],
-  limitCalls: [
-    { on: 'request', events: [['planning', {}], ['plan', { steps: [
-      { id: 's1', text: 'Dim the floor lamp to 20%', devices: ['lamp'] },
-      { id: 's2', text: 'Close the blinds fully', devices: ['blinds'] }], horizonHours: null }], ['awaiting_approval', { kind: 'plan' }]] },
-    { on: 'approve', events: [st('s1', 'running'), call('s1', 'c1', 'lamp', 'set', { on: true, brightness: 0.2 }, 'Floor lamp → 20%'),
-      state('lamp.on', true), state('lamp.brightness', 0.2, 1200), result('c1', 's1', 'lamp', 'confirmed', 'confirmed'),
-      ['limit', { kind: 'calls' }], ['done', { outcome: 'limit' }]] },
-    { on: 'decline', events: [['declined', {}], ['done', { outcome: 'declined' }]] },
-  ],
-};
-// The what-if replay of `movie` (after `room` and `plan`): the lamp fails, the rest goes on.
-SCRIPTS.movie.whatif = [
-  st('s1', 'running'), call('s1', 'c1', 'lamp', 'set', { on: true, brightness: 0.2 }, 'Floor lamp → 20%'),
-  ['fault', { device: 'lamp', text: 'not responding' }], state('lamp.status', 'fault'),
-  result('c1', 's1', 'lamp', 'failed', 'not responding', false), st('s1', 'failed'),
-  st('s2', 'running'), call('s2', 'c2', 'blinds', 'set', { closed: 1 }, 'Blinds → closed'),
-  state('blinds.closed', 1, 3000), result('c2', 's2', 'blinds', 'confirmed', 'confirmed'), st('s2', 'done'),
-  ['summary', { text: 'The floor lamp did not respond, so the room stayed lit as it was. The blinds are closed.' }], DONE_OK,
-];
-// The what-if replay of `autos`: the room before it had no automations, so they are set up again; the lamp fails at 19:00.
-SCRIPTS.autos.whatif = [...autoSetup(),
-  ['fault', { device: 'lamp', text: 'not responding' }], state('lamp.status', 'fault'),
-  ['timeline', { at: 'Fri 19:00', text: 'Floor lamp → 35%', ok: false, kind: 'fault', origin: 'schedule', device: 'lamp', automation: 'sched1' }],
-  ['automations', { items: [RULE1, { ...SCHED1, firedToday: 1 }] }],
-  ['summary', { text: 'At 19:00 the floor lamp did not respond, so the schedule could not set it.' }], DONE_OK,
-];
-export const SCRIPT_PICK = [[/pizza/i, 'cannot'], [/movie/i, 'movie'], [/limit/i, 'limitCalls'], [/automat|\brule\b|schedule|every day|\bwhen\b/i, 'autos'], [/water|soil/i, 'replan'], [/weekend|week|away/i, 'weekend'], [/.*/, 'movie']];
+// A custom room's devices from the catalog (types: id → type), as the server's CustomRoom.Build gives them: the action
+// name is "<verb>_<id>", the description's {ref} is the device's ref.
+function customDevices(list) {
+  return list.map(({ id, type }) => {
+    const t = typeOf(type), { name, ref } = nameOf(type, id);
+    return { id, type, name, edits: clone(t.edit || []), faultModes: (t.actions || []).some((a) => a.kind === 'Read') ? ['offline', 'sensorDetached', 'drift'] : ['offline', 'stuck'],
+      actions: (t.actions || []).map((a) => ({ verb: a.verb, name: `${a.verb}_${id}`, kind: String(a.kind).toLowerCase(), description: String(a.description || '').replaceAll('{ref}', ref), parameters: clone(a.parameters || NONE), _spec: a })) };
+  });
+}
+// What one catalog action does: its `effects` (set from an arg × scale, set a value, add an arg; anything conditional is
+// left out), its `reads` for a read.
+function customRun(s, dev, a, args) {
+  const spec = a._spec, frames = [], slice = s.state[dev.id];
+  for (const e of spec.effects || []) {
+    if (e.if) continue;
+    const field = e.set ?? e.add; if (!field || !(field in slice) && e.add) continue;
+    const v = e.add ? Number(slice[field] || 0) + Number(args[e.arg] || 0) : 'arg' in e ? (typeof args[e.arg] === 'number' ? Math.round(args[e.arg] * (e.scale ?? 1) * 1e6) / 1e6 : args[e.arg]) : e.value;
+    if (v === undefined) continue;
+    frames.push(['state', { path: `${dev.id}.${field}`, value: v, ms: Number(e.ms) || 0 }]);
+  }
+  const reads = (spec.reads || []).map((r) => `${Math.round(Number(slice[r.field] ?? 0))}${r.unit || ''}`);
+  const read = a.kind === 'read';
+  return { label: `${dev.name} → ${read ? 'read' : a.verb}`, frames, outcome: read ? 'reading' : spec.outcome || 'confirmed', text: read ? reads.join(', ') || 'read' : spec.outcome || 'confirmed', result: read ? { ok: true, reading: Number(slice[spec.reads?.[0]?.field] ?? 0) } : { ok: true } };
+}
+
+// The arg validator (the server's own covers more; this is enough for the page's controls): a sentence, or null.
+function badArgs(schema, args) {
+  const props = schema?.properties || {}, req = schema?.required || [];
+  for (const k of req) if (!(k in args)) return `'${k}' is required`;
+  for (const [k, v] of Object.entries(args)) {
+    const p = props[k];
+    if (!p) { if (schema?.additionalProperties === false) return `'${k}' is not a parameter of this action`; continue; }
+    if (Array.isArray(p.enum) && !p.enum.includes(v)) return `'${k}' must be one of ${p.enum.join(', ')}`;
+    if (p.type === 'boolean' && typeof v !== 'boolean') return `'${k}' must be true or false`;
+    if (p.type === 'string' && typeof v !== 'string') return `'${k}' must be text`;
+    if (p.type === 'integer' && !Number.isInteger(v)) return `'${k}' must be a whole number`;
+    if (p.type === 'number' && !(typeof v === 'number' && Number.isFinite(v))) return `'${k}' must be a number`;
+    if (typeof v === 'number' && Number.isFinite(p.minimum) && v < p.minimum) return `'${k}' must be at least ${p.minimum}`;
+    if (typeof v === 'number' && Number.isFinite(p.maximum) && v > p.maximum) return `'${k}' must be at most ${p.maximum}`;
+  }
+  return null;
+}
 
 // ---------------- the server ----------------
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
-const mergeSteps = (steps, more) => { const out = steps.map((s) => ({ ...s })); for (const s of more) { const i = out.findIndex((x) => x.id === s.id); if (i >= 0) out[i] = { ...s }; else out.push({ ...s }); } return out; };
 // What a hand edit may change (the same table as the server): path → 'bool' or [min, max].
 const EDITABLE = { 'lamp.brightness': [0, 1], 'blinds.closed': [0, 1], 'soil.moisture': [0, 100], 'pump.running': 'bool', 'camera.armed': 'bool', 'camera.motion': 'bool', 'thermostat.target': [10, 28], 'thermostat.current': [5, 35] };
-// A custom room's: each device's catalog `edit` fields, as the server's CustomRoom.Build gives them (types: id → type).
-const customEditable = (types) => {
-  const out = {};
-  for (const [id, type] of Object.entries(types)) for (const e of typeOf(type).edit || []) out[`${id}.${e.field}`] = e.kind === 'bool' ? 'bool' : [e.min, e.max];
-  return out;
-};
+const customEditable = (devs) => { const out = {}; for (const d of devs) for (const e of d.edits) out[`${d.id}.${e.field}`] = e.kind === 'bool' ? 'bool' : [e.min, e.max]; return out; };
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const pad = (n) => String(n).padStart(2, '0');
 // The room clock `hours` later (the mock reads the ISO time as UTC, which is only arithmetic here).
@@ -183,107 +127,98 @@ const clockAfter = (c, hours) => {
   return { iso: d.toISOString().slice(0, 19), label: `${DAYS[d.getUTCDay()]} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`, hour: c.hour + hours };
 };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const statusOf = (slice) => (slice?.status === 'fault' ? 'fault' : slice?.status === 'busy' ? 'busy' : 'online');
 
-export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_CODE, liveEnabled = true, off = null, remaining = 20, mode = 'json', pace = 0, scripts = SCRIPTS } = {}) {
-  const cfg = { scene, scenes, code, liveEnabled, off, remaining, mode, pace };
+export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_CODE, liveEnabled = true, off = null, mode = 'json', actionMs = 0 } = {}) {
+  const cfg = { scene, scenes, code, liveEnabled, off, mode, actionMs };
   const calls = [], editTimes = new Map(), sessions = new Map(), enc = new TextEncoder();
   let nSession = 0;
 
   const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-  const fail = (status, error, message) => json(status, { error, message });
+  const fail = (status, error, message, extra = {}) => json(status, { error, message, ...extra });
 
-  // Add an event to a session's list and to every open stream; keep the room (state, clock) and the run in step.
-  // A null or undefined `rid` leaves the key out (an edit outside a request has none).
-  function emit(sess, kind, data, rid) {
-    const run = sess.run;
-    if (kind === 'state') { const [d, ...f] = data.path.split('.'); if (sess.state[d]) sess.state[d][f.join('.')] = data.value; }
-    else if (kind === 'clock') { sess.clock = { iso: data.iso, label: data.label, hour: data.hour }; sess.state.env.hour = data.hour; }
-    else if (kind === 'room') { sess.state = clone(data.state); sess.clock = clone(data.clock); sess.automations = clone(data.automations ?? []); }
-    else if (kind === 'automations') sess.automations = clone(data.items ?? []);
-    else if (run && kind === 'plan') run.steps = clone(data.steps);
-    else if (run && kind === 'replan') run.proposed = clone(data.steps);
-    else if (run && kind === 'call') run.calls++;
-    if (kind === 'awaiting_approval') sess.pending = data.kind;
-    let out = data;
-    if (kind === 'done') {
-      out = { usage: { promptTokens: 1200, completionTokens: 180, calls: run?.calls ?? 0 }, remainingToday: cfg.remaining, ...data };
-      sess.active = null; sess.pending = null;
-      if (run && !run.whatif && (data.outcome === 'ok' || data.outcome === 'failed') && run.steps.length) sess.last = run; // the latest replayable request (contract): a declined, cannot_do, expired or limit one never replaces it
-    }
-    if (kind === 'cannot_do' || kind === 'declined') sess.pending = null;
-    const seq = sess.events.length + 1, ev = { seq, kind, data: rid == null ? { ...out } : { ...out, rid } };
+  // Add an event to a session's list and to every open stream; keep the room (state, clock, world) in step.
+  function emit(sess, kind, data) {
+    if (kind === 'state' && typeof data.path === 'string') { const [d, ...f] = data.path.split('.'), k = f.join('.'); if (Object.hasOwn(sess.state, d) && k && !['__proto__', 'constructor', 'prototype'].includes(k)) sess.state[d][k] = data.value; }
+    else if (kind === 'clock' && Number.isFinite(data.hour)) { sess.clock = { iso: data.iso, label: data.label, hour: data.hour }; sess.state.env.hour = data.hour; }
+    else if (kind === 'world') sess.world = clone(data);
+    const seq = sess.events.length + 1, ev = { seq, kind, data: { ...data } };
     sess.events.push(ev);
-    const frame = enc.encode(`id: ${seq}\nevent: ${kind}\ndata: ${JSON.stringify(ev.data)}\n\n`);
+    const frame = frameOf(ev);
     for (const s of sess.streams) { try { s.controller.enqueue(frame); } catch { sess.streams.delete(s); } }
     return ev;
   }
   const frameOf = (ev) => enc.encode(`id: ${ev.seq}\nevent: ${ev.kind}\ndata: ${JSON.stringify(ev.data)}\n\n`);
 
-  // Push a segment's events: the first one now (before the POST answers), the rest at once (next microtask) or paced.
-  function runEvents(sess, events, rid) {
-    if (!events.length) return;
-    emit(sess, ...events[0], rid);
-    const rest = events.slice(1);
-    if (!rest.length) return;
-    if (!(cfg.pace > 0)) { Promise.resolve().then(() => { if (sessions.get(sess.id) === sess) for (const [k, d] of rest) emit(sess, k, d, rid); }); return; }
-    (async () => {
-      let prev = events[0][0];
-      for (const [k, d] of rest) {
-        await wait(k === 'plan' && prev === 'planning' ? 1200 : k === 'say' && prev === 'say' ? 120 : cfg.pace);
-        if (sessions.get(sess.id) !== sess) return;
-        emit(sess, k, d, rid); prev = k;
-      }
-    })();
-  }
-  const segmentFor = (run, on, kind) => {
-    const segs = scripts[run.name] || [];
-    const i = segs.findIndex((s, j) => s.on === on && !run.used.has(j) && (!s.kind || s.kind === kind));
-    if (i < 0) return null;
-    run.used.add(i); return segs[i];
-  };
-
   function auth(headers) {
     const m = /^Bearer\s+(.*)$/i.exec(headers.get('authorization') || '');
     return !!m && norm(m[1]) === norm(cfg.code);
   }
-  const offAnswer = () => (cfg.off === 'budget' ? fail(429, 'budget', 'Live AI has reached its limit for today.') : cfg.off === 'live_off' ? fail(503, 'live_off', 'Live AI is switched off right now.') : null);
+  // The rate window: 10 per 5 s per session, shared by set, advance, actions and faults.
+  function limited(sid) {
+    const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
+    if (recent.length >= 10) { editTimes.set(sid, recent); return true; }
+    recent.push(now); editTimes.set(sid, recent); return false;
+  }
+  const isBody = (b) => !!b && typeof b === 'object' && !Array.isArray(b);
+  const devicesAnswer = (sess) => ({ devices: sess.devices.map(({ actions, ...d }) => ({ ...clone(d), type: d.type ?? null, status: statusOf(sess.state[d.id]), state: clone(sess.state[d.id] ?? {}),
+    actions: actions.map(({ _spec, ...a }) => clone(a)) })), clock: { ...sess.clock } });
+  const faultList = (sess) => [...sess.faults].map(([device, m]) => ({ device, mode: m }));
+  const newSess = (id, state, devices, editable) => ({ id, events: [], streams: new Set(), state, initial: clone(state), clock: { ...CLOCK }, world: homeWorld(), devices, editable, faults: new Map(), failed: new Set(), acting: false, nCall: 0 });
+
+  // One action, through the "simulator": events, then the answer.
+  async function runAction(sess, dev, a, args) {
+    const sid = sess.id, alive = () => sessions.get(sid) === sess;
+    const plan = sess.devices === HOME_DEVICES ? homeRun(sess, dev.id, a.verb, args) : customRun(sess, dev, a, args);
+    const callId = `a${++sess.nCall}`;
+    sess.acting = true;
+    try {
+      emit(sess, 'call', { callId, device: dev.id, action: a.verb, args: clone(args), label: plan.label, src: 'action' });
+      if (cfg.actionMs > 0) { await wait(cfg.actionMs); if (!alive()) return fail(404, 'no_session', 'That session has ended.'); }
+      if (sess.faults.get(dev.id) === 'offline') {
+        if (!sess.failed.has(dev.id)) { sess.failed.add(dev.id); emit(sess, 'fault', { device: dev.id, text: 'not responding', src: 'action' }); emit(sess, 'state', { path: `${dev.id}.status`, value: 'fault', ms: 0, src: 'action' }); }
+        emit(sess, 'result', { callId, device: dev.id, ok: false, outcome: 'failed', text: 'not responding', src: 'action' });
+        return json(200, { callId, device: dev.id, action: a.verb, ok: false, outcome: 'failed', text: 'not responding', result: { ok: false, error: 'not responding' } });
+      }
+      for (const [k, d] of plan.frames) emit(sess, k, k === 'world' ? d : { ...d, src: 'action' });
+      emit(sess, 'result', { callId, device: dev.id, ok: true, outcome: plan.outcome, text: plan.text, src: 'action' });
+      return json(200, { callId, device: dev.id, action: a.verb, ok: true, outcome: plan.outcome, text: plan.text, result: plan.result });
+    } finally { sess.acting = false; }
+  }
 
   function handle(method, parts, query, headers, body) {
-    const [root, sid, sub, rid, action] = parts;
+    const [root, sid, sub, a3, a4, a5] = parts;
     if (root === 'health' && method === 'GET') return json(200, { ok: true, liveEnabled: cfg.liveEnabled, scenes: cfg.scenes });
     if (root === 'access' && sid === 'check' && method === 'POST') {
       if (cfg.checkRate) return fail(429, 'rate', 'Too many tries. Wait a minute.');
-      return norm(body?.code) === norm(cfg.code) ? json(200, { ok: true, remainingToday: cfg.remaining }) : fail(401, 'bad_code', 'That code is not valid.');
+      return norm(body?.code) === norm(cfg.code) ? json(200, { ok: true, remainingToday: 20 }) : fail(401, 'bad_code', 'That code is not valid.');
     }
     if (root === 'apply' && method === 'POST') return json(202, {});
     if (root !== 'sessions') return fail(404, 'bad_request', 'No such route.');
     if (!auth(headers)) return fail(401, 'bad_code', 'That code is not valid.');
     if (!sid) {
       if (method !== 'POST') return fail(400, 'bad_request', 'Bad request.');
-      const o = offAnswer(); if (o) return o;
-      if (cfg.sessionCap === 'global_limit') return fail(429, 'global_limit', 'Live AI is at its session capacity right now.');
+      if (cfg.off === 'live_off') return fail(503, 'live_off', 'Live mode is switched off right now.');
+      if (cfg.sessionCap === 'global_limit') return fail(429, 'global_limit', 'The live server is at its session capacity right now.');
       if (cfg.sessionCap === 'code_limit') return fail(429, 'code_limit', 'All of the live sessions for this code are busy.');
       if (body?.scene === 'custom' && cfg.scenes.includes('custom')) { // the custom room: the visitor's own device list
         const list = body.devices, seen = new Set();
         const good = Array.isArray(list) && list.length >= 1 && list.length <= 20 && list.every((d) => d && typeof d.type === 'string' && typeOf(d.type) && validId(d.type, d.id) && !seen.has(d.id) && seen.add(d.id));
         if (!good) return fail(400, 'bad_room', "That room can't be set up. Check its devices and try again.");
-        // (Scripted runs still emit Home's ids even in a custom session: they exercise the client, not the room.)
         const state = { env: { hour: CLOCK.hour } };
         for (const d of list) state[d.id] = { ...clone(typeOf(d.type).initial), status: 'online' };
-        const id = `sess-${++nSession}`;
-        const editable = customEditable(Object.fromEntries(list.map((d) => [d.id, d.type])));
-        sessions.set(id, { id, initial: clone(state), editable, events: [], streams: new Set(), state, clock: { ...CLOCK }, automations: [], active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() });
-        return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, suggestions: customSuggestions(list), automations: [] });
+        const devs = customDevices(list), id = `sess-${++nSession}`, sess = newSess(id, state, devs, customEditable(devs));
+        sessions.set(id, sess);
+        return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, world: clone(sess.world) });
       }
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
-      const id = `sess-${++nSession}`;
-      const sess = { id, events: [], streams: new Set(), state: homeState(), clock: { ...CLOCK }, automations: [], active: null, pending: null, run: null, last: null, curRid: null, nRid: 0, known: new Set() };
+      const id = `sess-${++nSession}`, sess = newSess(id, homeState(), HOME_DEVICES, EDITABLE);
       sessions.set(id, sess);
-      return json(201, { sessionId: id, state: clone(sess.state), clock: { ...sess.clock }, suggestions: [...SUGGESTIONS], automations: [] });
+      return json(201, { sessionId: id, state: clone(sess.state), clock: { ...sess.clock }, world: clone(sess.world) });
     }
     const sess = sessions.get(sid);
     if (!sess) return fail(404, 'no_session', 'That session has ended.');
-    if (sub === 'events' && method === 'GET') {
+    if (sub === 'events' && method === 'GET' && !a3) {
       const after = Number(query.get('after')) || 0;
       let entry;
       const stream = new ReadableStream({
@@ -296,115 +231,67 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
       });
       return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' } });
     }
-    if (sub === 'reset' && method === 'POST') {
-      if (sess.active) return fail(409, 'busy', 'A request is still running.');
-      const had = Array.isArray(sess.automations) && sess.automations.length > 0;
-      sess.state = sess.initial ? clone(sess.initial) : homeState(); sess.clock = { ...CLOCK }; sess.last = null; sess.automations = [];
-      if (had) emit(sess, 'automations', { items: [], src: 'edit' }); // one event, no rid, only when there was something to clear
-      return json(200, { state: clone(sess.state), clock: { ...sess.clock }, automations: [] });
+    if (sub === 'devices' && method === 'GET' && !a3) return json(200, devicesAnswer(sess));
+    if (sub === 'devices' && method === 'POST' && a3 && a4 === 'actions' && a5 && parts.length === 6) {
+      if (limited(sid)) return fail(429, 'rate', 'Too many changes at once. Wait a moment.');
+      const args = body == null || body === '' ? {} : body;
+      if (!isBody(args)) return fail(400, 'bad_request', 'Bad request.');
+      const dev = sess.devices.find((d) => d.id === a3);
+      if (!dev) return fail(404, 'no_device', 'There is no such device in this room.');
+      const a = dev.actions.find((x) => x.verb === a5 || x.name === a5);
+      if (!a) return fail(404, 'no_action', 'That device has no such action.');
+      const why = badArgs(a.parameters, args);
+      if (why) return fail(400, 'bad_value', "That value isn't allowed for this action.", { detail: why });
+      if (sess.acting || sess.advancing) return fail(409, 'busy', 'Something is already playing in this room.');
+      return runAction(sess, dev, a, args);
     }
-    if (sub === 'automations' && method === 'POST' && ((rid === 'clear' && !action) || (rid && action === 'remove'))) { // "Clear all", or a card's remove button
-      const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
-      if (recent.length >= 10) { editTimes.set(sid, recent); return fail(429, 'rate', 'Too many changes at once. Wait a moment.'); }
-      recent.push(now); editTimes.set(sid, recent);
-      if (action === 'remove') {
-        if (!sess.automations.some((x) => x.id === rid)) return fail(404, 'no_automation', 'There is no such automation.');
-        sess.automations = sess.automations.filter((x) => x.id !== rid);
-      } else sess.automations = [];
-      emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' }, sess.active); // allowed mid-request: it carries that request's rid
-      return json(202, {});
+    if (sub === 'faults' && method === 'POST' && (!a3 || (a3 === 'clear' && parts.length === 4))) {
+      if (limited(sid)) return fail(429, 'rate', 'Too many changes at once. Wait a moment.');
+      if (a3 === 'clear') {
+        if (sess.acting || sess.advancing) return fail(409, 'busy', 'Something is already playing in this room.');
+        for (const [device, m] of [...sess.faults]) {
+          if (m === 'offline' && sess.state[device]?.status === 'fault') emit(sess, 'state', { path: `${device}.status`, value: 'online', ms: 0, src: 'edit' });
+          const flag = LOOK[`${device}:${m}`]; if (flag && sess.devices === HOME_DEVICES) emit(sess, 'state', { path: flag, value: false, ms: 0, src: 'edit' });
+        }
+        sess.faults.clear(); sess.failed.clear();
+        return json(200, { faults: [] });
+      }
+      if (!isBody(body) || typeof body.device !== 'string') return fail(400, 'bad_request', 'Say which device should fail.');
+      const dev = sess.devices.find((d) => d.id === body.device);
+      if (!dev) return fail(404, 'no_device', 'There is no such device in this room.');
+      const m = body.mode ?? 'offline';
+      if (typeof m !== 'string' || !dev.faultModes.includes(m)) return fail(400, 'bad_request', "That device can't fail that way.");
+      if (sess.acting || sess.advancing) return fail(409, 'busy', 'Something is already playing in this room.');
+      const was = sess.faults.get(dev.id), oldFlag = was && LOOK[`${dev.id}:${was}`], flag = LOOK[`${dev.id}:${m}`];
+      if (oldFlag && oldFlag !== flag && sess.devices === HOME_DEVICES) emit(sess, 'state', { path: oldFlag, value: false, ms: 0, src: 'edit' });
+      sess.faults.set(dev.id, m);
+      if (flag && sess.devices === HOME_DEVICES) emit(sess, 'state', { path: flag, value: true, ms: 0, src: 'edit' });
+      return json(200, { faults: faultList(sess) });
     }
-    if (sub === 'automations' && method === 'POST') { // an automation's switch: the same rate window as set and advance
-      if (!rid || action) return fail(404, 'bad_request', 'No such route.');
-      const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
-      if (recent.length >= 10) { editTimes.set(sid, recent); return fail(429, 'rate', 'Too many changes at once. Wait a moment.'); }
-      recent.push(now); editTimes.set(sid, recent);
-      if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean') return fail(400, 'bad_request', 'Bad request.');
-      const a = sess.automations.find((x) => x.id === rid);
-      if (!a) return fail(404, 'no_automation', 'There is no such automation.');
-      a.enabled = body.enabled;
-      emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' }, sess.active); // allowed mid-request: it carries that request's rid
-      return json(202, {});
+    if (sub === 'reset' && method === 'POST' && !a3) {
+      if (sess.acting || sess.advancing) return fail(409, 'busy', 'Something is already playing in this room.');
+      sess.state = clone(sess.initial); sess.clock = { ...CLOCK }; sess.world = homeWorld(); sess.faults.clear(); sess.failed.clear();
+      return json(200, { state: clone(sess.state), clock: { ...sess.clock }, world: clone(sess.world) });
     }
-    if ((sub === 'set' || sub === 'advance') && method === 'POST') {
-      if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(400, 'bad_request', 'Bad request.');
-      const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
-      if (recent.length >= 10) { editTimes.set(sid, recent); return fail(429, 'rate', 'Too many changes at once. Wait a moment.'); }
-      recent.push(now); editTimes.set(sid, recent);
+    if ((sub === 'set' || sub === 'advance') && method === 'POST' && !a3) {
+      if (limited(sid)) return fail(429, 'rate', 'Too many changes at once. Wait a moment.');
+      if (!isBody(body)) return fail(400, 'bad_request', 'Bad request.');
       if (sub === 'set') {
-        const { path, value } = body, table = sess.editable ?? EDITABLE, rule = typeof path === 'string' && Object.hasOwn(table, path) ? table[path] : null;
+        const { path, value } = body, table = sess.editable, rule = typeof path === 'string' && Object.hasOwn(table, path) ? table[path] : null;
         const good = rule === 'bool' ? typeof value === 'boolean' : !!rule && typeof value === 'number' && Number.isFinite(value) && value >= rule[0] && value <= rule[1];
         if (!good) return fail(400, 'bad_value', "That value isn't allowed for this device.");
         const [dev] = path.split('.');
         if (sess.state[dev].status === 'fault' || sess.state[dev].status === 'busy') return fail(409, 'device_unavailable', "That device can't be changed right now.");
-        const rid = sess.active;
-        emit(sess, 'state', { path, value, ms: 0, src: 'edit' }, rid);
-        if (!sess.editable && path === 'lamp.brightness') emit(sess, 'state', { path: 'lamp.on', value: value > 0, ms: 0, src: 'edit' }, rid); // Home's lamp only
+        emit(sess, 'state', { path, value, ms: 0, src: 'edit' });
+        if (sess.devices === HOME_DEVICES && path === 'lamp.brightness') emit(sess, 'state', { path: 'lamp.on', value: value > 0, ms: 0, src: 'edit' }); // Home's lamp only
         return json(202, {});
       }
       const hours = body.hours;
       if (typeof hours !== 'number' || !Number.isFinite(hours) || hours <= 0 || hours > 168) return fail(400, 'bad_value', "That value isn't allowed.");
-      if (sess.active) return fail(409, 'busy', 'A request is already running.');
+      if (sess.acting || sess.advancing) return fail(409, 'busy', 'Something is already playing in this room.');
       let left = hours;
-      while (left > 0) {
-        const step = Math.min(6, left), day = Math.floor(sess.clock.hour / 24);
-        emit(sess, 'clock', { ...clockAfter(sess.clock, step), src: 'edit' }); left -= step;
-        // a new sim day: the day's counts go back to 0 (an event only when one changes)
-        if (Math.floor(sess.clock.hour / 24) > day && sess.automations.some((a) => a.firedToday > 0)) {
-          sess.automations = sess.automations.map((a) => ({ ...a, firedToday: 0 }));
-          emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' });
-        }
-        // a one-off whose time has come: it runs if it is on, and is done either way (done never runs again)
-        const due = sess.automations.filter((a) => a.kind === 'schedule' && !a.done && onceAt(a.text) != null && sess.clock.hour >= onceAt(a.text));
-        for (const a of due) {
-          a.done = true;
-          if (a.enabled) { a.firedToday++; emit(sess, 'timeline', { at: sess.clock.label, text: a.text.split(' → ').slice(1).join(' → '), ok: true, kind: 'action', origin: 'schedule', device: a.devices[0], automation: a.id, src: 'edit' }); }
-        }
-        if (due.length) emit(sess, 'automations', { items: clone(sess.automations), src: 'edit' });
-      }
+      while (left > 0) { const step = Math.min(6, left); emit(sess, 'clock', { ...clockAfter(sess.clock, step), src: 'edit' }); left -= step; }
       return json(200, { clock: { ...sess.clock } });
-    }
-    if (sub !== 'requests' || method !== 'POST') return fail(404, 'bad_request', 'No such route.');
-    if (!rid) { // new request
-      const text = body?.text;
-      if (typeof text !== 'string') return fail(400, 'bad_request', 'Say what you want done.');
-      if (text.trim().length > 400) return fail(400, 'too_long', 'That request is too long.');
-      if (sess.active) return fail(409, 'busy', 'A request is already running.');
-      const o = offAnswer(); if (o) return o;
-      if (cfg.remaining <= 0) return fail(429, 'code_limit', 'This code has reached its limit for today.');
-      cfg.remaining--;
-      const requestId = `r${++sess.nRid}`; sess.known.add(requestId); const name = SCRIPT_PICK.find(([re]) => re.test(text))[1];
-      sess.run = { rid: requestId, name, text, used: new Set(), steps: [], proposed: null, calls: 0, whatif: false, before: { state: clone(sess.state), clock: { ...sess.clock }, automations: clone(sess.automations) } };
-      sess.active = requestId; sess.curRid = requestId; sess.pending = null;
-      const seg = segmentFor(sess.run, 'request');
-      runEvents(sess, seg ? seg.events : [['planning', {}], ['cannot_do', { reason: 'Nothing to run.', suggestions: [] }], ['done', { outcome: 'cannot_do' }]], requestId);
-      return json(202, { requestId });
-    }
-    if (action === 'whatif') {
-      const last = sess.last;
-      if (sess.active) return fail(409, 'busy', 'A request is already running.');
-      if (!last && !sess.known.has(rid)) return fail(404, 'no_request', 'There is nothing to replay.');
-      if (!last || rid !== last.rid || !last.steps.length) return fail(409, 'not_waiting', 'That request cannot be replayed.');
-      const device = body?.device, extra = scripts[last.name]?.whatif;
-      if (typeof device !== 'string' || !extra) return fail(400, 'bad_request', 'Pick a device that can fail.');
-      const requestId = `r${++sess.nRid}`;
-      sess.run = { rid: requestId, name: last.name, used: new Set(), steps: clone(last.steps), proposed: null, calls: 0, whatif: true, before: last.before };
-      sess.active = requestId; sess.curRid = requestId; sess.pending = null;
-      // room (with that room's automations), then the same list as an `automations` event, then the plan (contract)
-      runEvents(sess, [['room', clone(last.before)], ['automations', { items: clone(last.before.automations ?? []) }], ['plan', { steps: clone(last.steps), horizonHours: null }], ...extra], requestId);
-      return json(202, { requestId });
-    }
-    if (action === 'approve' || action === 'decline') {
-      const run = sess.run;
-      if (!run || run.rid !== rid) return fail(404, 'no_request', 'No such request.');
-      if (!sess.active || !sess.pending) return fail(409, 'not_waiting', 'Nothing is waiting for an answer.');
-      const kind = sess.pending; sess.pending = null;
-      if (action === 'approve' && kind === 'replan' && run.proposed) { run.steps = mergeSteps(run.steps, run.proposed); }
-      run.proposed = null;
-      const seg = segmentFor(run, action, kind)
-        || (action === 'decline' ? { events: [['declined', {}], ['done', { outcome: 'declined' }]] } : { events: [['summary', { text: 'Done.' }], DONE_OK] });
-      runEvents(sess, seg.events, rid);
-      return json(202, {});
     }
     return fail(404, 'bad_request', 'No such route.');
   }
@@ -414,14 +301,14 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     if (signal?.aborted) throw abortError();
     if (cfg.mode === 'down') throw new TypeError('Failed to fetch');
     const u = new URL(url), method = String(init.method || 'GET').toUpperCase(), headers = new Headers(init.headers);
-    const path = u.pathname.replace(/^.*\/live\/api\//, ''), parts = path.split('/').filter(Boolean);
+    const path = u.pathname.replace(/^.*\/live\/api\//, ''), parts = path.split('/').filter(Boolean).map(decodeURIComponent);
     let body = init.body ?? null;
     if (typeof body === 'string') { try { body = JSON.parse(body); } catch { /* keep the raw text */ } }
     calls.push({ method, path, query: Object.fromEntries(u.searchParams), headers: Object.fromEntries(headers), body, signal });
     await Promise.resolve();
     if (signal?.aborted) throw abortError();
     if (cfg.mode === 'html') return new Response('<!doctype html><title>Tunnel</title><p>Visit site</p>', { status: 200, headers: { 'content-type': 'text/html' } });
-    const res = handle(method, parts, u.searchParams, headers, body);
+    const res = await handle(method, parts, u.searchParams, headers, body);
     if (signal && res.body && res.headers.get('content-type') === 'text/event-stream') {
       return new Response(abortable(res.body, signal), { status: res.status, headers: res.headers });
     }
@@ -442,12 +329,15 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
   return {
     fetch: mockFetch,
     calls,
-    push(sid, kind, data = {}) { const s = sessions.get(sid); if (!s) throw new Error(`no session ${sid}`); return emit(s, kind, data, data.rid ?? s.curRid ?? 'r0'); },
-    // An event as a hand edit would stream it: src 'edit' and no rid key.
+    // An event as the server would stream it (any kind, data as given).
+    push(sid, kind, data = {}) { const s = sessions.get(sid); if (!s) throw new Error(`no session ${sid}`); return emit(s, kind, data); },
+    // An event as a hand edit would stream it: src 'edit'.
     edit(sid, kind, data = {}) { const s = sessions.get(sid); if (!s) throw new Error(`no session ${sid}`); return emit(s, kind, { ...data, src: 'edit' }); },
     drop(sid) { const s = sessions.get(sid); if (!s) return; for (const e of s.streams) { try { e.controller.close(); } catch { /* closed */ } } s.streams.clear(); },
     openStreams(sid) { return sessions.get(sid)?.streams.size ?? 0; }, // read-only: how many event streams are open on a session
     expire(sid) { const s = sessions.get(sid); if (!s) return; this.drop(sid); sessions.delete(sid); },
-    set(opts) { for (const k of ['remaining', 'liveEnabled', 'off', 'mode', 'code', 'checkRate', 'sessionCap']) if (k in opts) cfg[k] = opts[k]; },
+    // read-only: a session's room (state, faults) for the checks
+    session(sid) { const s = sessions.get(sid); return s ? { state: clone(s.state), faults: faultList(s), world: clone(s.world) } : null; },
+    set(opts) { for (const k of ['liveEnabled', 'off', 'mode', 'code', 'checkRate', 'sessionCap', 'actionMs']) if (k in opts) cfg[k] = opts[k]; },
   };
 }

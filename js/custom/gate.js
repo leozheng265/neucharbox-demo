@@ -6,15 +6,14 @@ import { LIVE_COPY, normalizeCode, whyOff } from '../engine/live.js';
 import { LiveError } from '../engine/liveapi.js';
 import { CUSTOM_COPY } from './copy.js';
 
-const finite = (n) => typeof n === 'number' && Number.isFinite(n);
 const status = (e) => (e instanceof LiveError ? e.status : 0);
 const kindOf = (e) => (e instanceof LiveError ? e.kind : null);
 
-// api.check reduced to { left } or { err: 'bad'|'rate'|'offline' }.
+// api.check reduced to { ok: true } or { err: 'bad'|'rate'|'offline' }.
 async function checkCode(api, code) {
   try {
     const r = await api.check(code);
-    return finite(r?.remainingToday) ? { left: r.remainingToday } : { err: 'offline' };
+    return r?.ok ? { ok: true } : { err: 'bad' };
   } catch (e) { return { err: status(e) === 401 ? 'bad' : status(e) === 429 && kindOf(e) === 'rate' ? 'rate' : 'offline' }; }
 }
 
@@ -40,7 +39,6 @@ export function passGate({ api, codes, view, onBack, offline = false, base = '' 
       const code = normalizeCode(raw), r = await checkCode(api, code);
       if (finished) return null;
       if (r.err) return r.err === 'bad' ? LIVE_COPY.badCode : r.err === 'rate' ? LIVE_COPY.rate : CUSTOM_COPY.offline;
-      if (r.left <= 0) return LIVE_COPY.noneLeft;
       codes.set(code);
       finish(true);
       return null;
@@ -63,7 +61,6 @@ export function passGate({ api, codes, view, onBack, offline = false, base = '' 
       if (finished) return;
       if (r.err === 'bad') { codes.clear(); return show({ mode: 'code', note: LIVE_COPY.savedCodeGone }); }
       if (r.err) return show({ mode: 'offline' });
-      if (r.left <= 0) return show({ mode: 'code', note: LIVE_COPY.noneLeft });
       finish(true);
     })();
   });

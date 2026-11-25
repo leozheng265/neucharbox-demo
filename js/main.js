@@ -9,7 +9,7 @@ import { SOCIAL, socialLinks } from './engine/social.js';
 import { createLive, LIVE_COPY } from './engine/live.js';
 import { createLiveView } from './engine/livechat.js';
 import { createClockCtl } from './engine/clockctl.js';
-import { createAutomations, foldMedia } from './engine/automations.js';
+import { createLiveTools } from './engine/livetools.js';
 import { createLiveEntry } from './engine/liveentry.js';
 import { liveApiBase } from './live-config.js';
 
@@ -25,7 +25,7 @@ const follow = () => `<nav class="social" aria-label="Follow NeuCharBox"><span c
 // A thumbnail gradient is dark when its first colour is (lab, creator): the index number and icons then go light.
 const darkThumb = (g) => { const m = /#([0-9a-f]{6})/i.exec(g || ''); if (!m) return false; const n = parseInt(m[1], 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 110; };
 
-// "Build your own" needs the live AI: without an API base (js/live-config.js emptied) its card isn't shown and #custom
+// "Build your own" needs the live server: without an API base (js/live-config.js emptied) its card isn't shown and #custom
 // opens the picker.
 const customOn = () => !!liveApiBase();
 
@@ -53,7 +53,7 @@ async function mountScene(meta, gen) {
       <div class="status" id="status"><span class="stext" id="statusText" role="status">Loading the ${esc(meta.title.toLowerCase())}…</span><span class="clockctl" id="clockctl" hidden></span></div>
       <div class="side">
         <div class="panel" id="panel"></div>
-        <div class="autos" id="autos" hidden></div>
+        <div class="ltools" id="ltools" hidden></div>
         <div class="chat" id="chat"></div>
       </div>
     </div>`;
@@ -66,7 +66,7 @@ async function mountScene(meta, gen) {
   const store = createStore(initial);
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots); no watchdog
   const R = createRenderer(document.getElementById('room'), { camera: scene.camera, ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let flow = null, live = null, autos = null;
+  let flow = null, live = null, tools = null;
   try {
   const M = partsMod.materials(); const P = partsMod.parts(R.scene, M);
   const sv = Number(new URLSearchParams(location.search).get('speed')); const speed = Number.isFinite(sv) && sv > 0 ? Math.min(sv, 6) : 1; // ?speed= review mode (≤ 6), also for room-side motion
@@ -101,7 +101,7 @@ async function mountScene(meta, gen) {
     vague: () => "I'm not sure which request that is, and I won't guess. This demo runs a few scripted requests in this room: pick one below, or say it another way.",
   };
   const chat = createChat(document.getElementById('chat'), { onPromptText: (text) => {
-    if (live?.active) { live.submit(text); return; }
+    if (live?.active) return; // live mode's input bar is a disabled placeholder for an NCB terminal: nothing is sent
     if (flow.phase !== 'chips') return;
     const r = interpret(text, scene.prompts);
     // "What if the hall light stops working?": a failure is picked from a request's end card, so say how, with the
@@ -143,7 +143,7 @@ async function mountScene(meta, gen) {
     status: setStatus,
     beats: setBeats,
     // The guided end cards have the live button wherever live mode is offered (an API base). It opens live mode
-    // as the header's Live AI button does (js/engine/liveentry.js: flow.stop() first, so a guided picker of failures left
+    // as the header's Go live button does (js/engine/liveentry.js: flow.stop() first, so a guided picker of failures left
     // open goes too: a pick from it would run a scripted what-if while live is on).
     endExtras: () => (live ? { onLive: () => entry?.open(), liveLabel: LIVE_COPY.button } : {}),
     // Discovery and fault effects: the pulse on a faulted device is red, like its ring, and its fault label goes as soon
@@ -159,22 +159,26 @@ async function mountScene(meta, gen) {
     clearMarkers: () => R.clearMarkers(),
   } });
   const base = liveApiBase();
-  // The clock control beside the status line: shown in live mode, usable between requests (live.advance).
+  // The clock control beside the status line: shown in live mode, usable between actions (live.advance).
   const clockCtl = createClockCtl(document.getElementById('clockctl'), { onAdvance: (h) => live?.advance(h) });
-  // The Automations section under the device cards (live mode only; js/engine/automations.js) and the header's Live AI
-  // button (shown in every scene while live mode is not open). Neither exists without an API base.
-  autos = base ? createAutomations(document.getElementById('autos'), { onToggle: (id, on) => live?.setAutomation(id, on), onRemove: (id) => live?.removeAutomation(id), onClear: () => live?.clearAutomations(), ...foldMedia(),
-    emptyText: scene.devices.soil && scene.devices.pump ? LIVE_COPY.autosEmpty : LIVE_COPY.autosEmptyAny }) : null;
+  // Live mode's device interface (js/engine/livetools.js): action controls on the cards, and under them fault planting,
+  // Reset room and the event log; and the header's Go live button (shown in every scene while live mode is not open).
+  // Neither exists without an API base.
+  tools = base ? createLiveTools(document.getElementById('ltools'), { slotFor: (id) => panel.slot(id), onRun: (id, verb, args) => live?.run(id, verb, args),
+    onPlant: (d, m) => live?.plantFault(d, m), onClearFaults: () => live?.clearFaults(), onReset: () => live?.reset(),
+    folded: typeof matchMedia === 'function' && matchMedia('(max-width: 959px)').matches }) : null;
   const liveTop = document.getElementById('liveTop');
   let entry = null;
   live = base ? createLive({ scene, store, panel, base, view: createLiveView({ chat, scene }), ui: {
     alive: () => gen === mountGen, status: setStatus, beats: setBeats, track: (on) => panel.track(on), rewind: () => panel.rewind(),
     resetRoom: () => { room.reset?.(); R.clearMarkers(); }, baseline: () => flow.baseline,
-    editing: (on) => { clockOn = !!on; app.classList.toggle('live-edit', !!on); panel.editable(on, { onEdit: (p, v) => live.edit(p, v) }); clockCtl.active(on); },
+    editing: (on) => { clockOn = !!on; app.classList.toggle('live-edit', !!on); panel.editable(on, { onEdit: (p, v) => live.edit(p, v) }); clockCtl.active(on); tools?.show(on); if (!on) panel.clearSlots(); },
     clock: (c) => { clockText = c?.label || null; clockCtl.render(c); },
-    automations: (list) => autos?.render(list),
-    automationFlash: (id, kind) => autos?.flash(id, kind),
-    attention: () => autos?.attention(),
+    devices: (list) => tools?.devices(list),
+    controls: (c) => tools?.controls(c),
+    actionResult: (id, verb, r) => tools?.result(id, verb, r),
+    faults: (list) => tools?.faults(list),
+    log: (line) => tools?.log(line),
     availability: () => entry?.sync(),
     offerGuided: (h) => { chat.closeEnds(); chat.closeFailures(); if (flow.baseline) { store.restore(flow.baseline); room.reset?.(); R.clearMarkers(); } flow.offerChips(h); },
   } }) : null;
@@ -189,13 +193,13 @@ async function mountScene(meta, gen) {
   entry.sync();
   beatBtns.forEach((b) => (b.onclick = () => flow.skipTo(b.dataset.beat)));
 
-  current = { scene, teardown() { live?.close(); flow?.cancel(); autos?.dispose(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
+  current = { scene, teardown() { live?.close(); flow?.cancel(); tools?.dispose(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   // QA hooks (visual harness): the host's phase, the quiet-replay flag and the recorded choices.
-  window.__ncb = { live, store, panel, autos, entry, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
+  window.__ncb = { live, store, panel, tools, entry, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
   await flow.start();
   } catch (e) {
     if (gen === mountGen) current = null;
-    live?.close(); flow?.cancel(); autos?.dispose(); R.dispose();
+    live?.close(); flow?.cancel(); tools?.dispose(); R.dispose();
     const top = document.getElementById('liveTop'); if (top) top.hidden = true; // live is closed: the button would do nothing
     throw e;
   }

@@ -1,4 +1,4 @@
-// Live AI demo: the event stream (wire contract: docs/superpowers/specs/2026-11-07-live-api-contract.md).
+// Live demo: the event stream (wire contract: the NeuCharBox Live module's docs/live-api-contract.md).
 // Read with fetch streaming (EventSource can't send the Authorization header). Reconnects with ?after=lastId.
 
 // SSE text → events. Fields: id, event, data (lines joined with \n, parsed as JSON). Comment lines (": ping") are ignored.

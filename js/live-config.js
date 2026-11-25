@@ -1,4 +1,4 @@
-// Live AI demo: where the live API lives. Empty apiBase = live mode isn't offered at all, which is the public page:
+// Live demo: where the live API lives. Empty apiBase = live mode isn't offered at all, which is the public page:
 // it is guided-only. The copy the NCF module serves from its own site (/live/demo/, written by
 // tools/sync-module.mjs) has this line replaced by that site's address, so there every scene offers live mode.
 export const LIVE_CONFIG = { apiBase: '' };

@@ -88,18 +88,19 @@ export function createChat(root, { onPromptText } = {}) {
 
   const PLACEHOLDER = 'Or type what you want…';
   return {
-    enableInput(on) { setInput(on); },
+    // In live mode the bar is the NCB terminal's placeholder and never turns on (live() below).
+    enableInput(on) { setInput(on && !form.classList.contains('live')); },
     // Read-only: the visitor scrolled the log up on purpose (and hasn't come back to its end or added a card since).
     userScrolledUp() { return upByVisitor; },
     // Live mode hooks (js/engine/livechat.js): the log's own helpers, so live cards scroll and escape like the rest.
     mount(node, opts) { return push(node, opts); },
     esc,
-    // The LIVE AI badge (CSS, .chat-input.live::before), the live placeholder and the length cap. It leaves the
-    // input's on/off alone (enableInput does that).
-    live(on, { placeholder, max = 400 } = {}) {
+    // Live mode: the bar is a disabled placeholder where a future NCB terminal goes (its NCB badge: CSS,
+    // .chat-input.live::before). Nothing can be typed or sent while it is on; off, the guided input comes back as it was.
+    live(on, { placeholder, label } = {}) {
       form.classList.toggle('live', !!on);
-      if (on) { input.maxLength = max; input.placeholder = placeholder || PLACEHOLDER; }
-      else { input.removeAttribute('maxlength'); input.placeholder = PLACEHOLDER; }
+      if (on) { setInput(false); input.placeholder = placeholder || PLACEHOLDER; input.setAttribute('aria-label', label || 'Your request'); }
+      else { input.placeholder = PLACEHOLDER; input.setAttribute('aria-label', 'Your request'); }
     },
     typing(on) { if (on) { if (!typingEl) typingEl = push(el('<div class="msg ncb typing" aria-hidden="true"><span></span><span></span><span></span></div>')); } else if (typingEl) { typingEl.remove(); typingEl = null; } },
     ncb(text) { push(el(`<div class="msg ncb">${esc(text)}</div>`)); },

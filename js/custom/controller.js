@@ -23,7 +23,7 @@ export function createCustomController({ storage, makeLive, ui }) {
     if (devices && !was && changed()) ui.notice('changed');
   }
   // Building waits for a request or a clock advance to end; an access card waiting for a code is not one (the room stays as built).
-  const canBuild = () => !(live && live.active && (live.advancing || !['idle', 'off', 'access'].includes(live.phase)));
+  const canBuild = () => !(live && live.active && (live.advancing || live.acting || !['idle', 'off', 'access'].includes(live.phase)));
 
   return {
     get mode() { return mode; },

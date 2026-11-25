@@ -1,13 +1,9 @@
-// Live AI demo: the chat cards (the real LiveView that js/engine/live.js is written against; see the plan's "Shared
-// interfaces"). The plan card turns into a checklist in place: steps with their calls as pills, calls without a step as
-// rows of their own, and a timeline for what happens later. Everything a visitor or the model wrote is inserted as text.
+// Live demo: the chat side of live mode (the LiveView js/engine/live.js is written against): the access card (invite
+// code, application, or offline), short NCB lines, the lost-connection card, and the input bar, which in live mode is a
+// disabled placeholder for a future NCB terminal: nothing typed there goes anywhere. Server text is inserted as text.
 import { LIVE_COPY } from './live.js';
 import { socialLinks } from './social.js';
-import { icon } from './icons.js';
-import { devicesOf } from './whatif.js';
 
-const GLYPH = { running: '●', done: '✓', failed: '✕', skipped: '–', pending: '○' };
-const STATUS_WORD = { running: 'Running', done: 'Done', failed: 'Failed', skipped: 'Skipped', pending: 'Not started' };
 const INTERESTS = [['home', 'Home'], ['lab', 'Lab'], ['warehouse', 'Warehouse'], ['business', 'Business'], ['other', 'Something else']];
 
 const parse = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -15,165 +11,7 @@ const mk = (tag, cls, text) => { const n = document.createElement(tag); if (cls)
 
 export function createLiveView({ chat, scene }) {
   const { esc } = chat;
-  const devices = devicesOf(scene), n = devices.length;
-  let planningEl = null, sayEl = null, picker = null;
-
   const mount = (node, opts) => chat.mount(node, opts);
-
-  // ---- steps: the plan card's list and the checklist's, one structure ----
-  function stepList(ol) {
-    const rows = new Map();
-    const setDevices = (li, s) => { li.dataset.devices = (s.devices || []).join(' '); };
-    const api = {
-      rows,
-      add(s, glyph) {
-        const li = mk('li', 'lstep'); li.dataset.id = s.id; li.dataset.status = 'pending';
-        const g = mk('span', 'glyph', glyph); g.setAttribute('aria-hidden', 'true');
-        const txt = mk('span', 'txt'); txt.innerHTML = esc(s.text);
-        li.append(g, txt, mk('span', 'sr', ''), mk('div', 'calls'));
-        setDevices(li, s); ol.appendChild(li); rows.set(s.id, li); return li;
-      },
-      // A known id gets the new text and devices in place (its status and pills stay); a new id is appended as not started.
-      merge(steps) {
-        for (const s of steps) {
-          const li = rows.get(s.id);
-          if (li) { li.querySelector('.txt').innerHTML = esc(s.text); setDevices(li, s); } else api.add(s, GLYPH.pending);
-        }
-      },
-      status(id, status) {
-        const li = rows.get(id); if (!li || !(status in GLYPH)) return;
-        li.dataset.status = status; li.querySelector('.glyph').textContent = GLYPH[status];
-        li.querySelector('.sr').textContent = ` (${STATUS_WORD[status]})`;
-      },
-      toChecklist() {
-        for (const li of rows.values()) { li.querySelector('.glyph').textContent = GLYPH.pending; li.querySelector('.calls').textContent = ''; }
-      },
-    };
-    return api;
-  }
-
-  // ---- the checklist: steps (+ pills), stepless rows, timeline ----
-  function makeChecklist(node, list) {
-    let loose = null, tl = null;
-    const pills = new Map(); // callId → { el, label }
-    return {
-      mergeSteps: (steps) => list.merge(steps),
-      step: (id, status) => list.status(id, status),
-      call({ callId, step, label }) {
-        if (pills.has(callId)) return;
-        const text = `${label} · …`;
-        const row = step != null ? list.rows.get(step) : null;
-        let p;
-        if (row) { p = mk('span', 'call'); row.querySelector('.calls').appendChild(p); }
-        else { // a read or safe-state call made without a step: its own row, after the steps
-          if (!loose) { loose = mk('ul', 'lloose'); node.insertBefore(loose, tl); }
-          p = mk('li', 'call loose'); loose.appendChild(p);
-        }
-        p.dataset.call = callId; p.dataset.outcome = ''; p.innerHTML = esc(text);
-        pills.set(callId, { el: p, label });
-      },
-      result({ callId, outcome, text, ok }) {
-        const p = pills.get(callId); if (!p) return;
-        p.el.dataset.outcome = outcome ?? ''; p.el.classList.toggle('bad', ok === false);
-        p.el.innerHTML = esc(text ? `${p.label} · ${text}` : p.label);
-      },
-      timeline({ at, text, ok, kind, origin }) {
-        if (!tl) { tl = mk('div', 'ltimeline'); node.appendChild(tl); }
-        const stick = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 8; // follow new rows only from the bottom
-        const row = mk('div', 'trow'); row.dataset.kind = kind ?? ''; row.dataset.ok = String(ok !== false);
-        const when = at ? `${at} · ` : '';
-        const body = origin === 'held' ? `${LIVE_COPY.ruleHeld} · ${text}` : kind === 'notify' ? `📩 ${text}` : kind === 'fault' ? text : `${text}${ok === false ? ' ✕' : ' ✓'}`;
-        row.innerHTML = esc(when + body);
-        tl.appendChild(row);
-        if (stick) tl.scrollTop = tl.scrollHeight;
-      },
-      done() { node.classList.add('done'); },
-    };
-  }
-
-  const title = (replay) => `<span class="ttl">${esc(replay ? LIVE_COPY.replayTitle : LIVE_COPY.checklistTitle)}</span> <span class="live-badge">${esc(LIVE_COPY.badge)}</span>`;
-
-  // The plan (or re-plan) card, waiting for Approve / Not this. toChecklist() turns the same card into the checklist.
-  function planCard(spec, { onApprove, onDecline }) {
-    const replan = spec.kind === 'replan';
-    const node = parse(`<div class="card live-plan${replan ? ' replan' : ''}"><p class="intro"><span class="itxt">${esc(replan ? LIVE_COPY.replanIntro(spec.reason) : LIVE_COPY.planIntro)}</span> <span class="live-badge">${esc(LIVE_COPY.badge)}</span></p><ol class="lsteps"></ol><div class="row"><button class="btn approve" type="button" disabled>Approve</button><button class="btn decline" type="button" disabled>Not this</button></div></div>`);
-    const list = stepList(node.querySelector('ol'));
-    (spec.steps || []).forEach((s, i) => list.add(s, `${i + 1}.`));
-    const approve = node.querySelector('.approve'), decline = node.querySelector('.decline');
-    let shut = false;
-    const keepFocus = () => { if (node.contains(document.activeElement)) node.closest('.chat-log')?.focus({ preventScroll: true }); };
-    const both = (off) => { if (off) keepFocus(); approve.disabled = off; decline.disabled = off; };
-    approve.onclick = () => { if (!approve.disabled) onApprove(); };
-    decline.onclick = () => { if (!decline.disabled) onDecline(); };
-    mount(node);
-    return {
-      // Approve / Not this go live: scroll the log just far enough that they are in view (the input bar coming back
-      // shrinks the log; a plan taller than the log would otherwise leave them a few pixels below its edge).
-      enable() {
-        if (shut) return;
-        both(false);
-        const follow = !chat.userScrolledUp?.(); // a visitor who scrolled up (reading an error) is left where they are
-        const reveal = () => {
-          const lg = node.closest('.chat-log'); if (!lg || shut || !follow) return;
-          const over = approve.getBoundingClientRect().bottom - lg.getBoundingClientRect().bottom + 8;
-          if (over > 0) lg.scrollTop += over;
-        };
-        reveal(); requestAnimationFrame(reveal);
-      },
-      busy() { both(true); },
-      declined() { shut = true; both(true); node.classList.add('declined'); decline.classList.add('chosen'); },
-      close() { shut = true; both(true); node.classList.add('done'); },
-      toChecklist({ replay = false } = {}) {
-        shut = true; keepFocus(); node.classList.add('running');
-        node.querySelector('.intro').innerHTML = title(replay);
-        node.querySelector('.row').remove();
-        list.toChecklist();
-        return makeChecklist(node, list);
-      },
-    };
-  }
-
-  function checklist(steps, { replay = false } = {}) {
-    sayEl = null;
-    const node = parse(`<div class="card live-plan running"><p class="intro">${title(replay)}</p><ol class="lsteps"></ol></div>`);
-    const list = stepList(node.querySelector('ol'));
-    for (const s of steps || []) list.add(s, GLYPH.pending);
-    mount(node);
-    return makeChecklist(node, list);
-  }
-
-  // ---- the end card ----
-  function endCard({ remainingToday, whatIfLabel, whatIf }, { onAnother, onWhatIf, onReset }) {
-    sayEl = null;
-    const node = parse(`<div class="card end live slim">${remainingToday != null ? `<p class="left">${esc(LIVE_COPY.left(remainingToday))}</p>` : ''}<div class="row">${whatIf ? `<button class="btn whatif" type="button">${icon('whatif')}<span>${esc(whatIfLabel)}</span></button>` : ''}<button class="btn reset" type="button">${esc(LIVE_COPY.reset)}</button></div></div>`);
-    const buttons = [...node.querySelectorAll('button')];
-    const log = () => node.closest('.chat-log');
-    const press = (b, act, e) => {
-      const had = document.activeElement === b, keyboard = had && e && (e.detail === 0 || b.matches(':focus-visible'));
-      buttons.forEach((x) => (x.disabled = true));
-      if (had) log()?.focus({ preventScroll: true });
-      act();
-      return keyboard;
-    };
-    // No "another request" button: a finished request ends nothing, the input is already open (js/engine/live.js done()).
-    node.querySelector('.reset').onclick = (e) => { press(e.currentTarget, onReset, e); };
-    const w = node.querySelector('.whatif');
-    if (w) w.onclick = (e) => {
-      const keyboard = press(w, onWhatIf, e);
-      const first = keyboard && picker && !picker.classList.contains('done') ? picker.querySelector('.pick') : null;
-      if (first) first.focus({ preventScroll: true });
-    };
-    mount(node);
-    // The next end card, a lost code or a fresh room ends what this card's buttons act on: none is left to press, and
-    // nothing in the what-if picker it opened.
-    return {
-      close() {
-        if (node.contains(document.activeElement)) log()?.focus({ preventScroll: true });
-        buttons.forEach((x) => (x.disabled = true));
-        chat.closeFailures();
-      },
-    };
-  }
 
   // ---- access: invite code, application, or offline ----
   function access({ mode, note, backLabel, offlineText }, { onCode, onApply, onBack }) {
@@ -243,50 +81,16 @@ export function createLiveView({ chat, scene }) {
   }
 
   return {
-    user: (text) => { sayEl = null; chat.user(text); },
     ncb: (text) => chat.ncb(text),
-    // A rule or schedule that fired (or was held back) outside a request: one status line in the chat.
-    ruleLine({ at, text, kind, origin }) {
-      const head = origin === 'held' ? LIVE_COPY.ruleHeld : kind === 'notify' ? '📩' : origin === 'schedule' ? LIVE_COPY.scheduled : LIVE_COPY.ruleFired;
-      const node = parse(`<div class="msg ncb rule">${esc(`${head} · ${at} · ${text}`)}</div>`);
-      sayEl = null; mount(node);
-    },
-    chips(texts, onPick, heading) {
-      if (!texts.length) return;
-      chat.chips(texts.map((chip) => ({ chip })), (p) => onPick(p.chip), { heading });
-    },
-    closeChips: () => chat.closeChips(),
-    planning(on) {
-      if (on) {
-        sayEl = null;
-        if (planningEl?.isConnected) return;
-        planningEl = parse(`<div class="msg ncb planning"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="ptxt">${esc(LIVE_COPY.planning)}</span> <span class="live-badge">${esc(LIVE_COPY.badge)}</span></div>`);
-        mount(planningEl);
-      } else if (planningEl) { planningEl.remove(); planningEl = null; }
-    },
-    reading(ref) { const t = planningEl?.querySelector('.ptxt'); if (t) t.innerHTML = esc(LIVE_COPY.reading(ref)); },
-    planCard,
-    checklist,
-    // The model's words for this request: deltas build one bubble, the summary replaces its text.
-    sayDelta(delta) {
-      if (!sayEl?.isConnected) { sayEl = parse('<div class="msg ncb live-say"></div>'); mount(sayEl); }
-      sayEl.appendChild(document.createTextNode(delta));
-    },
-    summary(text) {
-      if (!sayEl?.isConnected) { sayEl = parse('<div class="msg ncb live-say"></div>'); mount(sayEl); }
-      sayEl.textContent = text;
-    },
-    endCard,
-    failures(list, onPick) {
-      picker = chat.failures({ heading: LIVE_COPY.whatIfHeading, devices: list }, onPick);
-      return picker;
-    },
     access,
     lost(onReconnect) {
       chat.ncb(LIVE_COPY.lost);
       chat.button(LIVE_COPY.reconnect).then(() => onReconnect());
     },
-    input: (on) => chat.enableInput(on),
-    live: (on) => chat.live(on, { placeholder: LIVE_COPY.placeholder(n) }),
+    // Live mode on: the input bar becomes the NCB terminal's placeholder, disabled (chat.js keeps it off while live).
+    live(on) {
+      chat.live(on, { placeholder: LIVE_COPY.terminal, label: LIVE_COPY.terminalLabel });
+      chat.enableInput(false);
+    },
   };
 }

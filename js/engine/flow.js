@@ -190,7 +190,7 @@ export function createFlow({ scene, store, chat, ui = {}, speed = 1, player: pla
     ended();
   }
 
-  // Live mode takes the conversation (the scene header's Live AI button, or an end card's live button): what runs stops
+  // Live mode takes the conversation (the scene header's Go live button, or an end card's live button): what runs stops
   // where it is (setup first plays to its end at once: live mode starts from the room right after setup), nothing guided
   // stays offered or pressable, and the room goes back to right after setup. Resolves once nothing runs any more.
   async function stop() {

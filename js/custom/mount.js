@@ -4,20 +4,20 @@
 //   mountCustom({ app, gen, isCurrent, setCurrent }) → Promise<void>
 //     isCurrent() is false once the visitor has routed elsewhere; setCurrent({ teardown }) hands main.js the teardown.
 // Markup: the header (logo, name, Build | Run, Done building →, Scenes, social links) and .stage.custom[data-mode] with
-// .room (canvas, hint, #selbar, #notice, #changedNote, #emptyNote) and .side (#inventory, #panel, #autos, #chat). The mode decides what shows:
-//   gate  the chat (the access card)        build  the inventory        run  the device cards, the automations and the chat
-// No header "Live AI" button here (the scripted scenes have one, js/engine/liveentry.js): this page's own gate and
+// .room (canvas, hint, #selbar, #notice, #changedNote, #emptyNote) and .side (#inventory, #panel, #ltools, #chat). The mode decides what shows:
+//   gate  the chat (the access card)        build  the inventory        run  the device cards, the live tools and the chat
+// No header "Go live" button here (the scripted scenes have one, js/engine/liveentry.js): this page's own gate and
 // "Done building →" are its way into live mode.
 // Every live session (controller.done with a new device list) gets a fresh store state (initialFor), a fresh panel and
 // a cleared chat: a new room is a new conversation. The window.__ncb hooks are for QA in the browser.
 import { createStore } from '../engine/store.js';
 import { createChat } from '../engine/chat.js';
 import { createPanel } from '../engine/panel.js';
-import { createLive, codeStore, LIVE_COPY } from '../engine/live.js';
+import { createLive, codeStore } from '../engine/live.js';
 import { createLiveView } from '../engine/livechat.js';
 import { createLiveApi } from '../engine/liveapi.js';
 import { createClockCtl } from '../engine/clockctl.js';
-import { createAutomations, foldMedia } from '../engine/automations.js';
+import { createLiveTools } from '../engine/livetools.js';
 import { socialLinks } from '../engine/social.js';
 import { liveApiBase } from '../live-config.js';
 import { CUSTOM_COPY as C } from './copy.js';
@@ -51,7 +51,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       <div class="side">
         <div class="inventory" id="inventory" hidden></div>
         <div class="panel" id="panel" hidden></div>
-        <div class="autos" id="autos" hidden></div>
+        <div class="ltools" id="ltools" hidden></div>
         <div class="chat" id="chat"></div>
       </div>
     </div>`;
@@ -66,7 +66,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   const storage = safeStorage(), codes = codeStore(), base = liveApiBase();
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots)
   const R = createRenderer($('room'), { camera: cameraFor(innerWidth, innerHeight), ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0, gate = null, autos = null;
+  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0, gate = null, tools = null;
   const thumbsDone = new Set();
   const baselineRef = { current: null };
   let noticeTimer = 0, doneBusy = false, shownCanBuild = null, torn = false;
@@ -76,7 +76,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     clearTimeout(noticeTimer); clearTimeout(thumbTimer);
     thumbs?.dispose();
     controller?.teardown(); placement?.dispose(); inventory?.dispose();
-    wiring?.dispose(); autos?.dispose();
+    wiring?.dispose(); tools?.dispose();
     R.dispose();
     app.classList.remove('live-edit');
     if (window.__ncb === hooks) window.__ncb = null;
@@ -85,7 +85,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   try {
     const M = partsMod.materials(), P = partsMod.parts(R.scene, M);
     const room3d = createRoom3d({ R, P, M, THREE: R.THREE });
-    const chat = createChat(chatEl, { onPromptText: (text) => controller?.live?.submit(text) });
+    const chat = createChat(chatEl, { onPromptText: () => {} }); // live mode's input bar is a disabled placeholder: nothing is sent
     const chatLog = chatEl.querySelector('.chat-log');
 
     const say = (text) => {
@@ -146,7 +146,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     // A live session for this room (controller.done with a new device list).
     function makeLive(sc, devices) {
       liveUi.editing(false); // the old room's edit mode, clock control and live-edit go now, not when the new session answers
-      liveUi.automations(null); // and its automations: the new session sends its own (none yet)
+      liveUi.devices(null); liveUi.faults(null); liveUi.log(null); // and its device tools: the new session sends its own
       scene = sc;
       wiring.begin(sc); // the old panel's subscriptions go before the store changes (liveui.js)
       chatLog.replaceChildren(); chat.enableInput(false); chat.live(false);
@@ -171,14 +171,18 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       replaceEl: () => { const fresh = panelEl.cloneNode(false); panelEl.replaceWith(fresh); panelEl = fresh; },
       makePanel: (sc, scoped) => createPanel(panelEl, sc, scoped, { onSelect: ping }),
     });
-    // The clock control beside the status line: shown while a live session's cards are editable, usable between requests.
+    // The clock control beside the status line: shown while a live session's cards are editable, usable between actions.
     const clockCtl = createClockCtl($('clockctl'), { onAdvance: (h) => controller?.live?.advance(h) });
-    // The Automations section under the device cards (run mode only, css/custom.css); its switches go to the current live.
-    autos = createAutomations($('autos'), { onToggle: (id, on) => controller?.live?.setAutomation(id, on), onRemove: (id) => controller?.live?.removeAutomation(id), onClear: () => controller?.live?.clearAutomations(), ...foldMedia(), emptyText: LIVE_COPY.autosEmptyAny });
+    // Live mode's device interface (run mode only, css/custom.css): action controls on the current panel's cards, fault
+    // planting, Reset room and the event log; everything goes to the current live.
+    const cur = () => controller?.live;
+    tools = createLiveTools($('ltools'), { slotFor: (id) => wiring.panel?.slot(id) ?? null, onRun: (id, verb, args) => cur()?.run(id, verb, args),
+      onPlant: (d, m) => cur()?.plantFault(d, m), onClearFaults: () => cur()?.clearFaults(), onReset: () => cur()?.reset(),
+      folded: typeof matchMedia === 'function' && matchMedia('(max-width: 959px)').matches });
     liveUi = liveUiFor({
       statusEl, statusTextEl, getPanel: () => wiring.panel, room3d, R, baselineRef, chat, alive: () => isCurrent() && !torn,
       onBackToBuilding: () => controller.toBuild(),
-      clockCtl, editRoot: app, getLive: () => controller?.live, autos,
+      clockCtl, editRoot: app, getLive: () => controller?.live, tools,
     });
     room3d.sync(controller.layout);
     R.onFrame((t) => {
@@ -200,7 +204,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     // Tapping or dragging in the room folds the phone sheet back down, so the room shows.
     $('room').addEventListener('pointerdown', () => inventory.open(false), { passive: true });
 
-    hooks = { scene: 'custom', controller, store, R, room3d, placement, inventory, autos, get live() { return controller.live; } };
+    hooks = { scene: 'custom', controller, store, R, room3d, placement, inventory, tools, get live() { return controller.live; } };
     window.__ncb = hooks;
     showMode(controller.mode);
 

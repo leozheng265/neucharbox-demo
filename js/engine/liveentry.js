@@ -1,4 +1,4 @@
-// The way into live mode from a scripted scene (spec 2026-11-08 §4), without the DOM: the scene header's "Live AI" button
+// The way into live mode from a scripted scene (spec 2026-11-08 §4), without the DOM: the scene header's "Go live" button
 // and the guided end cards' live button share it, so both do the same thing.
 //   createLiveEntry({ live, flow, show, alive }) → { sync(), open() }
 //     live   the scene's createLive, or null with no API base (js/live-config.js): then the button never shows.

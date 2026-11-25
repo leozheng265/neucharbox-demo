@@ -1,12 +1,13 @@
-// Live AI demo: the API client (wire contract: docs/superpowers/specs/2026-11-07-live-api-contract.md; the automations
-// route: 2026-11-08-automations-design.md §3).
+// Live demo: the API client (wire contract: the NeuCharBox Live module's docs/live-api-contract.md, interface-only
+// version of 2026-11-24: no model, no requests; device actions, fault planting, hand edits and the clock).
 // Every request sends ngrok-skip-browser-warning; protected routes send the invite code as a Bearer token.
 // The code is never put in a URL and never logged.
 
 export class LiveError extends Error {
-  constructor(status, kind, message) {
-    super(message || 'Live AI hit a problem. Please try again.');
+  constructor(status, kind, message, detail) {
+    super(message || 'The live server hit a problem. Please try again.');
     this.name = 'LiveError'; this.status = status; this.kind = kind;
+    if (detail !== undefined) this.detail = detail; // bad_value: the arg validator's sentence
   }
 }
 
@@ -30,7 +31,10 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
         if (!isJson(res)) throw new LiveError(res.status, 'bad_response');
         let data;
         try { data = await res.json(); } catch { throw new LiveError(res.status, 'bad_response'); }
-        if (!res.ok) throw new LiveError(res.status, typeof data?.error === 'string' ? data.error : 'bad_response', typeof data?.message === 'string' ? data.message : undefined);
+        if (!res.ok) {
+          throw new LiveError(res.status, typeof data?.error === 'string' ? data.error : 'bad_response', typeof data?.message === 'string' ? data.message : undefined,
+            typeof data?.detail === 'string' ? data.detail : undefined);
+        }
         return data;
       })();
       run.catch(() => {}); // a late failure after a timeout is not unhandled
@@ -41,7 +45,7 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
     } finally { clearTimeout(timer); }
   }
   const enc = encodeURIComponent;
-  const req = (sid, rid, action, body = {}) => call('POST', `sessions/${enc(sid)}/requests/${enc(rid)}/${action}`, { body }).then(() => {});
+  const sess = (sid, rest) => `sessions/${enc(sid)}/${rest}`;
 
   return {
     async health() {
@@ -52,19 +56,18 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
         return { ok: true, liveEnabled: d.liveEnabled === true, scenes: Array.isArray(d.scenes) ? d.scenes : [] };
       } catch { return off; }
     },
-    check: (code) => call('POST', 'access/check', { body: { code }, auth: false }).then((d) => ({ remainingToday: d.remainingToday })),
+    // The code works when the server answers 200 (its remainingToday no longer means anything and is not passed on).
+    check: (code) => call('POST', 'access/check', { body: { code }, auth: false }).then((d) => ({ ok: d?.ok !== false })),
     apply: (form) => call('POST', 'apply', { body: form, auth: false }).then(() => {}),
     createSession: (scene, extra = {}) => call('POST', 'sessions', { body: { scene, ...extra } }),
-    request: (sid, text) => call('POST', `sessions/${enc(sid)}/requests`, { body: { text } }),
-    approve: (sid, rid) => req(sid, rid, 'approve'),
-    decline: (sid, rid) => req(sid, rid, 'decline'),
-    whatIf: (sid, rid, device) => call('POST', `sessions/${enc(sid)}/requests/${enc(rid)}/whatif`, { body: { device } }),
-    set: (sid, path, value) => call('POST', `sessions/${enc(sid)}/set`, { body: { path, value } }),
-    advance: (sid, hours) => call('POST', `sessions/${enc(sid)}/advance`, { body: { hours }, ms: 40000 }),
-    automation: (sid, id, enabled) => call('POST', `sessions/${enc(sid)}/automations/${enc(id)}`, { body: { enabled } }),
-    removeAutomation: (sid, id) => call('POST', `sessions/${enc(sid)}/automations/${enc(id)}/remove`, { body: {} }).then(() => {}),
-    clearAutomations: (sid) => call('POST', `sessions/${enc(sid)}/automations/clear`, { body: {} }).then(() => {}),
-    reset: (sid) => call('POST', `sessions/${enc(sid)}/reset`, { body: {} }),
+    devices: (sid) => call('GET', sess(sid, 'devices')),
+    // An action answers once its frames have played (paced like the device), so it gets the advance's long timeout.
+    action: (sid, id, verb, args = {}) => call('POST', sess(sid, `devices/${enc(id)}/actions/${enc(verb)}`), { body: args ?? {}, ms: 40000 }),
+    plantFault: (sid, device, mode) => call('POST', sess(sid, 'faults'), { body: mode ? { device, mode } : { device } }),
+    clearFaults: (sid) => call('POST', sess(sid, 'faults/clear')),
+    set: (sid, path, value) => call('POST', sess(sid, 'set'), { body: { path, value } }),
+    advance: (sid, hours) => call('POST', sess(sid, 'advance'), { body: { hours }, ms: 40000 }),
+    reset: (sid) => call('POST', sess(sid, 'reset'), { body: {} }),
     eventsUrl: (sid, after) => `${root}sessions/${enc(sid)}/events${after ? `?after=${Number(after)}` : ''}`,
     headers: () => ({ Authorization: `Bearer ${getCode() ?? ''}`, 'ngrok-skip-browser-warning': '1', Accept: 'text/event-stream' }),
   };

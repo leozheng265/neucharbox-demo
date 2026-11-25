@@ -1,10 +1,10 @@
 // The custom scene's visitor-facing text. Plain strings and small functions; every line passes the copy guardrails.
 export const CUSTOM_COPY = {
   cardTitle: 'Build your own',
-  cardPromise: 'Pick your devices, place them, then ask the live AI.',
-  cardTag: 'live AI',
+  cardPromise: 'Pick your devices, place them, then run them live.',
+  cardTag: 'live',
   back: 'Back to scenes',
-  offline: 'Build your own needs the live AI, which is offline right now. Try one of the other scenes, or follow NeuCharBox for updates.',
+  offline: 'Build your own needs the live server, which is offline right now. Try one of the other scenes, or follow NeuCharBox for updates.',
   build: 'Build',
   run: 'Run',
   done: 'Done building →',
@@ -12,8 +12,8 @@ export const CUSTOM_COPY = {
   emptyBelow: 'Your room is empty. Pick devices below to add them.', // phones: the devices are in a sheet under the room
   full: "That's 20 devices, the most one room can hold. Remove one to add another.",
   count: (n) => `${n} / 20 devices`,
-  changed: 'Adding or removing devices starts a new conversation.',
-  buildBusy: 'Finish this request first, then go back to building.',
+  changed: 'Adding or removing devices starts a fresh live room.',
+  buildBusy: 'Wait for the room to finish this action, then go back to building.',
   clear: 'Clear room',
   clearConfirm: (n) => `Clear all ${n} devices?`,
   search: 'Search devices…',

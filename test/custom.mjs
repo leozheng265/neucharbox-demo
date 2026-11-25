@@ -555,12 +555,8 @@ export async function customChecks({ report, guardHits }) {
   function liveParts(log) {
     const rec = (source) => (method, ...args) => { log.push([source, method, ...args]); };
     const h = { lastAccess: null, accessCount: 0 };
-    const nop = () => ({ mergeSteps() {}, step() {}, call() {}, result() {}, timeline() {}, done() {} });
     const view = {
-      ...Object.fromEntries(['user', 'ncb', 'chips', 'planning', 'reading', 'sayDelta', 'summary', 'failures', 'lost', 'input', 'live', 'closeChips'].map((m) => [m, rec('view').bind(null, m)])),
-      endCard() { return { close() {} }; },
-      planCard() { return { enable() {}, busy() {}, declined() {}, close() {}, toChecklist: nop }; },
-      checklist: nop,
+      ...Object.fromEntries(['ncb', 'lost', 'live'].map((m) => [m, rec('view').bind(null, m)])),
       access(spec, { onCode, onApply, onBack }) {
         log.push(['view', 'access', spec]); h.accessCount++;
         const a = { spec, code: (t) => onCode(t), apply: (x) => onApply(x), back: () => onBack(), close: () => log.push(['access', 'close']) };
@@ -568,7 +564,7 @@ export async function customChecks({ report, guardHits }) {
       },
     };
     const panel = { mark() {}, reveal() {} };
-    const uiStub = { alive: () => true, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
+    const uiStub = { alive: () => true, ...Object.fromEntries(['status', 'beats', 'resetRoom', 'offerGuided', 'track', 'rewind', 'devices', 'controls', 'actionResult', 'faults', 'log'].map((m) => [m, rec('ui').bind(null, m)])), baseline: () => null };
     return { h, view, panel, ui: uiStub };
   }
 
@@ -627,15 +623,12 @@ export async function customChecks({ report, guardHits }) {
       const r2 = gate.passGate({ api: mkApi(down, codes), codes, view: q.view, onBack() {}, base: 'http://localhost:5080' });
       await waitFor(() => q.h.lastAccess, 'the card'); eq(q.h.lastAccess.spec.offlineText, lv.LIVE_COPY.backendDown('http://localhost:5080'), 'no backend: not found at its address'); q.h.lastAccess.back(); await r2;
     }
-    { // a saved code that no longer works is cleared, with the note; a code with none left says so
+    { // a saved code that no longer works is cleared, with the note (the check's remainingToday no longer gates anything)
       const mock = mk.createMockLive({ scenes: ['custom'], code: 'OTHER' }), codes = lv.codeStore(mem()), p = liveParts([]); codes.set(mk.MOCK_CODE);
       const r = gate.passGate({ api: mkApi(mock, codes), codes, view: p.view, onBack() {} });
       await waitFor(() => p.h.lastAccess, 'the card');
       eq([p.h.lastAccess.spec.mode, p.h.lastAccess.spec.note, codes.get()], ['code', lv.LIVE_COPY.savedCodeGone, null], 'gone code');
       eq(await p.h.lastAccess.code('OTHER'), null); eq(await r, true, 'then a new code passes');
-      const m2 = mk.createMockLive({ scenes: ['custom'], remaining: 0 }), c2 = lv.codeStore(mem()), q = liveParts([]); c2.set(mk.MOCK_CODE);
-      const r2 = gate.passGate({ api: mkApi(m2, c2), codes: c2, view: q.view, onBack() {} });
-      await waitFor(() => q.h.lastAccess, 'the card'); eq(q.h.lastAccess.spec.note, lv.LIVE_COPY.noneLeft, 'none left'); q.h.lastAccess.back(); await r2;
     }
   }));
 
@@ -692,13 +685,16 @@ export async function customChecks({ report, guardHits }) {
     t.c.teardown();
   }));
 
-  await check('controller · Build is refused while a request runs', live2(ctl, cpy)(async ({ eq }) => {
-    const t = rig(); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
-    const sub = t.c.live.submit('pizza'); // a request the mock answers with cannot_do, then done
-    eq(t.c.canBuild, false, 'cannot build mid-request');
+  await check('controller · Build is refused while an action plays', live2(ctl, cpy)(async ({ eq }) => {
+    const t = rig({ mock: mk.createMockLive({ scenes: ['home', 'custom'], actionMs: 1000 }) }); t.c.gated(); t.c.add('floor_lamp'); await t.c.done();
+    eq(t.log.filter((e) => e[0] === 'ui' && e[1] === 'devices').at(-1)?.[2]?.map((d) => [d.id, d.actions.map((a) => [a.verb, a.name])]), [['floor_lamp', [['set', 'set_floor_lamp']]]], 'the room\'s catalog actions');
+    const run = t.c.live.run('floor_lamp', 'set', { brightness: 40 });
+    eq(t.c.canBuild, false, 'cannot build while it plays');
     eq([t.c.toBuild(), t.c.mode, t.notices.at(-1)], [false, 'run', 'buildBusy'], 'refused with the notice');
-    await sub; await waitFor(() => t.c.live.phase === 'idle', 'the request to end');
-    eq([t.c.canBuild, t.c.toBuild(), t.c.mode], [true, true, 'build'], 'allowed once idle');
+    await run;
+    eq(postsTo(t.mock, /\/actions\//).map((c) => [c.path.replace(/^sessions\/[^/]+\//, ''), c.body]), [['devices/floor_lamp/actions/set', { brightness: 40 }]], 'the catalog verb, with its args');
+    eq(t.mock.session(t.c.live.sessionId).state.floor_lamp.brightness, 0.4, 'the mock ran the catalog effect (arg × scale)');
+    eq([t.c.canBuild, t.c.toBuild(), t.c.mode], [true, true, 'build'], 'allowed once it answered');
     t.c.teardown();
   }));
 
@@ -854,12 +850,20 @@ export async function customChecks({ report, guardHits }) {
     const c = { label: 'Fri 16:30', enabled: true, reason: null };
     ui.clock(c); eq(calls.splice(0), [['clock render', c]], 'the clock control renders the controller\'s clock');
     ui.status('Fri 16:30'); eq(text.textContent, '', 'a status line that is only the clock\'s label is dropped while the clock shows');
-    ui.status('Live AI · 2 devices · waiting for your request', true); eq([text.textContent, calls.splice(0)], ['Live AI · 2 devices · waiting for your request', [['bad', true]]], 'other status text shows, in the text span');
+    ui.status('Live · 2 devices', true); eq([text.textContent, calls.splice(0)], ['Live · 2 devices', [['bad', true]]], 'other status text shows, in the text span');
     eq(statusEl.textContent, '', 'the row keeps its children (the clock control)');
     ui.editing(false);
     eq(calls.splice(0), [['editable', false], ['clock active', false]], 'editing off: display-only cards, no clock control');
     ok(!classes.has('live-edit'), 'live-edit off');
     ui.status('Fri 16:30'); eq(text.textContent, 'Fri 16:30', 'with the clock control hidden, the label shows again');
+    // the live tools: shown with editing; devices, controls, results, faults and log lines go to them; off, the card slots go
+    const tcalls = [], tools = Object.fromEntries(['show', 'devices', 'controls', 'result', 'faults', 'log'].map((m) => [m, (...a) => tcalls.push([m, ...a])]));
+    const slotsGone = []; const panel2 = { ...panel, clearSlots: () => slotsGone.push(true) };
+    const ui2 = lu.liveUiFor({ statusEl, statusTextEl: text, getPanel: () => panel2, room3d: { reset() {} }, R: { clearMarkers() {} }, baselineRef: { current: null },
+      onBackToBuilding: () => true, chat: { mount() {} }, alive: () => true, doc: fakeDoc(), tools });
+    ui2.editing(true); ui2.devices([1]); ui2.controls({ enabled: true }); ui2.actionResult('a', 'b', { ok: true }); ui2.faults([]); ui2.log({ text: 'x' }); ui2.editing(false);
+    eq(tcalls, [['show', true], ['devices', [1]], ['controls', { enabled: true }], ['result', 'a', 'b', { ok: true }], ['faults', []], ['log', { text: 'x' }], ['show', false]], 'the tools hooks');
+    eq(slotsGone, [true], 'editing off clears the card slots');
   }));
 
   await check('run · a custom room\'s hand edits post set on catalog paths, and the mock checks them against the catalog', live2(ctl)(async ({ eq, ok }) => {
@@ -929,12 +933,13 @@ export async function customChecks({ report, guardHits }) {
     const body = await api.reset(r.sessionId); eq(Object.keys(body.state).sort(), ['env', 'floor_lamp'], 'the room, not Home'); eq(body.state.floor_lamp, { brightness: 0, status: 'online' });
   }));
 
-  await check('live copy · a one-device room reads singular; Home reads as before', live2()(({ eq }) => {
+  await check('live copy · a one-device room reads singular; Home reads plural', live2()(({ eq }) => {
     const L = lv.LIVE_COPY;
-    eq(L.intro(1), 'Live AI is on. Type what you want this device to do. A real model plans it, and nothing runs until you approve.', 'intro 1');
-    eq(L.placeholder(1), 'Type your own request for this device…', 'placeholder 1'); eq(L.statusWaiting(1), 'Live AI · 1 device · waiting for your request', 'status 1');
-    eq(L.intro(6), 'Live AI is on. Type what you want these 6 devices to do. A real model plans it, and nothing runs until you approve.', 'intro 6');
-    eq([L.placeholder(6), L.statusWaiting(6)], ['Type your own request for these 6 devices…', 'Live AI · 6 devices · waiting for your request'], 'home unchanged');
-    eq([guardHits(L.intro(1)), guardHits(L.placeholder(1)), guardHits(L.statusWaiting(1))], [[], [], []], 'guards');
+    eq(L.intro(1), "Live mode is on: this device runs on the live server. Each card has its device's own actions. Change values by hand, move the clock, or plant a fault, and watch the event log.", 'intro 1');
+    eq(L.statusIdle(1), 'Live · 1 device', 'status 1');
+    eq(L.intro(6), "Live mode is on: these 6 devices run on the live server. Each card has its device's own actions. Change values by hand, move the clock, or plant a fault, and watch the event log.", 'intro 6');
+    eq(L.statusIdle(6), 'Live · 6 devices', 'status 6');
+    eq([guardHits(L.intro(1)), guardHits(L.statusIdle(1)), guardHits(cpy.CUSTOM_COPY.cardPromise), guardHits(cpy.CUSTOM_COPY.offline)], [[], [], [], []], 'guards');
+    eq([cpy.CUSTOM_COPY.cardPromise, cpy.CUSTOM_COPY.cardTag], ['Pick your devices, place them, then run them live.', 'live'], 'the picker card no longer promises an AI');
   }));
 }

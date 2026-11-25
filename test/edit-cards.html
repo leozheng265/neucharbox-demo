@@ -25,7 +25,6 @@
 import { createStore } from '../js/engine/store.js';
 import { createPanel } from '../js/engine/panel.js';
 import { createClockCtl } from '../js/engine/clockctl.js';
-import { createLiveView } from '../js/engine/livechat.js';
 import home from '../js/scenes/home.js';
 
 const problems = [];
@@ -184,18 +183,6 @@ try {
   ok(!$('.clk-set').disabled && $('.clk-why').hidden && $('.clk-set').offsetWidth > 0, 'enabled again: buttons back, reason gone');
   clk.active(false); ok($('#clockctl').hidden, 'hidden when live ends');
   ok(document.documentElement.scrollWidth <= innerWidth, `no horizontal page scroll (${document.documentElement.scrollWidth} > ${innerWidth})`);
-  // a held-back fire in a checklist: "Rule held back", no envelope
-  const host = document.createElement('div'); document.body.appendChild(host);
-  const view = createLiveView({ chat: { esc: (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])), mount: (n) => host.appendChild(n) }, scene: home });
-  const cl = view.checklist([{ id: 's1', text: 'A step', devices: [] }]);
-  cl.timeline({ at: 'Sat 07:00', text: 'It already ran 2 times today', ok: true, kind: 'notify', origin: 'held' });
-  cl.timeline({ at: 'Sat 07:05', text: 'Pump on', ok: true, kind: 'notify', origin: 'rule' });
-  const rows = $$('.trow', host).map((r) => r.textContent);
-  ok(rows[0] === 'Sat 07:00 · Rule held back · It already ran 2 times today', `held row: "${rows[0]}"`);
-  ok(rows[1].includes('📩'), `a real notification keeps its envelope: "${rows[1]}"`);
-  view.ruleLine({ at: 'Sat 07:00', text: 'Pump on', kind: 'rule', origin: 'rule' });
-  ok(!$('.msg.rule', host).hasAttribute('role'), 'a rule line has no role of its own (it sits inside the log)');
-  host.hidden = true;
   ok(getComputedStyle(card('lamp')).userSelect === 'none', 'cards are not text-selectable');
   panel.editable(true, { onEdit() {} }); // leave controls on screen for the eye
   clk.active(true); clk.render({ label: 'Fri 16:30', enabled: true });

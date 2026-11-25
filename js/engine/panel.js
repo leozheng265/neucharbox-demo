@@ -182,14 +182,32 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
       el.dataset.path = e.path; el.setAttribute('aria-label', name);
       c._ctls.push({ el, e }); box.appendChild(row);
     }
-    // A control never selects its card nor pings it in 3D. The panel's hand-tracking (which would see these events
-    // otherwise) is kept by hand: the strip doesn't scroll away from a slider being dragged.
+    isolate(box);
+    c.querySelector('.txt').insertBefore(box, c._slot || null); c._edits = box; c.classList.add('has-edits'); // before the action controls, if any
+    asGroup(c, d);
+  }
+  // A control never selects its card nor pings it in 3D. The panel's hand-tracking (which would see these events
+  // otherwise) is kept by hand: the strip doesn't scroll away from a slider being dragged.
+  function isolate(box) {
     for (const ev of ['click', 'keyup', 'pointerup']) box.addEventListener(ev, (x) => x.stopPropagation());
     box.addEventListener('keydown', (x) => { x.stopPropagation(); hand(); });
     const lift = () => { handDown = false; hand(); removeEventListener('pointerup', lift, true); removeEventListener('pointercancel', lift, true); };
     box.addEventListener('pointerdown', (x) => { x.stopPropagation(); handDown = true; hand(); addEventListener('pointerup', lift, true); addEventListener('pointercancel', lift, true); });
-    c.querySelector('.txt').appendChild(box); c._edits = box; c.classList.add('has-edits');
-    c.setAttribute('role', 'group'); c.setAttribute('aria-label', d.name); // button children are presentational: with controls inside, the card is a group (still tabbable; Enter/Space/click select)
+  }
+  // button children are presentational: with controls inside, the card is a group (still tabbable; Enter/Space/click select)
+  const asGroup = (c, d) => { c.setAttribute('role', 'group'); c.setAttribute('aria-label', d.name); };
+  const asButton = (c) => { if (c._edits || c._slot) return; c.setAttribute('role', 'button'); c.removeAttribute('aria-label'); };
+  // ---- live mode's action controls (js/engine/livetools.js): an element at the end of a card that takes them ----
+  function slot(id) {
+    const c = cards[id]; if (!c) return null;
+    if (!c._slot) {
+      const box = document.createElement('span'); box.className = 'acts';
+      isolate(box); c.querySelector('.txt').appendChild(box); c._slot = box; c.classList.add('has-acts'); asGroup(c, scene.devices[id]);
+    }
+    return c._slot;
+  }
+  function clearSlots() {
+    for (const id of ids) { const c = cards[id]; if (!c._slot) continue; c._slot.remove(); c._slot = null; c.classList.remove('has-acts'); asButton(c); }
   }
   function syncEdits(id, s, tone) {
     const c = cards[id]; if (!c._edits) return;
@@ -213,7 +231,7 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
     root.classList.toggle('editable', editing);
     for (const id of ids) {
       const c = cards[id];
-      if (c._edits) { for (const { el } of c._ctls) { clearTimeout(el._t); clearTimeout(el._kt); } c._edits.remove(); c._edits = c._ctls = c._ek = null; c.classList.remove('has-edits'); c.setAttribute('role', 'button'); c.removeAttribute('aria-label'); }
+      if (c._edits) { for (const { el } of c._ctls) { clearTimeout(el._t); clearTimeout(el._kt); } c._edits.remove(); c._edits = c._ctls = c._ek = null; c.classList.remove('has-edits'); asButton(c); }
       if (editing) buildEdits(id);
     }
     render(store.state);
@@ -266,5 +284,5 @@ export function createPanel(root, scene, store, { onSelect } = {}) {
   // dropped, so the strip ends on what failed. No pop: nothing new happened to them.
   function show(list) { queue = []; clearTimeout(timer); timer = 0; clearTimeout(popTimer); popTimer = 0; reveal(list); }
   store.subscribe(render); render(store.state);
-  return { select, render, pop, reveal, rewind, track, show, mark, editable };
+  return { select, render, pop, reveal, rewind, track, show, mark, editable, slot, clearSlots };
 }

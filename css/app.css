@@ -22,7 +22,7 @@ button { font: inherit; color: inherit; }
 .btn.primary { background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); border-color: transparent; color: #12222A; }
 .btn.small { padding: 5px 10px; font-size: 13px; }
 .btn:disabled { opacity: .5; cursor: default; }
-/* the scene header's Live AI button (js/engine/liveentry.js): beside "‹ Scenes", only while live mode is available and not open */
+/* the scene header's Go live button (js/engine/liveentry.js): beside "‹ Scenes", only while live mode is available and not open */
 .top .live-top { flex: 0 0 auto; white-space: nowrap; }
 .top .live-top[hidden] { display: none; } /* .btn's inline-block would beat the hidden attribute */
 .top .live-top:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
@@ -72,7 +72,7 @@ button { font: inherit; color: inherit; }
 .beats button:not(:disabled):not(.now)::after { content: ' ›'; }
 .beats button:not(:disabled):not(.now):hover { color: var(--ink); border-color: var(--accent-a); }
 
-/* Stacked (phones): room, status, device cards, automations (live mode only; an empty row otherwise), then the chat in
+/* Stacked (phones): room, status, device cards, the live tools (live mode only; an empty row otherwise), then the chat in
    the last row, whatever shows above it (the custom scene's gate has only the room and the chat). */
 .stage { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto auto minmax(0, 1fr); }
 .stage .chat { grid-row: -2 / -1; }
@@ -184,55 +184,20 @@ button { font: inherit; color: inherit; }
 .card.halt { border-color: var(--amber); }
 .card.replan { border-color: var(--green); }
 .card.replan .needs { margin: 6px 0 0; color: var(--ink); background: #FFF7E8; border: 1px solid #F3DDB0; padding: 8px 10px; border-radius: 8px; }
-/* live mode: the LIVE AI badge, the plan / checklist card, the access card, the live end card */
-.live-badge, .chat-input.live::before { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; line-height: 1.5; padding: 1px 7px; border-radius: 999px; background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); color: #12222A; }
-.live-badge { display: inline-block; vertical-align: 1px; }
-.chat-input.live::before { content: 'LIVE AI'; align-self: center; flex: 0 0 auto; }
-.msg.planning { display: flex; align-items: center; gap: 9px; color: var(--ink-2); }
-.msg.planning .dots { display: inline-flex; gap: 4px; flex: 0 0 auto; }
-.msg.planning .dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-a); animation: lpulse 1.4s ease-in-out infinite; }
-.msg.planning .dots span:nth-child(2) { animation-delay: .2s; } .msg.planning .dots span:nth-child(3) { animation-delay: .4s; }
-@keyframes lpulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
-.msg.live-say { border-color: var(--line-2); }
-/* the containing block of their screen-reader words (.sr) and the form's hidden field (.hp): positioned from the page
-   instead, they escape the chat log's scroll box and make the whole page scroll */
-.card.live-plan, .card.access { position: relative; }
-.card.live-plan .intro { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
-.card .lsteps { list-style: none; margin: 0 0 10px; padding: 0; }
-.lstep { display: grid; grid-template-columns: 1.5em minmax(0, 1fr); column-gap: 6px; margin: 6px 0; }
-.lstep .glyph { font-weight: 700; color: var(--ink-3); text-align: center; }
-.lstep .calls { grid-column: 2; }
-.lstep .calls:empty { display: none; }
-.lstep[data-status="running"] .glyph { color: #1E7FD8; animation: lpulse 1.4s ease-in-out infinite; }
-.lstep[data-status="done"] .glyph { color: #1E8F55; }
-.lstep[data-status="failed"] .glyph { color: var(--red); }
-.lstep[data-status="skipped"] .txt { color: var(--ink-3); }
-.card.live-plan.done .lstep .glyph { animation: none; }
-.live-plan .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.live-plan .call { display: inline-block; max-width: 100%; margin: 3px 4px 0 0; padding: 1px 7px; font-size: 11.5px; line-height: 1.45; color: var(--ink-2); background: #EEF6F5; border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
-.live-plan .call.bad { color: #B5412A; background: #FDECE8; border-color: #F3C4B8; }
-.card .lloose { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
-.card .lloose li.call { margin: 0; }
-.ltimeline { margin-top: 8px; padding: 6px 9px; max-height: 11.5em; overflow-y: auto; font-size: 12.5px; line-height: 1.4; background: #F7FBFA; border: 1px solid var(--line); border-radius: 8px; }
-.ltimeline .trow { padding: 2px 0; color: var(--ink-2); }
-.ltimeline .trow[data-kind="fault"], .ltimeline .trow[data-ok="false"] { color: var(--red); }
-.card.live-plan.done .btn.approve { background: #F1F5F4; color: var(--ink-3); }
-.card.live-plan.declined ol { color: var(--ink-3); text-decoration: line-through; text-decoration-color: rgba(92,122,120,.45); }
-.card.live-plan.declined .btn.approve { background: #F1F5F4; color: var(--ink-3); }
-.card.live-plan.declined .btn.decline.chosen { opacity: 1; background: #FDECE8; color: #B5412A; border-color: #F3C4B8; }
-.card.end.live .left { margin: 0 0 10px; font-size: 13.5px; }
-.card.end.live .btn.reset { background: #fff; }
-/* a finished live request ends nothing: no end card, only a slim row of follow-ups under the summary */
-.card.end.live.slim { padding: 0; border: 0; background: none; box-shadow: none; }
-.card.end.live.slim .left { margin: 0 0 6px; font-size: 12.5px; color: var(--ink-2); }
-.card.end.live.slim .btn { padding: 5px 10px; font-size: 13px; }
+/* live mode: the input bar is a disabled placeholder where a future NCB terminal goes (NCB badge), and the access card */
+.chat-input.live::before { content: 'NCB'; align-self: center; flex: 0 0 auto; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; line-height: 1.5; padding: 1px 7px; border-radius: 999px; background: #E3ECEB; color: var(--ink-2); }
+.chat-input.live input:disabled { font-style: italic; cursor: not-allowed; }
+.chat-input.live button { display: none; } /* nothing to send */
+/* the containing block of the form's hidden field (.hp): positioned from the page instead, it escapes the chat log's
+   scroll box and makes the whole page scroll */
+.card.access { position: relative; }
 /* Phones: an end card taller than the chat log is shown from its top (chat.js). With the live button it needs one more
    line of buttons, which a small phone (360 x 640) can't fit under the story: the buttons then stay in view at the foot
    of the log, over the end of the story, until the visitor scrolls on. Where the card fits, nothing moves. (Desktop's
    log is tall enough, and its history never gets a row of buttons riding over its own text.) */
 @media (max-width: 959px) {
-  .card.end.live .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
   .card.end:has(.live-go) .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
+  .chat-input.live.off { display: flex; } /* the placeholder stays: it is off, never hidden */
 }
 .card.access .intro { margin-bottom: 6px; }
 .card.access .anote { margin: 0 0 8px; color: var(--ink-2); font-size: 13.5px; }
@@ -257,7 +222,6 @@ button { font: inherit; color: inherit; }
 .card.access .follow .social-link:hover { border-color: var(--accent-a); }
 .card.access .follow .social-link svg { width: 15px; height: 15px; flex: 0 0 auto; }
 .card.access .follow .youtube svg { color: #FF0033; } .card.access .follow .linkedin svg { color: #0A66C2; } .card.access .follow .x svg { color: #000; }
-@media (prefers-reduced-motion: reduce) { .msg.planning .dots span, .lstep[data-status="running"] .glyph { animation: none; opacity: 1; } }
 .card.end { background: linear-gradient(180deg, #fff, #EEFBF9); text-align: left; }
 .card.end h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -0.01em; text-wrap: balance; } /* no one-word last line on a phone */
 .card.end p { margin: 0 0 12px; color: var(--ink-2); }
@@ -299,9 +263,9 @@ button { font: inherit; color: inherit; }
 
 @media (max-width: 959px) {
   .room canvas { height: clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)); }
-  /* Live mode (.live-edit) adds the editing rows: the thermostat's two 32 px sliders lift the strip from ~50 to ~110 px and the
-     status row takes two lines (the clock beside it); and the Automations summary line (36 px, its list folded). The room
-     gives up that height (74 + 36 px), not the chat. */
+  /* Live mode (.live-edit) adds the editing rows and the action buttons: they lift the strip from ~50 to ~110 px and the
+     status row takes two lines (the clock beside it); and the live tools' head line (36 px, folded). The room gives up
+     that height (74 + 36 px), not the chat. */
   .app.live-edit .room canvas { height: max(110px, calc(clamp(140px, calc(100dvh - 420px), min(75vw, 42dvh)) - 110px)); }
   .app.live-edit .status { min-height: 46px; } /* two lines of status text, always: the row doesn't jump with the message */
   .ent { max-width: 240px; }
@@ -343,7 +307,7 @@ button { font: inherit; color: inherit; }
   .app:not(.picker-mode) .top .social { display: none; } /* room for the scene's name; every end card has the links */
   .top .scene-name::before { content: none; }
   .top .spacer { display: none; } .top .spacer + .btn, .top .spacer + .social { margin-left: auto; } /* one gap less: "Home, away for a week" fits at 360 px */
-  .top .spacer + .live-top[hidden] + .btn { margin-left: auto; } /* Live AI (first after the spacer) hidden: "‹ Scenes" stays at the right */
+  .top .spacer + .live-top[hidden] + .btn { margin-left: auto; } /* Go live (first after the spacer) hidden: "‹ Scenes" stays at the right */
   .app.picker-mode .top .brand { display: block; }
   .app.picker-mode .top .scene-name::before { content: '/'; }
   .scene-card .thumb { aspect-ratio: 16/6; }
@@ -360,12 +324,6 @@ button { font: inherit; color: inherit; }
   .card.end .follow .long { display: none; } /* "Follow" and the three links on one line */
   .card.failures .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .card.failures .tiles.special { grid-template-columns: minmax(0, 1fr); }
-  .chat-input.live::before { content: 'LIVE'; }
-  .card.end.live .row { gap: 5px; }
-  .card.end.live .row .btn { padding: 6px 10px; font-size: 13px; }
-  .card.end.live .left { margin-bottom: 8px; font-size: 13px; }
-  .live-plan .call { white-space: normal; }
-  .ltimeline { font-size: 12px; }
   .pick { gap: 7px; padding: 6px 8px 6px 6px; }
   .pick .ico { width: 30px; height: 30px; } .pick .ico svg { width: 18px; height: 18px; }
 }
@@ -436,87 +394,89 @@ button { font: inherit; color: inherit; }
   .status:has(.clk-pick:not([hidden])) .clockctl, .status:has(.clk-why:not([hidden])) .clockctl { flex: 1 1 100%; flex-wrap: wrap; }
 }
 
-/* ---- live mode: the Automations section under the device cards (js/engine/automations.js; spec 2026-11-08 §1) ---- */
-.autos[hidden], .autos .autos-body[hidden], .autos .alist[hidden], .autos .aempty[hidden] { display: none; }
-.autos { position: relative; min-width: 0; background: var(--panel); border-top: 1px solid var(--line); }
-.autos-head { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 35px; margin: 0; padding: 0 14px; border: 0; background: none; font: inherit; font-size: 13px; line-height: 1.3; color: var(--ink-2); text-align: left; cursor: pointer; }
-.autos-head:hover .autos-title { color: #138a9a; }
-.autos-head:focus-visible { outline: 2px solid var(--accent-a); outline-offset: -2px; border-radius: 6px; }
-.autos-title { font-weight: 650; color: var(--ink); }
-.autos-count { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.autos-chev { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--ink-3); transition: transform .2s; }
-.autos.open .autos-chev { transform: rotate(180deg); }
-/* folded, the summary line carries a card's JUST RAN / HELD */
-.autos-badge { flex: 0 0 auto; font-size: 9.5px; line-height: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; background: #E7F7F0; color: #17744A; }
-.autos-badge:empty, .autos.open .autos-badge { display: none; }
-.autos-head.flash-held .autos-badge { background: #FFF1CC; color: #8A5A00; }
-.autos-body { padding: 2px 12px 10px; }
-.autos .alist { list-style: none; margin: 0; padding: 6px 0 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
-.autos .aempty { margin: 0; padding: 0 2px; font-size: 13px; line-height: 1.4; color: var(--ink-2); }
-/* a card: like a device card (icon, text, switch), its badge over the top-right corner */
-.auto { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; padding: 7px 10px 7px 8px; background: #fff; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; transition: border-color .15s, box-shadow .15s; }
-.auto .aico { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: #FFF1CC; font-size: 15px; line-height: 1; }
-.auto[data-kind="schedule"] .aico { background: #DCEFFF; }
-.auto .atxt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.auto .atext { font-size: 12.5px; font-weight: 600; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
-.auto .asub { font-size: 11.5px; line-height: 1.3; color: var(--ink-2); }
-.auto.off .atext, .auto.done .atext { color: var(--ink-2); } /* still content: ink-2 keeps it at 4.5:1 or better */
-.auto.off .aico, .auto.done .aico { background: #F1F3F3; filter: grayscale(1); opacity: .7; }
-.auto .sw[hidden] { display: none; } /* a done one-off has no switch */
-/* the switch: the editable cards' switch (.ent .edit-sw), with a fingertip-sized hit area */
-.auto .sw { position: relative; flex: 0 0 auto; width: 26px; height: 15px; margin: 0 2px 0 4px; padding: 0; border: 0; border-radius: 999px; background: #cfd6dd; cursor: pointer; transition: background .2s; }
-.auto .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: #fff; transition: transform .2s; }
-.auto .sw.on { background: #36c98a; } .auto .sw.on::after { transform: translateX(11px); }
-.auto .sw::before { content: ''; position: absolute; inset: -12px -8px; }
-.auto .sw:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
-.auto .badge { display: none; position: absolute; top: -7px; right: 6px; font-size: 9.5px; line-height: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
-.auto.flash-ran .badge, .auto.flash-held .badge { display: inline-block; }
-.auto.flash-ran { border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.22); }
-.auto.flash-ran .badge { background: #E7F7F0; color: #17744A; }
-.auto.flash-held { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(228,169,58,.2); }
-.auto.flash-held .badge { background: #FFF1CC; color: #8A5A00; }
-/* remove: a small × after the switch, with a fingertip-sized hit area; "Clear all" under the list */
-.auto .auto-rm { position: relative; flex: 0 0 auto; width: 20px; height: 20px; margin: 0 -4px 0 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink-2); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
-.auto .auto-rm::before { content: ''; position: absolute; inset: -9px -4px; }
-.auto .auto-rm:hover { background: #FDECEC; color: #B3261E; }
-.auto .auto-rm:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 1px; }
-.autos .autos-clear { display: block; margin: 8px 0 0 auto; padding: 3px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; }
-.autos .autos-clear:hover { color: #B3261E; }
-.autos .autos-clear:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 1px; }
-.autos .autos-clear[hidden] { display: none; }
-@media (prefers-reduced-motion: reduce) { .autos-chev, .auto .sw, .auto .sw::after { transition: none; } }
+/* ---- live mode: the live tools under the device cards (js/engine/livetools.js): faults, Reset room, the event log ---- */
+.ltools[hidden], .ltools .lt-body[hidden], .ltools [hidden] { display: none; }
+.ltools { position: relative; min-width: 0; background: var(--panel); border-top: 1px solid var(--line); }
+.lt-head { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 35px; margin: 0; padding: 0 14px; border: 0; background: none; font: inherit; font-size: 13px; line-height: 1.3; color: var(--ink-2); text-align: left; cursor: pointer; }
+.lt-head:hover .lt-title { color: #138a9a; }
+.lt-head:focus-visible { outline: 2px solid var(--accent-a); outline-offset: -2px; border-radius: 6px; }
+.lt-title { font-weight: 650; color: var(--ink); }
+.lt-count { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lt-chev { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--ink-3); transition: transform .2s; }
+.ltools.open .lt-chev { transform: rotate(180deg); }
+.lt-body { display: grid; gap: 10px; padding: 2px 12px 10px; }
+.lt-h { margin: 0 0 5px; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); }
+.lt-plant, .lt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lt-plant select { flex: 1 1 110px; min-width: 0; min-height: 30px; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 8px; background: #fff; font: inherit; font-size: 13px; color: var(--ink); }
+.lt-plant select:disabled { color: var(--ink-3); }
+.lt-planted { list-style: none; margin: 7px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 5px; }
+.lt-fault { padding: 2px 9px; font-size: 12px; line-height: 1.5; color: #8A3B26; background: #FDECE8; border: 1px solid #F3C4B8; border-radius: 999px; }
+.lt-none, .lt-empty { margin: 7px 0; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
+.ltools .btn.small { padding: 4px 11px; font-size: 12.5px; }
+.ltools .btn:disabled { opacity: .45; cursor: default; }
+.lt-lines { list-style: none; margin: 0; padding: 5px 8px; max-height: 12em; overflow-y: auto; font-size: 12px; line-height: 1.45; background: #F7FBFA; border: 1px solid var(--line); border-radius: 8px; scrollbar-width: thin; font-variant-numeric: tabular-nums; }
+.lt-lines:empty { display: none; }
+.lt-line { padding: 1px 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.lt-line[data-kind="call"], .lt-line[data-kind="result"] { color: var(--ink); }
+.lt-line[data-ok="false"], .lt-line[data-kind="fault"] { color: var(--red); }
+.lt-line[data-kind="world"], .lt-line[data-kind="clock"] { color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { .lt-chev { transition: none; } }
 
-/* Desktop: open under the device cards (folded by default on windows under 900 px tall, js/engine/automations.js); a long
-   list scrolls in its own box. In live mode the chat keeps at least min(45%, 280 px): the section shrinks to its summary
-   line first, then the cards' box scrolls. */
+/* ---- live mode: a device card's actions (js/engine/livetools.js, in panel.slot()): parameter controls, then the button ---- */
+.ent .acts { display: flex; flex-direction: column; gap: 4px; margin-top: 5px; }
+.ent .acts:empty { display: none; }
+.ent.has-acts { align-items: flex-start; }
+.ent.has-acts .ico { margin-top: 3px; }
+.ent .act { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; padding-top: 4px; border-top: 1px dashed var(--line); }
+.ent .act-params { display: flex; flex-direction: column; gap: 2px; flex: 1 1 100%; min-width: 0; }
+.ent .ap { display: flex; align-items: center; gap: 6px; min-height: 22px; min-width: 0; }
+.ent .ap-lab { flex: 0 0 auto; font-size: 11px; color: var(--ink-2); }
+.ent .ap-val { flex: 0 0 auto; min-width: 3ch; text-align: right; font-size: 12px; font-weight: 650; color: #138a9a; font-variant-numeric: tabular-nums; }
+.ent .ap-sel, .ent .ap-num, .ent .ap-text { flex: 1 1 auto; min-width: 0; min-height: 24px; padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 6px; background: #fff; font: inherit; font-size: 12px; color: var(--ink); }
+.ent .ap-num { max-width: 7em; }
+.ent .ap-sw { border: 0; padding: 0; cursor: pointer; width: 26px; height: 15px; }
+.ent .ap-sw::after { top: 2px; left: 2px; width: 11px; height: 11px; }
+.ent .ap-sw.on { background: #36c98a; } .ent .ap-sw.on::after { transform: translateX(11px); }
+.ent .ap-sw:focus-visible { outline: 2px solid var(--accent-a); outline-offset: 2px; }
+.ent .act-go { padding: 3px 10px; font-size: 12px; line-height: 1.3; }
+.ent .act-go:disabled { opacity: .45; cursor: default; }
+.ent .act-go.running { opacity: 1; color: #1667B3; border-color: #93c5fd; background: #EEF6FF; }
+.ent .act-res { flex: 1 1 100%; min-width: 0; font-size: 11.5px; line-height: 1.3; color: #17744A; overflow-wrap: anywhere; }
+.ent .act-res.bad { color: var(--red); }
+.ent .act-res[hidden] { display: none; }
+
+/* Desktop: the section sits under the device cards, open by default; the event log scrolls in its own box. In live
+   mode the chat keeps at least min(30%, 180 px): the cards' box scrolls first. */
 @media (min-width: 960px) {
-  .autos { flex: 0 1 auto; display: flex; flex-direction: column; max-height: min(30%, 220px); min-height: 36px; }
-  .autos-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
-  .app.live-edit .chat { min-height: min(45%, 280px); }
+  .ltools { flex: 0 1 auto; display: flex; flex-direction: column; max-height: min(40%, 330px); min-height: 36px; }
+  .lt-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+  .app.live-edit .chat { min-height: min(30%, 180px); }
   .app.live-edit .panel { flex-shrink: 1; min-height: 0; }
 }
-/* Phones: one 36 px summary line (the room gave up that height, so the chat keeps its own); unfolded, the list drops
-   over the top of the chat instead of pushing it down. Escape or the summary line folds it again. */
+/* Phones: one 36 px head line, folded at first; unfolded, the section drops over the top of the chat instead of
+   pushing it down. */
 @media (max-width: 959px) {
-  .autos-head { padding: 0 12px; }
-  .autos .autos-body { position: absolute; left: 0; right: 0; top: 100%; z-index: 4; max-height: min(52vh, 340px); max-height: min(52dvh, 340px, var(--autos-below, 340px)); overflow-y: auto; padding: 4px 12px 12px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-2); box-shadow: 0 12px 24px rgba(38,56,66,.16); }
-  .auto { padding-top: 6px; padding-bottom: 6px; }
-  .auto .sw { width: 30px; height: 17px; } .auto .sw::after { width: 13px; height: 13px; } .auto .sw.on::after { transform: translateX(13px); }
+  .lt-head { padding: 0 12px; }
+  .ltools .lt-body { position: absolute; left: 0; right: 0; top: 100%; z-index: 4; max-height: min(52vh, 360px); max-height: min(52dvh, 360px); overflow-y: auto; padding: 4px 12px 12px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-2); box-shadow: 0 12px 24px rgba(38,56,66,.16); }
+  .lt-plant select { min-height: 34px; font-size: 16px; } /* no zoom on focus */
+  .ent .ap { min-height: 30px; }
+  .ent .ap-sel, .ent .ap-num, .ent .ap-text { font-size: 16px; min-height: 30px; }
+  .ent .act-go { min-height: 30px; }
+  .ent.has-acts { max-width: 260px; }
 }
-/* Phones held sideways (live mode): the side column is too short to give anything up, so the summary line goes to the
-   room column, under the room, which gives up its 31 px; the side column stays the cards, then the chat. Open, the list
-   rises over the room. */
+/* Phones held sideways (live mode): the side column is too short to give anything up, so the head line goes to the room
+   column, under the room; open, the section rises over the room. */
 @media (max-width: 959px) and (orientation: landscape) and (max-height: 540px) {
-  .autos-head { min-height: 30px; }
+  .lt-head { min-height: 30px; }
   .app.live-edit .stage { grid-template-rows: auto minmax(0, 1fr) auto auto; }
   .app.live-edit .room { grid-column: 1; grid-row: 1 / 3; }
   .app.live-edit .side { display: contents; }
   .app.live-edit .panel { grid-column: 2; grid-row: 1; border-left: 1px solid var(--line); }
   .app.live-edit .stage .chat { grid-column: 2; grid-row: 2 / -1; border-left: 1px solid var(--line); }
-  .app.live-edit .autos { grid-column: 1; grid-row: 3; }
+  .app.live-edit .ltools { grid-column: 1; grid-row: 3; }
   .app.live-edit .status { grid-column: 1; grid-row: 4; }
-  .app.live-edit .autos .autos-body { top: auto; bottom: 100%; max-height: min(260px, var(--autos-above, 260px)); border-top: 1px solid var(--line-2); border-bottom: 0; box-shadow: 0 -12px 24px rgba(38,56,66,.16); }
+  .app.live-edit .ltools .lt-body { top: auto; bottom: 100%; max-height: 260px; border-top: 1px solid var(--line-2); border-bottom: 0; box-shadow: 0 -12px 24px rgba(38,56,66,.16); }
 }
-/* the header's Live AI on phones: no sparkle, and at 360 px one gap less, so "Home, away for a week" still fits */
+/* the header's Go live on phones: no sparkle, and at 360 px one gap less, so "Home, away for a week" still fits */
 @media (max-width: 520px) { .top .live-top .spark { display: none; } }
 @media (max-width: 380px) { .app:not(.picker-mode) .top:has(.live-top:not([hidden])) { gap: 6px; } }

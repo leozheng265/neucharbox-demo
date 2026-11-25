@@ -63,11 +63,12 @@
 //     a DOM): phases, the beat bar, end-card buttons and their labels, the picker, a declined plan in a request and in
 //     a scenario, an end-card button pressed while its request still runs, no ping or pop while quiet, fault lines, the
 //     dashboard strip back to its first tile as a what-if starts and on the faulted device(s) at its end card.
-// 18. (test/live.mjs, --scene live) The live client against the contract mock (test/fixtures/live-mock.mjs): the mock's own
-//     conformance to docs/superpowers/specs/2026-11-07-live-api-contract.md first, then the client's checks.
-//     With them, the automations section (spec 2026-11-08-automations-design.md): live.js's list, switches, flashes and
-//     resets against the mock, the header's Live AI entry (js/engine/liveentry.js), and (test/automations.mjs) the section's
-//     DOM on a stand-in document plus static checks of its markup and CSS. flow.stop() and the player's halt() are 16h.
+// 18. (test/live.mjs, --scene live) The live client against the contract mock (test/fixtures/live-mock.mjs), interface-only
+//     API of 2026-11-24 (the module's docs/live-api-contract.md): the mock's own conformance first (devices, actions,
+//     faults, set, advance, reset, the removed routes), then the client's checks: access, sessions, device actions with
+//     their args, fault planting and clearing, the event log, hand edits, the clock, the disabled NCB terminal placeholder
+//     (no request box), the header's Go live entry (js/engine/liveentry.js), and the live tools (js/engine/livetools.js)
+//     on a stand-in document plus static checks of the page wiring. flow.stop() and the player's halt() are 16h.
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
 import { matchPrompt } from '../js/engine/match.js';
@@ -937,10 +938,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // 8. typed-request routing
   if (scenes.length) { const { routingChecks } = await import('./routing.mjs'); routingChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
   if (scenes.length) { const { controlChecks } = await import('./controls.mjs'); controlChecks({ report, scenes: Object.fromEntries(scenes.map(({ scene }) => [scene.id, scene])) }); }
-  // 18. the live client against the contract mock
+  // 18. the live client against the contract mock (and the live tools on a stand-in document)
   if (!ONLY || ONLY === 'live') { const { liveChecks } = await import('./live.mjs'); await liveChecks({ report, initialOf, guardHits }); }
-  // 18b. the Automations section on a stand-in document, and the page wiring of it and of the header's Live AI button
-  if (!ONLY || ONLY === 'live') { const { automationChecks } = await import('./automations.mjs'); await automationChecks({ report }); }
   // 19. the custom-room catalog copy and layout model
   if (!ONLY || ONLY === 'custom') { const { customChecks } = await import('./custom.mjs'); await customChecks({ report, guardHits }); }
   // 7. room builds (and every what-if through update())
