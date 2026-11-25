@@ -146,7 +146,7 @@ export default {
       const feet = mergeMeshes(THREE, [[-0.1, -0.075], [0.1, -0.075], [-0.1, 0.075], [0.1, 0.075]].map(([x, z]) => P.cyl(0.012, 0.012, 0.01, M.rubber, x, 0.005, z, 12)), M.rubber, { consume: true });
       const hose = P.tube([[0.09, 0.07, -0.09], [0.12, 0.035, -0.15], [0.1, 0.018, -0.2], [0.04, 0.018, -0.22]], 0.012);
       const disc = P.cyl(0.048, 0.048, 0.008, M.steel, 0, 0, 0.004, 18); disc.rotation.x = Math.PI / 2;
-      const vanes = [P.box(0.08, 0.012, 0.005, M.white, 0, 0, 0.011), P.box(0.012, 0.08, 0.005, M.white, 0, 0, 0.011)];
+      const vanes = [P.box(0.08, 0.012, 0.005, M.steel, 0, 0, 0.011), P.box(0.012, 0.08, 0.005, M.steel, 0, 0, 0.011)]; // steel, not white: a white cross read as a medical sign
       const rotor = P.group(disc, ...vanes); rotor.position.set(-0.03, 0.1, 0.1);
       const root = P.group(body, tank, water, lid, strip, feet, hose, rotor);
       const led = statusLed(THREE, root, { at: [0.085, 0.16, 0.104], r: 0.007 });
@@ -169,10 +169,24 @@ export default {
     active: (s) => !!s.armed,
     control: { kind: 'switch', field: 'armed' },
     model({ THREE, P, M }) {
-      const plate = P.box(0.07, 0.1, 0.012, M.white, 0, 0, 0.006, 0.004), arm = P.box(0.018, 0.018, 0.07, M.white, 0, 0, 0.045);
-      const cam = P.smallCamera(0, 0, 0.12); cam.group.rotation.x = 0.3;
-      const root = P.group(plate, arm, cam.group);
-      const led = statusLed(THREE, root, { mesh: cam.led });
+      // A white bullet security camera: a round wall base, a short arm with a ball joint, a rounded body under a sun hood,
+      // a black glass front with the lens and IR emitters, tilted down at the room.
+      const white = new THREE.MeshPhysicalMaterial({ color: 0xF1F3F4, roughness: 0.42, clearcoat: 0.5, clearcoatRoughness: 0.3 });
+      const glass = new THREE.MeshPhysicalMaterial({ color: 0x07090B, roughness: 0.08, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.02 });
+      const base = P.cyl(0.04, 0.042, 0.016, white, 0, 0, 0.008, 40); base.rotation.x = Math.PI / 2;
+      const arm = P.cyl(0.011, 0.013, 0.06, white, 0, 0, 0.045, 20); arm.rotation.x = Math.PI / 2;
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.017, 20, 14), white); ball.position.z = 0.077;
+      const head = new THREE.Group(); head.position.set(0, 0, 0.082); head.rotation.x = 0.32;
+      const body = P.box(0.06, 0.06, 0.13, white, 0, 0.004, 0.06, 0.02);
+      const hood = P.box(0.072, 0.008, 0.15, white, 0, 0.039, 0.07, 0.004);
+      const face = new THREE.Mesh(new THREE.CircleGeometry(0.027, 40), glass); face.position.set(0, 0.004, 0.1255);
+      const lens = P.cyl(0.011, 0.012, 0.008, glass, 0, 0.006, 0.124, 28); lens.rotation.x = Math.PI / 2;
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.013, 0.0015, 8, 32), new THREE.MeshStandardMaterial({ color: 0x5A6168, metalness: 1, roughness: 0.3 })); ring.position.set(0, 0.006, 0.1285);
+      const ir = mergeMeshes(THREE, [0, 1, 2, 3, 4, 5].map((i) => { const a = (i / 6) * Math.PI * 2, d = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 8, 6), glass); d.position.set(Math.cos(a) * 0.021, 0.006 + Math.sin(a) * 0.021, 0.126); return d; }), new THREE.MeshStandardMaterial({ color: 0x2A0A0A, roughness: 0.3 }), { consume: true });
+      const camLed = new THREE.Mesh(new THREE.SphereGeometry(0.003, 10, 8), M.led(HEX.green)); camLed.position.set(0, -0.016, 0.126);
+      head.add(body, hood, face, lens, ring, ir, camLed);
+      const root = P.group(base, arm, ball); root.add(head);
+      const led = statusLed(THREE, root, { mesh: camLed });
       return {
         root,
         update(s, t) {

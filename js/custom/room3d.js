@@ -23,7 +23,7 @@ import { START_HOUR } from './scene.js';
 
 const HX = ROOM.w / 2, HZ = ROOM.d / 2;
 // What the custom room asks js/engine/assets.js for (the same files as Home: one download serves both).
-export const ROOM_ASSETS = { models: ['side_table_01', 'potted_plant_02'], textures: ['wood_floor', 'painted_plaster_wall'], hdri: 'charolettenbrunn_park_2k.hdr' };
+export const ROOM_ASSETS = { models: ['side_table_01', 'potted_plant_02', 'modern_ceiling_lamp_01', 'vintage_electric_kettle'], textures: ['wood_floor', 'painted_plaster_wall'], hdri: 'charolettenbrunn_park_2k.hdr' };
 const MAPS = ['map', 'bumpMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap'];
 // Real point lights in the room at once. Lit lights take the slots first (in layout order), then dark ones fill what is
 // left; a light past the budget still glows (shade and bulb) but lights nothing: twenty point lights in every lit
