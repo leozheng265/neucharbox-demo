@@ -73,7 +73,7 @@ export default {
     const A = assets?.models ? assets : null, MOD = (id) => A?.models[id] || null, TX = (id) => A?.textures?.[id] || null;
     const pbr = (id, rep, extra = {}) => { const set = TX(id); if (!set) return null; const m = {}; for (const k of ['map', 'normalMap', 'roughnessMap']) if (set[k]) { const t = set[k].clone(); t.repeat.set(...rep); t.needsUpdate = true; m[k] = t; } return new THREE.MeshStandardMaterial({ ...m, roughness: 1, ...extra }); };
     // The view out of the window: a photographed garden (HDRI) dimmed with the clock, or the sky dome without assets.
-    if (A?.hdri && R.useHDRBackground) R.useHDRBackground(A.hdri, { rotation: 0 }); else R.useSky?.();
+    if (A?.hdri && R.useHDRBackground) R.useHDRBackground(A.hdri, { rotation: Math.PI }); else R.useSky?.();
     // ceilShadows: the floor lamp's shade keeps its light off the ceiling outside the shade's top opening (see the lamp).
     const floorMat = pbr('wood_floor', [2.5, 2.5], { roughness: 0.9 }), wallMat = pbr('painted_plaster_wall', [2.2, 1.3], { color: 0xF2EEE7 }); if (wallMat) { wallMat.map = null; wallMat.normalScale.set(0.6, 0.6); } // the photo's grey wash dropped: white paint over its plaster relief
     const shell = P.roomShell({ w: 5, d: 5, h: 2.8, window: { x: 0.7, y: 1.55, ww: 1.7, wh: 1.36 }, ceilShadows: true, ...(floorMat ? { floorMat } : {}), ...(wallMat ? { wallMat } : {}) });

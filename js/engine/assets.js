@@ -19,7 +19,13 @@ export async function loadAssets(spec, base = 'assets/') {
     jobs.push(once(`${base}models/${id}/${id}_1k.gltf`, () => gl.loadAsync(`${base}models/${id}/${id}_1k.gltf`)).then((g) => {
       const root = new THREE.Group(); root.name = id;
       for (const s of g.scenes) for (const c of s.children) root.add(c.clone(true));
-      root.traverse((o) => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
+      // Geometry, materials and textures are shared by every copy of a model: a room that drops one copy (room3d.js
+      // drop()) must not free them.
+      root.traverse((o) => {
+        if (!o.isMesh) return;
+        o.castShadow = o.receiveShadow = true; o.geometry.userData.shared = true;
+        for (const m of [].concat(o.material)) { m.userData.shared = true; for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap']) if (m[k]) m[k].userData.shared = true; }
+      });
       out.models[id] = root;
     }));
   }
@@ -27,11 +33,13 @@ export async function loadAssets(spec, base = 'assets/') {
     const set = (out.textures[id] = {});
     for (const [key, file, srgb] of [['map', 'Diffuse', true], ['normalMap', 'nor_gl', false], ['roughnessMap', 'Rough', false]]) {
       const url = `${base}textures/${id}/${file}.jpg`;
-      jobs.push(once(url, () => tl.loadAsync(url)).then((t) => { t = t.clone(); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; set[key] = t; }));
+      jobs.push(once(url, () => tl.loadAsync(url)).then((t) => { t = t.clone(); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; t.userData.shared = true; set[key] = t; }));
     }
   }
   if (spec.hdri) { const url = `${base}hdri/${spec.hdri}`; jobs.push(once(url, () => hl.loadAsync(url)).then((t) => { t.mapping = THREE.EquirectangularReflectionMapping; out.hdri = t; })); }
   await Promise.all(jobs);
+  // A fresh copy of a model for each placement (geometry, materials and textures shared): out.copy(id), null if absent.
+  out.copy = (id) => (out.models[id] ? out.models[id].clone(true) : null);
   return out;
 }
 

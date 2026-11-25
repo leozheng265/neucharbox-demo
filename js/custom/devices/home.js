@@ -18,6 +18,13 @@ export default {
     model({ THREE, P, M }) {
       const lamp = P.floorLamp(0, 0);
       lamp.bulb.castShadow = false; lamp.bulb.userData.wantsShadow = false; lamp.bulb.distance = 6;
+      // Home's finish: a brushed brass pole on a turned black-steel base (in place of the flat metal disc).
+      const brass = new THREE.MeshPhysicalMaterial({ color: 0xC9A46A, metalness: 1, roughness: 0.32, clearcoat: 0.3, clearcoatRoughness: 0.3 });
+      lamp.pole.material = brass;
+      lamp.group.children.filter((o) => o.isMesh && o !== lamp.pole && o.geometry.type === 'CylinderGeometry' && o.position.y < 0.1).forEach((d) => { d.removeFromParent(); d.geometry.dispose(); });
+      const prof = [[0, 0], [0.17, 0], [0.18, 0.006], [0.18, 0.016], [0.165, 0.026], [0.06, 0.034], [0.035, 0.05], [0.026, 0.075], [0.026, 0.09], [0, 0.09]].map(([x, y]) => new THREE.Vector2(x, y));
+      const base = new THREE.Mesh(new THREE.LatheGeometry(prof, 48), new THREE.MeshPhysicalMaterial({ color: 0x1D1F22, metalness: 0.6, roughness: 0.38, clearcoat: 0.6, clearcoatRoughness: 0.2 }));
+      base.castShadow = base.receiveShadow = true; lamp.group.add(base);
       const dimmer = P.box(0.045, 0.075, 0.03, M.white, 0, 0.95, 0.035, 0.006);
       const root = P.group(lamp.group, dimmer);
       const led = statusLed(THREE, root, { at: [0, 0.972, 0.052], r: 0.005 });
@@ -84,17 +91,30 @@ export default {
     edit: [{ field: 'moisture', kind: 'slider', step: 1, unit: '%', top: 'saturated' }],
     format: (s) => { const m = Math.round(num(s.moisture)); return m >= 100 ? 'saturated' : `${Math.max(0, m)}% moisture`; },
     control: false,
-    model({ THREE, P, M }) {
-      const S = 0.8, plant = P.plant(0, 0, { scale: S });
-      // 16 leaves and 16 stems → one mesh each (each leaf keeps its tint as a vertex colour)
-      const stems = plant.group.children.filter((c) => c.isMesh && c.material === M.stem);
-      const leafMat = M.leaf.clone(); leafMat.color.setHex(0xFFFFFF); leafMat.vertexColors = true;
-      plant.group.add(mergeMeshes(THREE, plant.leaves, leafMat, { tint: true, consume: true }), mergeMeshes(THREE, stems, M.stem, { consume: true }));
-      const soilMat = M.soil.clone(); plant.soil.material = soilMat;
-      const stake = P.box(0.016, 0.3, 0.016, M.metal, 0.1, 0.4, 0.06), head = P.box(0.05, 0.042, 0.026, M.hub, 0.1, 0.57, 0.06, 0.006);
-      const root = P.group(plant.group, stake, head);
-      const led = statusLed(THREE, root, { at: [0.1, 0.578, 0.076], r: 0.006 });
-      const DRY = new THREE.Color(0x7B5B40), WET = new THREE.Color(0x2A1C12); let shown = null;
+    // With the room's assets the plant is Home's real one (Poly Haven potted_plant_02, its 34 cm pot scaled to 0.9), the
+    // probe in its soil; its textured soil takes a colour multiplier (white dry, dark wet).
+    model({ THREE, P, M, A }) {
+      const real = A?.copy?.('potted_plant_02');
+      let plantRoot, soilMat, DRY, WET, potTop;
+      if (real) {
+        real.scale.setScalar(0.9); real.rotation.y = 0.6; plantRoot = real; potTop = 0.336 * 0.9;
+        let dirt = null; real.traverse((o) => { if (!dirt && o.isMesh && o.name.includes('dirt')) dirt = o; });
+        soilMat = (dirt?.material || M.soil).clone(); soilMat.userData.shared = false; if (dirt) dirt.material = soilMat;
+        DRY = new THREE.Color(0xF2EAE2); WET = new THREE.Color(0x6A5A50);
+      } else {
+        const S = 0.8, plant = P.plant(0, 0, { scale: S });
+        // 16 leaves and 16 stems → one mesh each (each leaf keeps its tint as a vertex colour)
+        const stems = plant.group.children.filter((c) => c.isMesh && c.material === M.stem);
+        const leafMat = M.leaf.clone(); leafMat.color.setHex(0xFFFFFF); leafMat.vertexColors = true;
+        plant.group.add(mergeMeshes(THREE, plant.leaves, leafMat, { tint: true, consume: true }), mergeMeshes(THREE, stems, M.stem, { consume: true }));
+        soilMat = M.soil.clone(); plant.soil.material = soilMat; plantRoot = plant.group; potTop = 0.42 * S;
+        DRY = new THREE.Color(0x7B5B40); WET = new THREE.Color(0x2A1C12);
+      }
+      const dy = potTop - 0.336; // the probe stands in the soil whichever pot it is
+      const stake = P.box(0.016, 0.3, 0.016, M.metal, 0.1, 0.4 + dy, 0.06), head = P.box(0.05, 0.042, 0.026, M.hub, 0.1, 0.57 + dy, 0.06, 0.006);
+      const root = P.group(plantRoot, stake, head);
+      const led = statusLed(THREE, root, { at: [0.1, 0.578 + dy, 0.076], r: 0.006 });
+      let shown = null;
       return {
         root,
         update(s, t) {
@@ -115,16 +135,20 @@ export default {
     active: (s) => !!s.running,
     control: { kind: 'switch', field: 'running' },
     model({ THREE, P, M }) {
-      const body = P.box(0.26, 0.2, 0.2, M.black, 0, 0.1, 0, 0.02);
-      const tank = P.box(0.24, 0.2, 0.18, new THREE.MeshPhysicalMaterial({ color: 0xE8F4F8, roughness: 0.08, transparent: true, opacity: 0.28, depthWrite: false }), 0, 0.3, 0, 0.012);
+      // Home's unit: a matte graphite body with rounded edges, rubber feet and an aqua strip, under a round reservoir.
+      const graphite = new THREE.MeshPhysicalMaterial({ color: 0x2B2F33, roughness: 0.5, metalness: 0.1, clearcoat: 0.25, clearcoatRoughness: 0.4 });
+      const body = P.box(0.26, 0.19, 0.2, graphite, 0, 0.105, 0, 0.035);
+      const tank = P.cyl(0.086, 0.086, 0.2, new THREE.MeshPhysicalMaterial({ color: 0xE8F4F8, roughness: 0.08, transparent: true, opacity: 0.28, depthWrite: false }), 0, 0.3, 0, 48);
       tank.castShadow = false; tank.userData.noAO = true; tank.renderOrder = 1; // drawn after the water inside it
-      const water = P.box(0.22, 0.13, 0.16, new THREE.MeshStandardMaterial({ color: 0x4FA8CF, roughness: 0.2, transparent: true, opacity: 0.75 }), 0, 0.27, 0);
-      const lid = P.box(0.25, 0.012, 0.19, M.black, 0, 0.406, 0, 0.004);
+      const water = P.cyl(0.08, 0.08, 0.13, new THREE.MeshStandardMaterial({ color: 0x4FA8CF, roughness: 0.2, transparent: true, opacity: 0.75 }), 0, 0.268, 0, 48);
+      const lid = mergeMeshes(THREE, [P.cyl(0.09, 0.09, 0.016, graphite, 0, 0.407, 0, 48), P.cyl(0.091, 0.091, 0.008, graphite, 0, 0.204, 0, 48)], graphite, { consume: true });
+      const strip = P.box(0.17, 0.005, 0.003, new THREE.MeshStandardMaterial({ color: 0x6FD3CB, roughness: 0.4, emissive: 0x2FB5AC, emissiveIntensity: 0.4 }), 0, 0.031, 0.1005);
+      const feet = mergeMeshes(THREE, [[-0.1, -0.075], [0.1, -0.075], [-0.1, 0.075], [0.1, 0.075]].map(([x, z]) => P.cyl(0.012, 0.012, 0.01, M.rubber, x, 0.005, z, 12)), M.rubber, { consume: true });
       const hose = P.tube([[0.09, 0.07, -0.09], [0.12, 0.035, -0.15], [0.1, 0.018, -0.2], [0.04, 0.018, -0.22]], 0.012);
       const disc = P.cyl(0.048, 0.048, 0.008, M.steel, 0, 0, 0.004, 18); disc.rotation.x = Math.PI / 2;
       const vanes = [P.box(0.08, 0.012, 0.005, M.white, 0, 0, 0.011), P.box(0.012, 0.08, 0.005, M.white, 0, 0, 0.011)];
       const rotor = P.group(disc, ...vanes); rotor.position.set(-0.03, 0.1, 0.1);
-      const root = P.group(body, tank, water, lid, hose, rotor);
+      const root = P.group(body, tank, water, lid, strip, feet, hose, rotor);
       const led = statusLed(THREE, root, { at: [0.085, 0.16, 0.104], r: 0.007 });
       return {
         root,
@@ -168,17 +192,21 @@ export default {
     format: (s) => `${oneDecimal(s.target)}°C set · ${num(s.current).toFixed(1)}°C now`,
     control: { kind: 'bar', field: 'target', min: 10, max: 28 }, // the set point on the thermostat's 10–28 °C range
     model({ THREE, P, M }) {
-      const body = P.box(0.11, 0.11, 0.03, M.white, 0, 0, 0.015, 0.01);
-      const c = document.createElement('canvas'); c.width = 256; c.height = 144;
+      // Home's round thermostat: a brushed-steel ring 10 cm across, a glass face over a round screen showing the set
+      // point as an arc on the 10–28 °C range, the set point big and the room's temperature under it.
+      const body = P.cyl(0.05, 0.05, 0.026, new THREE.MeshStandardMaterial({ color: 0xC9CDD1, metalness: 1, roughness: 0.28 }), 0, 0, 0.013, 64); body.rotation.x = Math.PI / 2;
+      const c = document.createElement('canvas'); c.width = 256; c.height = 256;
       const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-      const screen = P.screenPlane(0.07, 0.04, tex); screen.position.set(0, 0.008, 0.032); screen.material.emissiveIntensity = 0.7;
+      const screen = new THREE.Mesh(new THREE.CircleGeometry(0.043, 64), new THREE.MeshPhysicalMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.75, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.03 }));
+      screen.position.set(0, 0, 0.0265);
       const root = P.group(body, screen);
-      const led = statusLed(THREE, root, { at: [0.042, -0.042, 0.032], r: 0.004 });
-      const draw = (big, small, alarm = false) => {
-        const g = c.getContext('2d'); g.fillStyle = alarm ? '#5A120D' : '#0B0F14'; g.fillRect(0, 0, 256, 144);
+      const led = statusLed(THREE, root, { at: [0, -0.038, 0.028], r: 0.004 });
+      const draw = (big, small, alarm = false, k = NaN) => {
+        const g = c.getContext('2d'); g.fillStyle = alarm ? '#5A120D' : '#05080B'; g.fillRect(0, 0, 256, 256);
+        if (!alarm && Number.isFinite(k)) { g.lineCap = 'round'; g.lineWidth = 10; g.strokeStyle = '#1C2A30'; g.beginPath(); g.arc(128, 128, 104, Math.PI * 0.75, Math.PI * 2.25); g.stroke(); g.strokeStyle = '#29EEE5'; g.beginPath(); g.arc(128, 128, 104, Math.PI * 0.75, Math.PI * (0.75 + 1.5 * k)); g.stroke(); }
         g.textAlign = 'center'; g.textBaseline = 'middle';
-        g.fillStyle = alarm ? '#FF7A62' : '#9FE3F0'; g.font = '600 64px Inter, "Segoe UI", sans-serif'; g.fillText(big, 128, small ? 56 : 72);
-        if (small) { g.fillStyle = alarm ? '#FFC2B6' : '#6FB3C2'; g.font = '30px Inter, "Segoe UI", sans-serif'; g.fillText(small, 128, 116); }
+        g.fillStyle = alarm ? '#FF7A62' : '#E8FBFF'; g.font = '600 64px Inter, "Segoe UI", sans-serif'; g.fillText(big, 128, small ? 116 : 128);
+        if (small) { g.fillStyle = alarm ? '#FFC2B6' : '#7FC9D6'; g.font = '26px Inter, "Segoe UI", sans-serif'; g.fillText(small, 128, 176); }
         tex.needsUpdate = true;
       };
       let shown = null; // what the screen shows: -1 offline, -2 fault, else target and current in tenths
@@ -189,7 +217,7 @@ export default {
           if (key !== shown) {
             shown = key;
             if (key === -1) draw('--', ''); else if (key === -2) draw('!!', 'no reply', true);
-            else draw(`${oneDecimal(s.target)}°C`, `now ${num(s.current).toFixed(1)}°`);
+            else draw(`${oneDecimal(s.target)}°C`, `now ${num(s.current).toFixed(1)}°`, false, clamp01((num(s.target) - 10) / 18));
           }
           led.set(s, t);
         },
