@@ -102,6 +102,12 @@ export default {
       const mat = M.slat.clone(); mat.vertexColors = true;
       slats.forEach((s) => { s.geometry.dispose(); s.geometry = geo; s.material = mat; });
     }
+    // Ladder tapes down the front of the slats and a clear tilt wand at the right, as on a real venetian blind.
+    {
+      const tape = new THREE.MeshStandardMaterial({ color: 0xEDE8DE, roughness: 0.9 });
+      for (const x of [0.7 - 0.6, 0.7 + 0.6]) { const t = P.box(0.012, 1.22, 0.002, tape, x, 1.55, -2.38); t.castShadow = false; t.raycast = () => {}; P.onWall(t, 0, 1, -2.5); } // tapes and wand let taps through to the slats
+      const wand = P.cyl(0.005, 0.005, 0.55, new THREE.MeshPhysicalMaterial({ color: 0xF4FAFB, roughness: 0.05, transparent: true, opacity: 0.55 }), 1.5, 1.86, -2.37, 10); wand.castShadow = false; wand.raycast = () => {}; P.onWall(wand, 0, 1, -2.5);
+    }
     // Motor status LED on the headrail's front face, at the left end: at the right end the lamp's bloom drowns it.
     const blindsLed = P.ledDot(-0.08, 2.2, -2.376, 0x2FBF71, 0.01); P.onWall(P.group(blindsLed), 0, 1, -2.5); // see the cut-away note below
     // Screen-sized glow for a small status LED in fault (the LED itself is a 1–2 px dot from the room camera).
@@ -137,11 +143,12 @@ export default {
     // The plant. The model's pot is 34 cm tall (the primitive one 42 cm): everything that sits on or in the pot (the soil
     // sensor, the hose's drip end) drops by dy with it.
     const plantModel = MOD('potted_plant_02'), dy = plantModel ? 0.336 - 0.42 : 0;
-    let plant;
+    let plant; const plantLeaves = [];
     if (plantModel) {
       plantModel.position.set(-1.9, 0, -1.75); plantModel.rotation.y = 0.6; R.scene.add(plantModel);
       const byName = (n) => { let f = null; plantModel.traverse((o) => { if (!f && o.isMesh && o.name.includes(n)) f = o; }); return f; };
       plant = { group: plantModel, pot: byName('pot') || plantModel, soil: byName('dirt') };
+      plantModel.traverse((o) => { if (o.isMesh && o.name.includes('leaves')) plantLeaves.push(o); });
     } else plant = P.plant(-1.9, -1.75);
     // The soil darkens as it takes up water: 20% moisture reads dry and pale, 45% dark and wet. The model's soil is
     // textured: its colour is a multiplier on the photo (white dry, dark wet).
@@ -163,7 +170,19 @@ export default {
       return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
     })();
     let probeShown = null; const SOIL_GLOW_HOME = soilGlow.at.clone();
-    const pump = P.box(0.26, 0.2, 0.2, M.black, -1.35, 0.1, -1.5, 0.02);
+    // The pump unit: a matte graphite body with rounded edges, a slotted grille on its front, rubber feet and a thin aqua
+    // strip under the grille (NeuCharBox's own accessory), under a round reservoir with a cap.
+    const graphite = new THREE.MeshPhysicalMaterial({ color: 0x2B2F33, roughness: 0.5, metalness: 0.1, clearcoat: 0.25, clearcoatRoughness: 0.4 });
+    const pump = P.box(0.26, 0.19, 0.2, graphite, -1.35, 0.105, -1.5, 0.035);
+    {
+      const gc = document.createElement('canvas'); gc.width = 256; gc.height = 96; const g = gc.getContext('2d');
+      g.fillStyle = '#2B2F33'; g.fillRect(0, 0, 256, 96); g.fillStyle = '#0E1012'; for (let x = 10; x < 250; x += 14) { g.beginPath(); g.roundRect?.(x, 14, 7, 68, 3.5); g.fill(); }
+      const gt = new THREE.CanvasTexture(gc); gt.colorSpace = THREE.SRGBColorSpace; gt.anisotropy = 8;
+      const grille = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.064), new THREE.MeshStandardMaterial({ map: gt, roughness: 0.6, metalness: 0.2, polygonOffset: true, polygonOffsetFactor: -2 }));
+      grille.position.set(-1.37, 0.075, -1.3995); grille.receiveShadow = true; grille.raycast = () => {}; R.scene.add(grille); // taps go through to the body (the pump)
+      const band = P.box(0.17, 0.005, 0.003, new THREE.MeshStandardMaterial({ color: 0x6FD3CB, roughness: 0.4, emissive: 0x2FB5AC, emissiveIntensity: 0.4 }), -1.37, 0.031, -1.3995); band.castShadow = false; band.raycast = () => {};
+      for (const [dx, dz] of [[-0.1, -0.075], [0.1, -0.075], [-0.1, 0.075], [0.1, 0.075]]) P.cyl(0.012, 0.012, 0.01, M.rubber, -1.35 + dx, 0.005, -1.5 + dz, 12).raycast = () => {};
+    }
     // Water reservoir on top of the pump, so it's clear where the water comes from.
     // High tier: real glass (transmission refracts the water and the room behind it, with a clear-coat glint), the water
     // inside opaque so the transmission pass sees it. Low tier: the see-through plastic look (transmission re-renders
@@ -172,10 +191,11 @@ export default {
     const tankHi = new THREE.MeshPhysicalMaterial({ color: 0xF2FAFC, roughness: 0.04, metalness: 0, transmission: 1, thickness: 0.006, ior: 1.5, clearcoat: 1, clearcoatRoughness: 0.05, specularIntensity: 1 });
     const waterLo = new THREE.MeshStandardMaterial({ color: 0x4FA8CF, roughness: 0.2, transparent: true, opacity: 0.75 });
     const waterHi = new THREE.MeshPhysicalMaterial({ color: 0x8CC6DC, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.02 });
-    const tank = P.box(0.24, 0.2, 0.18, tankLo, -1.35, 0.3, -1.5, 0.012);
+    const tank = P.cyl(0.086, 0.086, 0.2, tankLo, -1.35, 0.3, -1.5, 48);
     tank.castShadow = false; tank.userData.noAO = true; tank.renderOrder = 1; // drawn after the water inside it
-    const water = P.box(0.22, 0.13, 0.16, waterLo, -1.35, 0.27, -1.5); let tankTier = null;
-    const tankLid = P.box(0.25, 0.012, 0.19, M.black, -1.35, 0.406, -1.5, 0.004);
+    const water = P.cyl(0.08, 0.08, 0.13, waterLo, -1.35, 0.268, -1.5, 48); let tankTier = null;
+    const tankLid = P.cyl(0.09, 0.09, 0.016, graphite, -1.35, 0.407, -1.5, 48);
+    P.cyl(0.091, 0.091, 0.008, graphite, -1.35, 0.204, -1.5, 48).raycast = () => {}; // the seat the reservoir stands in
     // Hose from the pump over the pot rim to a drip end 8 cm above the soil, its mouth turned down; clears the tank, the rim
     // and the sensor stake. The drip end is 12 cm from the plant's centre, just clear of the stems on the room's side: in
     // among the stems the drops were hidden from the front and the right.
@@ -247,7 +267,7 @@ export default {
     }
     // Door camera: a door viewer at eye height. Its lens sits in the door and looks out at the mat; the room side is
     // the body with an eyepiece and the status LED.
-    const camBody = P.box(0.022, 0.13, 0.075, M.black, -2.459, 1.5, 0.45, 0.008);
+    const camBody = P.box(0.022, 0.13, 0.075, new THREE.MeshPhysicalMaterial({ color: 0x141618, roughness: 0.35, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.08 }), -2.459, 1.5, 0.45, 0.01);
     const camEye = P.cyl(0.013, 0.013, 0.006, M.anodized, -2.447, 1.475, 0.45, 20); camEye.rotation.z = Math.PI / 2;
     const camLed = P.ledDot(-2.447, 1.545, 0.45, 0x2FBF71, 0.007);
     const cam = { group: P.group(camBody, camEye, camLed), led: camLed };
@@ -255,25 +275,30 @@ export default {
     const frame = MOD('hanging_picture_frame_02');
     if (frame) { R.scene.add(frame); frame.traverse((o) => { if (o.isMesh && /glass/.test(o.material.name)) { o.material = new THREE.MeshPhysicalMaterial({ color: 0xFFFFFF, roughness: 0.04, transparent: true, opacity: 0.1 }); o.castShadow = false; o.userData.noAO = true; } }); const fb = placeModel(THREE, frame, { x: 0, y: 1.6, z: -1.0, rotY: Math.PI / 2, s: 1.15, centreY: true }); frame.position.x += -2.499 - fb.min.x; P.onWall(frame, 1, 0, -2.5); }
     else P.picture(-2.48, 1.6, -1.0); // tagged with the left wall (x -2.5) by P.picture
-    const thermo = P.box(0.03, 0.11, 0.11, M.white, -2.483, 1.45, -0.3, 0.01);
-    const thermoCanvas = document.createElement('canvas'); thermoCanvas.width = 256; thermoCanvas.height = 144;
+    // A round smart thermostat: brushed-steel ring 10 cm across on a white wall plate, glass face over a round screen.
+    const thermo = P.cyl(0.05, 0.05, 0.026, new THREE.MeshStandardMaterial({ color: 0xC9CDD1, metalness: 1, roughness: 0.28 }), -2.485, 1.45, -0.3, 64); thermo.rotation.z = Math.PI / 2;
+    const thermoCanvas = document.createElement('canvas'); thermoCanvas.width = 256; thermoCanvas.height = 256;
     const thermoTex = new THREE.CanvasTexture(thermoCanvas); thermoTex.colorSpace = THREE.SRGBColorSpace;
-    const thermoScreen = P.screenPlane(0.07, 0.04, thermoTex); thermoScreen.rotation.y = Math.PI / 2; thermoScreen.position.set(-2.466, 1.46, -0.3); thermoScreen.material.emissiveIntensity = 0.7;
-    const thermoLed = P.ledDot(-2.466, 1.492, -0.34, 0xE0563A, 0.006); thermoLed.visible = false; P.onWall(P.group(thermoLed), 1, 0, -2.5); // alert LED, lit only in a fault
-    const thermoGlow = glow(-2.46, 1.492, -0.34, { wall: [1, 0, -2.5] });
+    const thermoScreen = new THREE.Mesh(new THREE.CircleGeometry(0.043, 64), new THREE.MeshPhysicalMaterial({ map: thermoTex, emissive: 0xffffff, emissiveMap: thermoTex, emissiveIntensity: 0.75, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.03 }));
+    thermoScreen.rotation.y = Math.PI / 2; thermoScreen.position.set(-2.4715, 1.45, -0.3); R.scene.add(thermoScreen);
+    const thermoLed = P.ledDot(-2.471, 1.488, -0.3, 0xE0563A, 0.005); thermoLed.visible = false; P.onWall(P.group(thermoLed), 1, 0, -2.5); // alert LED, lit only in a fault
+    const thermoGlow = glow(-2.465, 1.488, -0.3, { wall: [1, 0, -2.5] });
     // The room too cold for its set point (thermostat.cold, p3's heating what-if): a slow amber glow at the alert LED's
     // spot, never the red fault look: the thermostat answers, only the room is off target. The screen's amber "now" line
     // alone is a few pixels from the room camera.
-    const thermoWarn = glow(-2.46, 1.492, -0.34, { hex: 0xFFB020, wall: [1, 0, -2.5] });
+    const thermoWarn = glow(-2.465, 1.488, -0.3, { hex: 0xFFB020, wall: [1, 0, -2.5] });
     let thermoShown = -1; // numeric key of what the screen shows (-1 offline, -2 fault); update() builds no strings unless it changes
     // Set point large, measured room temperature small underneath (one canvas and texture, redrawn on change).
     // A fault fills the screen red, so it reads as an alarm even as a few pixels from across the room. warn: the room
     // is too cold for the set point (thermostat.cold), so the small "now" line turns amber.
     function thermoText(big, small, alarm = false, warn = false) {
-      const g = thermoCanvas.getContext('2d'); g.fillStyle = alarm ? '#5A120D' : '#0B0F14'; g.fillRect(0, 0, 256, 144);
+      // round screen: a dark face, an arc showing the set point on the 10–28 °C range, the set point big, "now" under it
+      const g = thermoCanvas.getContext('2d'); g.fillStyle = alarm ? '#5A120D' : '#05080B'; g.fillRect(0, 0, 256, 256);
+      const k = Math.min(1, Math.max(0, (parseFloat(big) - 10) / 18));
+      if (!alarm && Number.isFinite(k) && big !== '--') { g.lineCap = 'round'; g.lineWidth = 10; g.strokeStyle = '#1C2A30'; g.beginPath(); g.arc(128, 128, 104, Math.PI * 0.75, Math.PI * 2.25); g.stroke(); g.strokeStyle = warn ? '#FFB020' : '#29EEE5'; g.beginPath(); g.arc(128, 128, 104, Math.PI * 0.75, Math.PI * (0.75 + 1.5 * k)); g.stroke(); }
       g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillStyle = alarm ? '#FF7A62' : '#9FE3F0'; g.font = '600 70px Inter, "Segoe UI", sans-serif'; g.fillText(big, 128, small ? 56 : 72);
-      if (small) { g.fillStyle = alarm ? '#FFC2B6' : warn ? '#FFB020' : '#6FB3C2'; g.font = '30px Inter, "Segoe UI", sans-serif'; g.fillText(small, 128, 116); }
+      g.fillStyle = alarm ? '#FF7A62' : '#E8FBFF'; g.font = '600 74px Inter, "Segoe UI", sans-serif'; g.fillText(big, 128, small ? 118 : 128);
+      if (small) { g.fillStyle = alarm ? '#FFC2B6' : warn ? '#FFB020' : '#7FC9D6'; g.font = '28px Inter, "Segoe UI", sans-serif'; g.fillText(small, 128, 178); }
       thermoTex.needsUpdate = true;
     }
     thermoText('--', '');
@@ -333,7 +358,7 @@ export default {
           lamp.bulbMesh.material.emissive.copy(lampCol); lamp.bulbMesh.material.emissiveIntensity = 3.2 * Math.sqrt(b);
           lamp.shadeMat.emissive.copy(lampCol); lamp.shadeMat.emissiveIntensity = 0.45 * b;
         }
-        if (R.quality !== tankTier) { tankTier = R.quality; const hiT = tankTier === 'high'; tank.material = hiT ? tankHi : tankLo; water.material = hiT ? waterHi : waterLo; tank.renderOrder = hiT ? 0 : 1; }
+        if (R.quality !== tankTier) { tankTier = R.quality; const hiT = tankTier === 'high'; tank.material = hiT ? tankHi : tankLo; water.material = hiT ? waterHi : waterLo; tank.renderOrder = hiT ? 0 : 1; plantLeaves.forEach((m) => { m.castShadow = hiT; }); } // the model plant's 70k-triangle leaves cast shadows only on the high tier (2 ms of shadow passes on a phone)
         // The lamp's light follows its brightness in a fault too (dark over a red plug, or lit and stuck on).
         const lampBad = s.lamp.status === 'fault'; lampLed.visible = s.lamp.status !== 'offline';
         led(lampLed, lampBad ? 0xE0563A : 0x2FBF71, lampBad ? (blink ? 6 : 1) : 1.5); lampGlow(lampBad ? (blink ? 1 : 0.25) : 0);
