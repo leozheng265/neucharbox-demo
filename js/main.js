@@ -6,7 +6,7 @@ import { icon } from './engine/icons.js';
 import { createFlow, BEATS, quoted, WHATIF_HOW } from './engine/flow.js';
 import { SCENES, CUSTOM } from './scenes/index.js';
 import { SOCIAL, socialLinks } from './engine/social.js';
-import { createLive, LIVE_COPY } from './engine/live.js';
+import { createLive, LIVE_COPY, watchRequest } from './engine/live.js';
 import { createLiveView } from './engine/livechat.js';
 import { createClockCtl } from './engine/clockctl.js';
 import { createLiveTools } from './engine/livetools.js';
@@ -201,7 +201,9 @@ async function mountScene(meta, gen) {
   current = { scene, teardown() { live?.close(); flow?.cancel(); tools?.dispose(); R.dispose(); if (window.__ncb?.scene === scene) window.__ncb = null; } };
   // QA hooks (visual harness): the host's phase, the quiet-replay flag and the recorded choices.
   window.__ncb = { live, store, panel, tools, entry, player: flow.player, scene, R, flow, host: { get phase() { return flow.phase; }, get quiet() { return flow.quiet(); }, get running() { return flow.running; }, lastChoices: flow.lastChoices } };
-  await flow.start();
+  const started = flow.start();
+  if (live && watchRequest() != null) entry.open(); // ?watch: straight into live mode, attached to the edge devices' room
+  await started;
   } catch (e) {
     if (gen === mountGen) current = null;
     live?.close(); flow?.cancel(); tools?.dispose(); R.dispose();

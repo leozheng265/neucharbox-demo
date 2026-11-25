@@ -27,6 +27,8 @@ export const LIVE_COPY = {
   applied: 'Thanks. We read every application and send codes by email.',
   applyRate: 'Too many applications from this connection. Try again in an hour.',
   back: 'Back to guided requests',
+  watching: 'Watching the room your NeuCharBox drives: what the box does to these devices shows here as it happens. You can still change values by hand, move the clock, or plant a fault.',
+  nothingToWatch: 'No room to watch yet (start the virtual devices first), so this is a new room of your own.',
   intro: (n) => `Live mode is on: ${n === 1 ? 'this device runs' : `these ${n} devices run`} on the live server. Each card has its device's own actions. Change values by hand, move the clock, or plant a fault, and watch the event log.`,
   // the chat's input bar in live mode: where a future NCB terminal goes (disabled until one is connected)
   terminal: 'Connect an NCB to chat here',
@@ -152,7 +154,7 @@ export function whyOff(h, sceneId, base) {
 // beats(spec), track(on), resetRoom(), baseline(), editing(on), clock({ label, enabled, reason }), offerGuided(heading),
 // availability({ available, active }), and the live tools (js/engine/livetools.js): devices(list | null),
 // controls({ enabled, acting }), actionResult(id, verb, { ok, text }), faults(list | null), log(line | null).
-export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now(), sessionExtra = () => ({}) }) {
+export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now(), sessionExtra = () => ({}), watch = watchRequest }) {
   let code = null;            // the code for this visit (kept here too, so a blocked store still works)
   const api = createLiveApi({ base, fetch: doFetch, getCode: () => code ?? codes.get() });
   let closed = false, active = false, available = false, phase = 'off', advancing = false, clockLabel = null, lastRateAt = -Infinity;
@@ -421,9 +423,41 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (isObj(r?.clock) && finite(r.clock.hour) && typeof r.clock.label === 'string') { clockLabel = r.clock.label; controlsUi(); }
     return true;
   }
-  // Makes a session, its stream and its device list. false when it failed (already handled) or the visit moved on.
+  // Watch a room: attach to a session someone else drives (the virtual NCB edge devices) instead of making one. The
+  // session is the one ?watch=<id> names, else this code's most recently active one for this scene. null: none to watch.
+  async function attach(want) {
+    let sid = typeof want === 'string' && /^[0-9a-f]{16,64}$/i.test(want) ? want : null;
+    if (!sid) {
+      const l = await api.listSessions(scene.id);
+      sid = Array.isArray(l?.sessions) ? l.sessions.find((x) => x?.scene === scene.id)?.sessionId ?? null : null;
+    }
+    if (!sid) return null;
+    const s = await api.session(sid);
+    return s && typeof s.sessionId === 'string' && isObj(s.state) ? s : null;
+  }
+  // Makes a session (or, watching, attaches to one), its stream and its device list. false when it failed (already
+  // handled) or the visit moved on.
   async function newSession({ notice } = {}) {
     stream?.close(); stream = null;
+    const want = watch();
+    if (want != null) {
+      let w = null;
+      try { w = await attach(want); } catch (e) { if (gone()) return false; if (status(e) === 401) { unauthorized(); return false; } }
+      if (gone()) return false;
+      if (w) {
+        release(); forget();
+        sessionId = w.sessionId;
+        ui.devices?.(null); ui.log?.(null);
+        applyRoom(w.state, w.clock);
+        ui.editing?.(true);
+        showFaults([]);
+        openStream(finite(w.after) ? w.after : 0);
+        view.ncb(LIVE_COPY.watching);
+        await loadDevices(sessionId);
+        return !gone() && !!sessionId;
+      }
+      view.ncb(LIVE_COPY.nothingToWatch);
+    }
     let s;
     try {
       s = await api.createSession(scene.id, sessionExtra());
@@ -510,7 +544,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     setPhase('busy');
     if (!(await newSession()) || gone()) return;
     view.live(true);
-    view.ncb(LIVE_COPY.intro(n));
+    if (watch() == null) view.ncb(LIVE_COPY.intro(n)); // watching: newSession already said so
     ui.beats?.({ current: 'ask', recoverHidden: true, skippable: [] });
     idleStatus(); setPhase('idle');
   }
@@ -557,4 +591,13 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     get acting() { return acting ? { ...acting } : null; },
     get sessionId() { return sessionId; },
   };
+}
+
+// Watch mode, from the page URL: ?watch (attach to this code's newest room for the scene) or ?watch=<sessionId>.
+// null when not watching. Read on every (re)connect, so a reload keeps it.
+export function watchRequest() {
+  try {
+    const q = new URLSearchParams(globalThis.location?.search ?? '');
+    return q.has('watch') ? q.get('watch') ?? '' : null;
+  } catch { return null; }
 }

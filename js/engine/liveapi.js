@@ -61,6 +61,9 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
     apply: (form) => call('POST', 'apply', { body: form, auth: false }).then(() => {}),
     createSession: (scene, extra = {}) => call('POST', 'sessions', { body: { scene, ...extra } }),
     devices: (sid) => call('GET', sess(sid, 'devices')),
+    // Watch a room: the code's live sessions (newest first) and one session's current room with the event id to stream from.
+    listSessions: (scene) => call('GET', `sessions${scene ? `?scene=${enc(scene)}` : ''}`),
+    session: (sid) => call('GET', `sessions/${enc(sid)}`),
     // An action answers once its frames have played (paced like the device), so it gets the advance's long timeout.
     action: (sid, id, verb, args = {}) => call('POST', sess(sid, `devices/${enc(id)}/actions/${enc(verb)}`), { body: args ?? {}, ms: 40000 }),
     plantFault: (sid, device, mode) => call('POST', sess(sid, 'faults'), { body: mode ? { device, mode } : { device } }),
