@@ -68,14 +68,15 @@ export function pointLight(THREE, parent, at, { hex = 0xFFCF98, distance = 6, de
 // instead of many. The parts must have no maps (no uvs are kept). tint: each part's material colour becomes its vertex
 // colour (give a white, vertexColors material). consume: the parts leave their parent and free their geometry.
 export function mergeMeshes(THREE, meshes, material, { tint = false, consume = false } = {}) {
-  const pos = [], nrm = [], col = [], idx = [], v = new THREE.Vector3(), nm = new THREE.Matrix3();
+  const pos = [], nrm = [], col = [], uvs = [], idx = [], v = new THREE.Vector3(), nm = new THREE.Matrix3(); let hasUv = false;
   for (const m of meshes) {
     m.updateMatrix(); nm.getNormalMatrix(m.matrix);
-    const g = m.geometry, P = g.attributes.position, N = g.attributes.normal, base = pos.length / 3, c = m.material.color;
+    const g = m.geometry, P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv, base = pos.length / 3, c = m.material.color; if (U) hasUv = true;
     for (let i = 0; i < P.count; i++) {
       v.fromBufferAttribute(P, i).applyMatrix4(m.matrix); pos.push(v.x, v.y, v.z);
       v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); nrm.push(v.x, v.y, v.z);
       if (tint) col.push(c.r, c.g, c.b);
+      uvs.push(U ? U.getX(i) : 0, U ? U.getY(i) : 0); // kept for a textured material (the leaves)
     }
     if (g.index) for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i));
     else for (let i = 0; i < P.count; i++) idx.push(base + i);
@@ -83,6 +84,7 @@ export function mergeMeshes(THREE, meshes, material, { tint = false, consume = f
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   if (tint) geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  if (hasUv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(idx);
   const out = new THREE.Mesh(geo, material); out.castShadow = out.receiveShadow = true;
   if (consume) for (const m of meshes) { m.removeFromParent(); m.geometry.dispose(); }

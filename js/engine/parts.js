@@ -14,7 +14,7 @@ export function noiseTex(base, amount, size = 512) { const [c, g] = canvas(size,
 // exactly one canvas wide (a plank running off the right edge is drawn again, identically, at the left), grain stays
 // inside its row, and the tint varies per plank only (nothing that differs between opposite edges). Knots are rare,
 // faint and stretched along the grain.
-export function woodTex({ hue = 27, light = 60, rows = 9 } = {}) {
+export function woodTex({ hue = 27, light = 60, rows = 9, sat = 40 } = {}) {
   const w = 1024, h = 1024, [c, g] = canvas(w, h); const ph = h / rows, R = Math.random, nLines = Math.round(ph * 0.55);
   for (let r = 0; r < rows; r++) {
     const y0 = r * ph, lens = []; let sum = 0;
@@ -27,8 +27,8 @@ export function woodTex({ hue = 27, light = 60, rows = 9 } = {}) {
       const knot = R() < 0.14 ? [50 + R() * (len - 100), y0 + ph * (0.3 + R() * 0.4), 6 + R() * 3] : null;
       for (const px of [x, x + w, x - w]) {
         if (px >= w || px + len <= 0) continue;
-        g.fillStyle = `hsl(${hu}, 40%, ${L}%)`; g.fillRect(px, y0, len, ph);
-        for (const [y, lw, ll, la, a, b, e] of lines) { g.strokeStyle = `hsla(${hu - 3}, 45%, ${ll}%, ${la})`; g.lineWidth = lw; g.beginPath(); g.moveTo(px, y); g.bezierCurveTo(px + len * 0.3, y + a, px + len * 0.7, y + b, px + len, y + e); g.stroke(); }
+        g.fillStyle = `hsl(${hu}, ${sat}%, ${L}%)`; g.fillRect(px, y0, len, ph);
+        for (const [y, lw, ll, la, a, b, e] of lines) { g.strokeStyle = `hsla(${hu - 3}, ${sat + 5}%, ${ll}%, ${la})`; g.lineWidth = lw; g.beginPath(); g.moveTo(px, y); g.bezierCurveTo(px + len * 0.3, y + a, px + len * 0.7, y + b, px + len, y + e); g.stroke(); }
         if (knot) { const [kx, ky, kr] = knot; g.save(); g.translate(px + kx, ky); g.scale(3.2, 1); const rg = g.createRadialGradient(0, 0, 0.5, 0, 0, kr); rg.addColorStop(0, `hsla(${hu - 8}, 45%, ${L - 26}%, .6)`); rg.addColorStop(0.3, `hsla(${hu - 6}, 45%, ${L - 17}%, .3)`); rg.addColorStop(1, `hsla(${hu - 4}, 42%, ${L - 9}%, 0)`); g.fillStyle = rg; g.fillRect(-kr, -kr, 2 * kr, 2 * kr); g.restore(); }
         g.fillStyle = 'rgba(30,15,5,.55)'; g.fillRect(px + len - 2, y0, 3, ph); // butt joint at the plank's end
       }
@@ -39,12 +39,96 @@ export function woodTex({ hue = 27, light = 60, rows = 9 } = {}) {
   }
   grain(g, w, h, 14); return c;
 }
-export function rugTex() {
-  const [c, g] = canvas(512, 512); g.fillStyle = '#9A8E7E'; g.fillRect(0, 0, 512, 512);
-  g.strokeStyle = '#7E7364'; g.lineWidth = 14; g.strokeRect(30, 30, 452, 452); g.lineWidth = 4; g.strokeRect(60, 60, 392, 392);
-  for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { g.fillStyle = (i + j) % 2 ? '#8A7F70' : '#A69A89'; g.fillRect(90 + i * 55, 90 + j * 55, 50, 50); }
-  grain(g, 512, 512, 30); return c;
+// ---- noise-driven surfaces (seeded, so every visit draws the same room) ----
+// Tileable value-noise fBm in [0, 1]: `cells` lattice cells across the tile at the first octave, doubling per octave.
+function rng(seed) { let s = (seed >>> 0) || 1; return () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296; }
+export function fbm(size, cells = 4, octaves = 5, seed = 1, gain = 0.5) {
+  const out = new Float32Array(size * size), R = rng(seed); let amp = 1, norm = 0;
+  for (let o = 0; o < octaves; o++) {
+    const n = cells << o; if (n > size) break; const g = Float32Array.from({ length: n * n }, R);
+    for (let y = 0; y < size; y++) {
+      const fy = (y * n) / size, y0 = Math.floor(fy), ty = fy - y0, sy = ty * ty * (3 - 2 * ty), r0 = y0 * n, r1 = ((y0 + 1) % n) * n;
+      for (let x = 0; x < size; x++) {
+        const fx = (x * n) / size, x0 = Math.floor(fx), tx = fx - x0, sx = tx * tx * (3 - 2 * tx), x1 = (x0 + 1) % n;
+        const a = g[r0 + x0], b = g[r0 + x1], c = g[r1 + x0], d = g[r1 + x1];
+        out[y * size + x] += amp * ((a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy);
+      }
+    }
+    norm += amp; amp *= gain;
+  }
+  for (let i = 0; i < out.length; i++) out[i] /= norm; return out;
 }
+// Paint a size×size canvas from fn(x, y, i) → [r, g, b] (0–255).
+function paint(size, fn) { const [c, g] = canvas(size, size); const img = g.getImageData(0, 0, size, size), d = img.data; for (let y = 0, i = 0; y < size; y++) for (let x = 0; x < size; x++, i++) { const [r, gg, b] = fn(x, y, i); d[i * 4] = r; d[i * 4 + 1] = gg; d[i * 4 + 2] = b; d[i * 4 + 3] = 255; } g.putImageData(img, 0, 0); return c; }
+const hex3 = (h) => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
+// Plaster: soft trowel clouds plus a fine sand grain. Returns colour, bump and roughness canvases.
+export function plasterTex(base = 0xEAE6DE, seed = 7) {
+  const S = 512, lo = fbm(S, 3, 5, seed), hi = fbm(S, 64, 2, seed + 1), [r, g, b] = hex3(base);
+  const col = paint(S, (x, y, i) => { const k = 1 + (lo[i] - 0.5) * 0.07 + (hi[i] - 0.5) * 0.05; return [r * k, g * k, b * k]; });
+  const bump = paint(S, (x, y, i) => { const v = 255 * (0.65 * hi[i] + 0.35 * lo[i]); return [v, v, v]; });
+  const rough = paint(S, (x, y, i) => { const v = 255 * (0.82 + 0.18 * lo[i]); return [v, v, v]; });
+  return { col, bump, rough };
+}
+// Plain-weave upholstery: warp and weft threads crossing over and under, each thread a slightly different shade (slub),
+// plus a low cloud of wear. `threads` per tile edge (integer, so it tiles). Colour, and a height map for the bump.
+export function fabricTex(base = 0x5E6266, { threads = 112, seed = 3, size = 512 } = {}) {
+  const lo = fbm(size, 4, 4, seed), R = rng(seed + 9), slubU = Float32Array.from({ length: threads }, () => (R() - 0.5) * 0.12), slubV = Float32Array.from({ length: threads }, () => (R() - 0.5) * 0.12), [r, g, b] = hex3(base);
+  const H = new Float32Array(size * size), C = new Float32Array(size * size);
+  for (let y = 0, i = 0; y < size; y++) for (let x = 0; x < size; x++, i++) {
+    const u = (x * threads) / size, v = (y * threads) / size, iu = Math.floor(u), iv = Math.floor(v), warp = (iu + iv) % 2 === 0;
+    const h = warp ? Math.sin(Math.PI * (u - iu)) : Math.sin(Math.PI * (v - iv));
+    H[i] = 0.25 + 0.75 * h; C[i] = (0.8 + 0.2 * h) * (1 + (warp ? slubU[iu] : slubV[iv]) + (lo[i] - 0.5) * 0.12);
+  }
+  const col = paint(size, (x, y, i) => [r * C[i], g * C[i], b * C[i]]);
+  const bump = paint(size, (x, y, i) => { const v = 255 * H[i]; return [v, v, v]; });
+  return { col, bump };
+}
+// Furniture wood: long grain along the tile's x, growth rings bent by a noise field, pores as fine dark streaks.
+export function grainTex({ light = [176, 134, 92], dark = [120, 82, 52], rings = 14, seed = 5, size = 512 } = {}) {
+  const warp = fbm(size, 2, 4, seed), pore = fbm(size, 128, 1, seed + 3), fine = fbm(size, 8, 3, seed + 5);
+  return paint(size, (x, y, i) => {
+    const t = (y / size) * rings + warp[i] * 1.6 + fine[i] * 0.3, f = t - Math.floor(t), ring = Math.pow(Math.abs(Math.sin(Math.PI * f)), 4);
+    const k = Math.min(1, 0.4 + 0.32 * ring + 0.3 * (fine[i] - 0.5)) * (pore[i] > 0.8 ? 0.82 : 1);
+    return [dark[0] + (light[0] - dark[0]) * (1 - k), dark[1] + (light[1] - dark[1]) * (1 - k), dark[2] + (light[2] - dark[2]) * (1 - k)];
+  });
+}
+// Wool rug: oatmeal field, a double border with a thin aqua line, a faint lattice, and a fibre grain over all of it.
+export function rugTex(size = 1024) {
+  const fib = fbm(size, 256, 1, 11), cloud = fbm(size, 4, 4, 12), R = rng(13), field = [200, 189, 170], band = [150, 136, 118], aqua = [128, 186, 182];
+  const c = paint(size, (x, y, i) => {
+    const e = Math.min(x, y, size - 1 - x, size - 1 - y) / size; // 0 at the edge
+    let col = field;
+    if (e < 0.06) col = band; else if (e > 0.075 && e < 0.083) col = aqua; else if (e > 0.1 && e < 0.108) col = band;
+    else if (e > 0.108) { const u = (x / size) * 7, v = (y / size) * 5, d = Math.abs(((u + v) % 1) - 0.5) + Math.abs(((u - v + 100) % 1) - 0.5); if (d < 0.06) col = [186, 174, 154]; }
+    const k = (0.86 + 0.24 * fib[i]) * (1 + (cloud[i] - 0.5) * 0.08) + (R() - 0.5) * 0.06; return [col[0] * k, col[1] * k, col[2] * k];
+  });
+  return c;
+}
+// A leaf: midrib, paired side veins curving to the tip, a darker edge and a little mottling. u across, v along (tip at v 1).
+export function leafTex() {
+  const [c, g] = canvas(128, 256), n = fbm(64, 4, 3, 51);
+  const lg = g.createLinearGradient(0, 256, 0, 0); lg.addColorStop(0, '#4E8A44'); lg.addColorStop(1, '#3B7436'); g.fillStyle = lg; g.fillRect(0, 0, 128, 256);
+  for (let i = 0; i < 64; i++) for (let j = 0; j < 64; j++) { const k = n[j * 64 + i] - 0.5; g.fillStyle = k > 0 ? `rgba(120,170,90,${k * 0.35})` : `rgba(20,50,20,${-k * 0.35})`; g.fillRect(i * 2, j * 4, 2, 4); }
+  g.strokeStyle = 'rgba(190,220,150,.75)'; g.lineWidth = 3; g.beginPath(); g.moveTo(64, 256); g.lineTo(64, 0); g.stroke();
+  g.strokeStyle = 'rgba(170,210,140,.4)'; g.lineWidth = 1.4;
+  for (let i = 0; i < 9; i++) { const y = 240 - i * 26; for (const sx of [-1, 1]) { g.beginPath(); g.moveTo(64, y); g.quadraticCurveTo(64 + sx * 34, y - 18, 64 + sx * 60, y - 52); g.stroke(); } }
+  const eg = g.createLinearGradient(0, 0, 128, 0); eg.addColorStop(0, 'rgba(20,45,20,.35)'); eg.addColorStop(0.18, 'rgba(20,45,20,0)'); eg.addColorStop(0.82, 'rgba(20,45,20,0)'); eg.addColorStop(1, 'rgba(20,45,20,.35)'); g.fillStyle = eg; g.fillRect(0, 0, 128, 256);
+  return c;
+}
+// Leaf blade geometry, centred like the old ellipsoid leaf (length along z, ±len/2): a pointed oval, folded a little along
+// the midrib and arched along its length, so it catches light like a leaf and not a pebble.
+export function leafGeometry(len = 0.4, wid = 0.14) {
+  const geo = new THREE.PlaneGeometry(1, 1, 4, 12), pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const xn = pos.getX(i), t = pos.getY(i) + 0.5; // xn in [-0.5, 0.5] across, t 0 at the stalk, 1 at the tip
+    const w = Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.08)), 0.75) * (1 - 0.25 * t) * wid;
+    pos.setXYZ(i, xn * w, 0.07 * len * Math.sin(Math.PI * t) - 0.1 * len * t * t + Math.abs(xn) * w * 0.35, (t - 0.5) * len);
+  }
+  geo.computeVertexNormals(); return geo;
+}
+export function grassTex(size = 256) { const a = fbm(size, 8, 5, 21), b = fbm(size, 64, 2, 22); return paint(size, (x, y, i) => { const k = 0.75 + 0.4 * a[i] + 0.2 * (b[i] - 0.5); return [70 * k, 110 * k, 62 * k]; }); }
+// Terracotta: warm clay with mottling and a little sand.
+export function clayTex(size = 256) { const a = fbm(size, 4, 5, 31), b = fbm(size, 96, 1, 32); return paint(size, (x, y, i) => { const k = 0.88 + 0.22 * a[i] + 0.1 * (b[i] - 0.5); return [178 * k, 96 * k, 66 * k]; }); }
 export function holeGridTex() { // optical breadboard: 25 mm pitch holes
   const [c, g] = canvas(1024, 1024); g.fillStyle = '#2B2E31'; g.fillRect(0, 0, 1024, 1024); grain(g, 1024, 1024, 10);
   for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) { g.fillStyle = '#0C0D0E'; g.beginPath(); g.arc(32 + i * 64, 32 + j * 64, 7, 0, Math.PI * 2); g.fill(); g.fillStyle = 'rgba(255,255,255,.08)'; g.beginPath(); g.arc(32 + i * 64, 30 + j * 64, 8, Math.PI, Math.PI * 2); g.fill(); }
@@ -69,37 +153,43 @@ export function labelTex(text, { bg = '#101418', fg = '#7CF0D8', size = 40, w = 
 
 // ---------- materials ----------
 export function materials() {
-  const woodC = woodTex(), plasterC = noiseTex('#E9E4DA', 22), fabricC = noiseTex('#5E6266', 46), rugC = rugTex();
+  // Floor planks about 19 cm wide (the tile repeats 3 times across a 5 m room), in a natural oak rather than an orange one.
+  const woodC = woodTex({ hue: 31, light: 63, sat: 30 }), plaster = plasterTex(), fabric = fabricTex(0x5E6266), weave = fabricTex(0xB9C7BE, { threads: 80, seed: 4 }), rugC = rugTex(), linen = fabricTex(0xF3EBDD, { threads: 96, seed: 8 });
+  const walnut = grainTex({ light: [112, 74, 46], dark: [58, 36, 22], rings: 12, seed: 5 }), oak = grainTex({ light: [214, 180, 136], dark: [168, 128, 86], rings: 16, seed: 6 }), clay = clayTex();
+  const lin = (c, rep) => tex(c, rep, false);
   const M = {
-    floor:   new THREE.MeshPhysicalMaterial({ map: tex(woodC, [1.6, 1.6]), bumpMap: tex(woodC, [1.6, 1.6], false), bumpScale: 0.6, roughness: 0.42, clearcoat: 0.35, clearcoatRoughness: 0.6 }), // at 0.35 the coat mirrored the sky into a bloom haze seen from behind a room
-    wall:    new THREE.MeshStandardMaterial({ map: tex(plasterC, [3, 2]), bumpMap: tex(plasterC, [3, 2], false), bumpScale: 0.25, roughness: 0.95 }),
+    floor:   new THREE.MeshPhysicalMaterial({ map: tex(woodC, [3, 3]), bumpMap: lin(woodC, [3, 3]), bumpScale: 0.6, roughness: 0.42, clearcoat: 0.35, clearcoatRoughness: 0.6 }), // at 0.35 the coat mirrored the sky into a bloom haze seen from behind a room
+    // Plaster: soft trowel clouds and a sand grain, with the roughness varying a little across the wall.
+    wall:    new THREE.MeshStandardMaterial({ map: tex(plaster.col, [2.5, 1.5]), bumpMap: lin(plaster.bump, [2.5, 1.5]), bumpScale: 0.35, roughnessMap: lin(plaster.rough, [2.5, 1.5]), roughness: 1 }),
     wallDark:new THREE.MeshStandardMaterial({ color: 0x5C6166, roughness: 0.95 }),
-    ceiling: new THREE.MeshStandardMaterial({ color: 0xF4F1EB, roughness: 1 }),
+    ceiling: new THREE.MeshStandardMaterial({ map: tex(plaster.col, [2, 2]), color: 0xFBF9F4, roughness: 1 }),
     trim:    new THREE.MeshStandardMaterial({ color: 0xF6F3EC, roughness: 0.6 }),
-    sofa:    new THREE.MeshStandardMaterial({ map: tex(fabricC, [5, 5]), bumpMap: tex(fabricC, [5, 5], false), bumpScale: 0.35, roughness: 1 }),
-    cushion: new THREE.MeshStandardMaterial({ color: 0xB9C7BE, roughness: 1, bumpMap: tex(fabricC, [4, 4], false), bumpScale: 0.3 }),
-    bedding: new THREE.MeshStandardMaterial({ color: 0xE8E4DC, roughness: 1, bumpMap: tex(fabricC, [4, 4], false), bumpScale: 0.3 }),
-    rug:     new THREE.MeshStandardMaterial({ map: tex(rugC), bumpMap: tex(rugC, [1, 1], false), bumpScale: 0.5, roughness: 1 }),
-    pot:     new THREE.MeshStandardMaterial({ color: 0xA9573A, roughness: 0.85 }),
+    // Upholstery: a woven cloth with sheen, the soft bright rim fabric takes at grazing angles.
+    sofa:    new THREE.MeshPhysicalMaterial({ map: tex(fabric.col, [6, 6]), bumpMap: lin(fabric.bump, [6, 6]), bumpScale: 0.5, roughness: 0.95, sheen: 1, sheenRoughness: 0.55, sheenColor: 0x8E979E }),
+    cushion: new THREE.MeshPhysicalMaterial({ map: tex(weave.col, [3, 3]), bumpMap: lin(weave.bump, [3, 3]), bumpScale: 0.4, roughness: 1, sheen: 1, sheenRoughness: 0.5, sheenColor: 0xE4EEE8 }),
+    bedding: new THREE.MeshStandardMaterial({ color: 0xE8E4DC, roughness: 1, bumpMap: lin(fabric.bump, [4, 4]), bumpScale: 0.3 }),
+    rug:     new THREE.MeshPhysicalMaterial({ map: tex(rugC), bumpMap: lin(rugC, [1, 1]), bumpScale: 0.8, roughness: 1, sheen: 0.8, sheenRoughness: 0.8, sheenColor: 0xEDE4D4 }),
+    pot:     new THREE.MeshStandardMaterial({ map: tex(clay, [2, 1]), bumpMap: lin(clay, [2, 1]), bumpScale: 0.4, roughness: 0.85 }),
     soil:    new THREE.MeshStandardMaterial({ color: 0x3B2A1E, roughness: 1 }),
-    leaf:    new THREE.MeshStandardMaterial({ color: 0x3E7A3A, roughness: 0.55, side: THREE.DoubleSide }),
+    leaf:    new THREE.MeshPhysicalMaterial({ map: tex(leafTex()), color: 0xF2F2F2, roughness: 0.45, clearcoat: 0.3, clearcoatRoughness: 0.4, sheen: 0.4, sheenRoughness: 0.5, sheenColor: 0xBFE3A6, side: THREE.DoubleSide }),
     stem:    new THREE.MeshStandardMaterial({ color: 0x4E6B3A, roughness: 0.8 }),
-    wood:    new THREE.MeshStandardMaterial({ color: 0x4A2E1A, roughness: 0.5 }),
-    woodLight:new THREE.MeshStandardMaterial({ color: 0xC9A576, roughness: 0.6 }),
+    // Varnished woods: grain in the colour and the bump, under a clear coat that catches the light.
+    wood:    new THREE.MeshPhysicalMaterial({ map: tex(walnut), bumpMap: lin(walnut), bumpScale: 0.25, roughness: 0.6, clearcoat: 0.6, clearcoatRoughness: 0.28 }),
+    woodLight:new THREE.MeshPhysicalMaterial({ map: tex(oak), bumpMap: lin(oak), bumpScale: 0.25, roughness: 0.62, clearcoat: 0.45, clearcoatRoughness: 0.35 }),
     metal:   new THREE.MeshStandardMaterial({ color: 0xC2C7CC, roughness: 0.3, metalness: 0.95 }),
     steel:   new THREE.MeshStandardMaterial({ color: 0x8A9096, roughness: 0.45, metalness: 0.8 }),
     black:   new THREE.MeshStandardMaterial({ color: 0x2C3035, roughness: 0.5, metalness: 0.4 }),
     anodized:new THREE.MeshStandardMaterial({ color: 0x1B1D20, roughness: 0.55, metalness: 0.6 }),
     hub:     new THREE.MeshPhysicalMaterial({ color: 0xF8FBFA, roughness: 0.28, clearcoat: 0.9, clearcoatRoughness: 0.15 }),
     white:   new THREE.MeshStandardMaterial({ color: 0xF2F4F3, roughness: 0.6 }),
-    shade:   new THREE.MeshStandardMaterial({ color: 0xF1E5CF, roughness: 0.95, side: THREE.DoubleSide, emissive: 0xFFC98A, emissiveIntensity: 0 }),
+    shade:   new THREE.MeshStandardMaterial({ map: tex(linen.col, [6, 2]), color: 0xFFFFFF, roughness: 0.95, side: THREE.DoubleSide, emissive: 0xFFC98A, emissiveIntensity: 0 }),
     glass:   new THREE.MeshPhysicalMaterial({ color: 0xDDE8EE, roughness: 0.08, transparent: true, opacity: 0.12, envMapIntensity: 0.4 }),
     slat:    new THREE.MeshStandardMaterial({ color: 0xF5F1E8, roughness: 0.7 }),
     door:    new THREE.MeshStandardMaterial({ color: 0xE6E1D8, roughness: 0.7 }),
     frame:   new THREE.MeshStandardMaterial({ color: 0x1E1E1E, roughness: 0.6 }),
     art:     new THREE.MeshStandardMaterial({ color: 0xC9D7D2, roughness: 0.9 }),
-    outside: new THREE.MeshStandardMaterial({ color: 0x4F7448, roughness: 1 }),
-    tree:    new THREE.MeshStandardMaterial({ color: 0x4F7D48, roughness: 1 }),
+    outside: new THREE.MeshStandardMaterial({ map: tex(grassTex(), [40, 40]), roughness: 1 }),
+    tree:    new THREE.MeshStandardMaterial({ color: 0x5A8A50, roughness: 1, flatShading: true }),
     yellow:  new THREE.MeshStandardMaterial({ color: 0xE4B53A, roughness: 0.6 }),
     cardboard:new THREE.MeshStandardMaterial({ color: 0xB58A57, roughness: 1 }),
     rubber:  new THREE.MeshStandardMaterial({ color: 0x1A1C1E, roughness: 0.9 }),
@@ -156,7 +246,18 @@ export function parts(scene, M) {
       ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), M.outside); ground.rotation.x = -Math.PI / 2; ground.position.set(0, -0.02, -8); ground.receiveShadow = true; scene.add(ground);
       // Trees 12–15 m back, past the reach of an orbiting camera; they also hide with the back wall, so a camera out in
       // the garden never looks at the room through (or from inside) a tree.
-      for (let i = 0; i < 7; i++) { const t = new THREE.Mesh(new THREE.ConeGeometry(0.7 + Math.random() * 0.6, 2.5 + Math.random() * 2, 7), M.tree); t.position.set(-4.5 + i * 1.8 + Math.random(), 1.2, -12 - Math.random() * 3); t.castShadow = true; onWall(t, 0, 1, zb); scene.add(t); trees.push(t); }
+      // Each tree: a trunk under a crown of three lumpy, flat-shaded blobs (one jittered geometry per tree), in two greens.
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6B5643, roughness: 1 }), crownMats = [M.tree, M.tree.clone()]; crownMats[1].color.set(0x4C7A46);
+      const TR = rng(41);
+      for (let i = 0; i < 7; i++) {
+        const t = new THREE.Group(), s = 0.8 + TR() * 0.5; t.position.set(-4.5 + i * 1.8 + TR(), 0, -12 - TR() * 3);
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * s, 0.11 * s, 1.6 * s, 7), trunkMat); trunk.position.y = 0.8 * s; trunk.castShadow = true; t.add(trunk);
+        const geo = new THREE.IcosahedronGeometry(1, 2), pos = geo.attributes.position, v = new THREE.Vector3();
+        for (let k = 0; k < pos.count; k++) { v.fromBufferAttribute(pos, k); const n = 1 + 0.18 * Math.sin(v.x * 4.1 + i) * Math.sin(v.y * 3.7) * Math.sin(v.z * 4.3 + i * 0.7); pos.setXYZ(k, v.x * n, v.y * n, v.z * n); }
+        geo.computeVertexNormals();
+        for (const [dx, dy, dz, r] of [[0, 2.2, 0, 0.95], [0.5, 1.8, 0.2, 0.7], [-0.45, 1.9, -0.1, 0.75]]) { const c = new THREE.Mesh(geo, crownMats[i % 2]); c.position.set(dx * s, dy * s, dz * s); c.scale.set(r * s, r * s * 1.1, r * s); c.castShadow = true; t.add(c); }
+        onWall(t, 0, 1, zb); scene.add(t); trees.push(t);
+      }
     } else {
       walls.back.push(wall(w, h, 0, h / 2, zb, 0));
     }
@@ -239,7 +340,7 @@ export function parts(scene, M) {
     const put = (m) => { m.castShadow = m.receiveShadow = true; g.add(m); return m; };
     const pot = put(new THREE.Mesh(new THREE.CylinderGeometry(0.24 * scale, 0.18 * scale, 0.42 * scale, 32), M.pot)); pot.position.y = 0.21 * scale;
     const soil = new THREE.Mesh(new THREE.CircleGeometry(0.22 * scale, 32), M.soil); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.42 * scale + 0.003; soil.receiveShadow = true; g.add(soil);
-    const leafGeo = new THREE.SphereGeometry(1, 12, 8); leafGeo.scale(0.07 * scale, 0.015 * scale, 0.2 * scale);
+    const leafGeo = leafGeometry(0.4 * scale, 0.14 * scale);
     const leaves = [];
     for (let i = 0; i < 16; i++) { const a0 = i * 2.39996, a = front ? 0.15 + ((a0 % (2 * Math.PI)) / (2 * Math.PI)) * (Math.PI - 0.3) : a0, rad = (0.06 + (i % 4) * 0.03) * scale, h = (0.55 + (i % 5) * 0.09) * scale;
       const stem = put(new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.01, h - 0.42 * scale, 6), M.stem)); stem.position.set(Math.cos(a) * rad * 0.5, (h + 0.42 * scale) / 2, Math.sin(a) * rad * 0.5); stem.rotation.z = Math.cos(a) * 0.25; stem.rotation.x = -Math.sin(a) * 0.25;

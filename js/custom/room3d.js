@@ -9,6 +9,8 @@
 // Every model sits in a holder that only room3d places, and hides when the device leaves: the renderer keeps a shadow
 // twin of each wall-hung mesh, shown while every untagged ancestor of that mesh is visible, so a removed wall device
 // takes its shadow with it.
+// assets (optional, js/engine/assets.js loadAssets(ROOM_ASSETS)): the real floor, walls, window view and the hub's side
+// table, passed on to each model as `A` (devices/index.js); without them the room is built from primitives as before.
 // update() runs every frame; a device with no slice in `state` yet (one just added while building) shows its catalog
 // initial state. Each model's update also gets the room's light outside, env = { hour, sky } (sky: 0 at night, 1 by day),
 // for parts that show the daylight (the blinds' own pane). The page passes its `store` too; the room reads only the
@@ -20,6 +22,8 @@ import { mergeMeshes } from './devices/kit.js';
 import { START_HOUR } from './scene.js';
 
 const HX = ROOM.w / 2, HZ = ROOM.d / 2;
+// What the custom room asks js/engine/assets.js for (the same files as Home: one download serves both).
+export const ROOM_ASSETS = { models: ['side_table_01', 'potted_plant_02', 'modern_ceiling_lamp_01', 'vintage_electric_kettle'], textures: ['wood_floor', 'painted_plaster_wall'], hdri: 'charolettenbrunn_park_2k.hdr' };
 const MAPS = ['map', 'bumpMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap'];
 // Real point lights in the room at once. Lit lights take the slots first (in layout order), then dark ones fill what is
 // left; a light past the budget still glows (shade and bulb) but lights nothing: twenty point lights in every lit
@@ -41,16 +45,26 @@ export function skyAt(hour) {
   return Math.min(1, day + 0.35 * dusk);
 }
 
-export function createRoom3d({ R, P, M, THREE }) {
+export function createRoom3d({ R, P, M, THREE, assets = null }) {
   R.scene.background = new THREE.Color(0xDCEBF3);
+  const A = assets?.models ? assets : null;
+  // The view out of the window: the photographed garden (dimmed with the clock), or the sky dome without assets.
+  if (A?.hdri && R.useHDRBackground) R.useHDRBackground(A.hdri, { rotation: Math.PI / 2 }); else R.useSky?.();
   // The renderer's sun shadow covers 10 m across, sized for 5 m rooms. Seen from the sun, this room reaches 5.4 m from
   // the frustum's centre in the morning, so a corner would go unshadowed (sunlit through the wall): widen it.
   const sunCam = R.lights?.sun?.shadow?.camera;
   if (sunCam) { Object.assign(sunCam, { left: -6.4, right: 6.4, top: 6, bottom: -4.8 }); sunCam.updateProjectionMatrix(); }
-  // The floor's planks at Home's scale (its 5 m floor repeats the texture 1.6 times).
-  const floorMat = M.floor.clone();
-  for (const k of ['map', 'bumpMap']) if (M.floor[k]) { floorMat[k] = M.floor[k].clone(); floorMat[k].repeat.set(1.6 * ROOM.w / 5, 1.6 * ROOM.d / 5); }
-  P.roomShell({ w: ROOM.w, d: ROOM.d, h: ROOM.h, floorMat, window: WINDOW });
+  // The floor's planks at Home's scale (its 5 m floor repeats the texture M.floor's repeat times).
+  // With assets: Home's real wood floor and painted plaster (its relief only, under white paint), tiled at Home's scale.
+  const tiled = (set, rep, extra) => { const m = {}; for (const k of ['map', 'normalMap', 'roughnessMap']) if (set?.[k]) { const t = set[k].clone(); t.repeat.set(...rep); t.needsUpdate = true; t.userData.shared = false; m[k] = t; } return new THREE.MeshStandardMaterial({ ...m, roughness: 1, ...extra }); };
+  let floorMat, wallMat = undefined;
+  if (A?.textures?.wood_floor) floorMat = tiled(A.textures.wood_floor, [2.5 * ROOM.w / 5, 2.5 * ROOM.d / 5], { roughness: 0.9 });
+  else { floorMat = M.floor.clone(); for (const k of ['map', 'bumpMap']) if (M.floor[k]) { floorMat[k] = M.floor[k].clone(); floorMat[k].repeat.set(M.floor[k].repeat.x * ROOM.w / 5, M.floor[k].repeat.y * ROOM.d / 5); } }
+  if (A?.textures?.painted_plaster_wall) { wallMat = tiled(A.textures.painted_plaster_wall, [3.5, 1.3], { color: 0xF2EEE7 }); wallMat.map = null; wallMat.normalScale.set(0.6, 0.6); }
+  const shell = P.roomShell({ w: ROOM.w, d: ROOM.d, h: ROOM.h, floorMat, window: WINDOW, ...(wallMat ? { wallMat } : {}) });
+  if (A?.hdri) { for (const t of shell.trees) t.removeFromParent(); shell.ground?.removeFromParent(); } // the photo has its own
+  // Contact shadows under whatever stands on the floor; sync() redraws them when the layout changes.
+  R.addContactShadows?.({ w: ROOM.w, d: ROOM.d });
   // Skirting and crown on the right and front walls too, as in Home: they hide with their walls, a few mm lower than
   // the shell's so no two trims share a face in a corner.
   for (const [th, ty] of [[0.098, 0.049], [0.057, ROOM.h - 0.0295]]) {
@@ -59,11 +73,21 @@ export function createRoom3d({ R, P, M, THREE }) {
   }
 
   // The hub on a small stand, so a 14 cm box reads from across an 8 m room; the whole stand is its tap target.
+  // With assets the stand is a real oak side table (Poly Haven side_table_01, 50 × 40 cm at this scale).
   const hub = (() => {
-    const top = P.box(0.42, 0.03, 0.42, M.woodLight, 0, 0.435, 0, 0.008);
-    const legs = mergeMeshes(THREE, [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sz]) => P.box(0.03, 0.42, 0.03, M.black, sx * 0.18, 0.21, sz * 0.18)), M.black, { consume: true });
-    const unit = P.hub(0, 0.45, 0);
-    const root = P.group(top, legs, unit.group);
+    let parts, topY = 0.45;
+    const table = A?.copy?.('side_table_01');
+    if (table) {
+      table.scale.setScalar(0.9); table.updateMatrixWorld(true);
+      const b = new THREE.Box3().setFromObject(table), c = b.getCenter(new THREE.Vector3());
+      table.position.set(-c.x, -b.min.y, -c.z); topY = b.max.y - b.min.y; R.scene.add(table); parts = [table];
+    } else {
+      const top = P.box(0.42, 0.03, 0.42, M.woodLight, 0, 0.435, 0, 0.008);
+      const legs = mergeMeshes(THREE, [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sz]) => P.box(0.03, 0.42, 0.03, M.black, sx * 0.18, 0.21, sz * 0.18)), M.black, { consume: true });
+      parts = [top, legs];
+    }
+    const unit = P.hub(0, topY, 0);
+    const root = P.group(...parts, unit.group);
     R.addPickable(root, 'hub');
     return { root, ledMat: unit.ledMat, hi: null, shells: null, cut: false };
   })();
@@ -96,7 +120,7 @@ export function createRoom3d({ R, P, M, THREE }) {
     root.add(p);
   }
   function add(d, ui) {
-    const model = ui.model({ THREE, P, M });
+    const model = ui.model({ THREE, P, M, A });
     tapProxy(model.root, typeOf(d.type)?.mount);
     const holder = new THREE.Group(); holder.add(model.root); R.scene.add(holder);
     R.addPickable(model.pick || model.root, d.id);
@@ -120,13 +144,13 @@ export function createRoom3d({ R, P, M, THREE }) {
     R.removePickable(id); R.unping?.(id);
     o.holder.visible = false; o.holder.removeFromParent();
     // its meshes' own geometry (never a sprite's: three shares one geometry across every sprite, labels and glows too)
-    o.holder.traverse((x) => { if (x.isMesh && !x.userData.isShell) x.geometry.dispose(); });
+    o.holder.traverse((x) => { if (x.isMesh && !x.userData.isShell && !x.geometry.userData.shared) x.geometry.dispose(); }); // never a loaded model's (assets.js: shared by its copies)
     // its own materials and their maps (a screen's CanvasTexture); never the shared M ones, nor a texture tagged shared (the LED glow)
     const shared = new Set(Object.values(M)), kept = new Set();
     for (const m of shared) for (const k of MAPS) if (m?.[k]) kept.add(m[k]);
     o.holder.traverse((x) => {
       for (const m of [].concat(x.material || [])) {
-        if (shared.has(m)) continue;
+        if (shared.has(m) || m.userData.shared) continue;
         for (const k of MAPS) { const t = m[k]; if (t?.dispose && !kept.has(t) && !t.userData.shared) t.dispose(); }
         m.dispose();
       }
@@ -146,6 +170,7 @@ export function createRoom3d({ R, P, M, THREE }) {
       place(o, d, t.mount, ui); order.push(d.id);
     }
     litKey = null; dealSlots();
+    if (R.contact) R.contact.dirty = true; // devices moved, came or went: their contact shadows follow
   }
 
   // A tapped device's highlight pulse (parts.js highlighter), made on its first focus: its shells are a second mesh per

@@ -24,7 +24,7 @@ import { CUSTOM_COPY as C } from './copy.js';
 import { createCustomController } from './controller.js';
 import { passGate } from './gate.js';
 import { sceneFor, initialFor, cameraFor } from './scene.js';
-import { createRoom3d } from './room3d.js';
+import { createRoom3d, ROOM_ASSETS } from './room3d.js';
 import { createInventory, tileOrder } from './inventory.js';
 import { createThumbs } from './thumbs.js';
 import { createPlacement } from './placement.js';
@@ -84,7 +84,11 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   setCurrent({ scene: null, teardown });
   try {
     const M = partsMod.materials(), P = partsMod.parts(R.scene, M);
-    const room3d = createRoom3d({ R, P, M, THREE: R.THREE });
+    // The room's real floor, walls and window view (js/engine/assets.js); a failed download leaves the primitive room.
+    let assets = null;
+    try { assets = await (await import('../engine/assets.js')).loadAssets(ROOM_ASSETS); } catch (e) { console.warn('[ncb] assets not loaded, using the primitive room', e); }
+    if (!isCurrent() || torn) return;
+    const room3d = createRoom3d({ R, P, M, THREE: R.THREE, assets });
     const chat = createChat(chatEl, { onPromptText: () => {} }); // live mode's input bar is a disabled placeholder: nothing is sent
     const chatLog = chatEl.querySelector('.chat-log');
 

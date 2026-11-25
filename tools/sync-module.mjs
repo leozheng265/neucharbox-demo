@@ -1,7 +1,7 @@
 // Copies the demo into the NCF module that serves it: node tools/sync-module.mjs [--check] <module dir>
 //   <module dir> is Senparc.Xncf.NeuCharBoxLive in NcfPackageSources; the copy goes to its LiveDemo/ folder (embedded in
-//   the module and served at /live/demo/ on the NCF site). Only what the page loads is copied: index.html, css/, js/ and
-//   vendor/. js/live-config.js gets the module's API base (the site the page came from) in place of the public page's
+//   the module and served at /live/demo/ on the NCF site). Only what the page loads is copied: index.html, css/, js/,
+//   vendor/ and assets/. js/live-config.js gets the module's API base (the site the page came from) in place of the public page's
 //   empty one. Files no longer in the demo are removed. With --check it writes nothing and exits 1 if the copy differs.
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname, relative, sep } from 'node:path';
@@ -15,7 +15,7 @@ if (!existsSync(join(moduleDir, 'Senparc.Xncf.NeuCharBoxLive.csproj'))) { consol
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dest = join(moduleDir, 'LiveDemo');
-const PARTS = ['index.html', 'css', 'js', 'vendor'];
+const PARTS = ['index.html', 'css', 'js', 'vendor', 'assets'];
 const CONFIG = 'js/live-config.js';
 const PUBLIC_LINE = "export const LIVE_CONFIG = { apiBase: '' };";
 // The page is at <site>/live/demo/, the API at <site>/live/api: two folders up is the site, under any path base.
