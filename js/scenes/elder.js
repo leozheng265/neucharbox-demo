@@ -62,6 +62,104 @@ const P2_MESSAGE = line((st) => (st.get('plan.warnFirst')
   ? 'Off, and confirmed: the plug says off and the meter reads 0 W. Messaged you again: "It was still on at 18:17, so I switched it off at the plug."'
   : 'Off, and confirmed: the plug says off and the meter reads 0 W. Messaged you: "Mum\'s kettle was on for 10 minutes, so I switched it off at the plug at 18:12."'));
 
+// ── room-building helpers (inlined, so the scene needs no extra import) ─────────────────────────────────────────────
+// Place a loaded model by its bounding box (js/engine/assets.js place()), as home.js does.
+function placeModel(THREE, obj, { x = 0, y = 0, z = 0, rotY = 0, s = 1, centreY = false } = {}) {
+  obj.rotation.y = rotY; obj.scale.setScalar(s); obj.position.set(0, 0, 0); obj.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(obj), c = b.getCenter(new THREE.Vector3());
+  obj.position.set(x - c.x, centreY ? y - c.y : y - b.min.y, z - c.z); obj.updateMatrixWorld(true);
+  return new THREE.Box3().setFromObject(obj);
+}
+// A rounded box as one smooth mesh (as js/custom/devices/elder.js): radius r, `seg` samples per 45° of bend, `div` cuts
+// across the flat part (for a shape that is deformed afterwards, the pillow). UVs run 0–1 across each face, or in
+// metres × uvScale (wood grain). Far fewer triangles than RoundedBoxGeometry.
+function rbox(THREE, w, h, d, r, { seg = 2, div = [1, 1, 1], uvScale = 0 } = {}) {
+  const half = [w / 2, h / 2, d / 2];
+  r = Math.max(1e-4, Math.min(r, ...half.map((x) => x - 1e-4)));
+  const a = half.map((x) => x - r), bend = (k) => r * Math.tan((k / seg) * (Math.PI / 4));
+  const axis = (i) => { const s = []; for (let k = seg; k >= 1; k--) s.push(-a[i] - bend(k)); for (let j = 0; j <= div[i]; j++) s.push(-a[i] + (2 * a[i] * j) / div[i]); for (let k = 1; k <= seg; k++) s.push(a[i] + bend(k)); return s; };
+  const S = [0, 1, 2].map(axis), pos = [], nrm = [], uv = [], idx = [], p = [0, 0, 0], q = [0, 0, 0];
+  for (let n = 0; n < 3; n++) for (const sg of [1, -1]) {
+    const u = sg > 0 ? (n + 1) % 3 : (n + 2) % 3, v = sg > 0 ? (n + 2) % 3 : (n + 1) % 3, U = S[u], V = S[v], base = pos.length / 3;
+    for (let j = 0; j < V.length; j++) for (let i = 0; i < U.length; i++) {
+      p[n] = sg * half[n]; p[u] = U[i]; p[v] = V[j];
+      for (let k = 0; k < 3; k++) q[k] = p[k] - Math.max(-a[k], Math.min(a[k], p[k]));
+      const L = Math.hypot(q[0], q[1], q[2]);
+      for (let k = 0; k < 3; k++) { nrm.push(q[k] / L); pos.push(p[k] - q[k] + (q[k] / L) * r); }
+      uv.push(uvScale ? U[i] * uvScale : (U[i] + half[u]) / (2 * half[u]), uvScale ? V[j] * uvScale : (V[j] + half[v]) / (2 * half[v]));
+    }
+    for (let j = 0; j < V.length - 1; j++) for (let i = 0; i < U.length - 1; i++) { const A = base + j * U.length + i, B = A + 1, C = A + U.length + 1, D = A + U.length; idx.push(A, B, C, A, C, D); }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx);
+  return geo;
+}
+// A turned profile [[r, y], …] about y, walked with the solid on the left (r to the right, y up) so faces point out.
+const lathe = (THREE, pts, n = 48) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), n);
+// A loose piece for merge(): a mesh at (x, y, z), rotated, not in the scene.
+const piece = (THREE, geo, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); return m; };
+// Static parts in one material as one mesh (one draw call); the pieces' geometries are freed.
+function merge(THREE, pieces, material) {
+  const pos = [], nrm = [], uvs = [], idx = [], v = new THREE.Vector3(), nm = new THREE.Matrix3();
+  for (const m of pieces) {
+    m.updateMatrix(); nm.getNormalMatrix(m.matrix);
+    const g = m.geometry, Pa = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv, base = pos.length / 3;
+    for (let i = 0; i < Pa.count; i++) {
+      v.fromBufferAttribute(Pa, i).applyMatrix4(m.matrix); pos.push(v.x, v.y, v.z);
+      v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); nrm.push(v.x, v.y, v.z);
+      uvs.push(U ? U.getX(i) : 0, U ? U.getY(i) : 0);
+    }
+    if (g.index) for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i)); else for (let i = 0; i < Pa.count; i++) idx.push(base + i);
+    g.dispose();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); geo.setIndex(idx);
+  const out = new THREE.Mesh(geo, material); out.castShadow = out.receiveShadow = true; return out;
+}
+const smooth = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
+// The duvet as one draped sheet (js/custom/devices/elder.js duvetGeo), here turned down: it covers the bed from the
+// sleep sensor's foot edge to the foot, rolled over the sides and the foot and hanging down, with a double layer along
+// its turned-down head edge, so the sensor strip across the middle of the mattress stays in view. Bed-local metres.
+function fold(t, flat, rr, hang) {
+  if (t <= flat) return [t, 0];
+  const s = t - flat, arc = (rr * Math.PI) / 2;
+  if (s <= arc) return [flat + rr * Math.sin(s / rr), rr * (1 - Math.cos(s / rr))];
+  return [flat + rr, rr + Math.min(s - arc, hang)];
+}
+function duvetGeo(THREE, B) {
+  const arcX = (B.rollX * Math.PI) / 2, arcH = (B.rollH * Math.PI) / 2, arcF = (B.rollF * Math.PI) / 2;
+  const HL = (B.footZ - B.headZ) / 2, ZC = (B.footZ + B.headZ) / 2, SX = B.flatX + arcX + B.hangX;
+  const axis = (start, pieces) => { const s = [start]; let at = start; for (const [len, n] of pieces) { for (let i = 1; i <= n; i++) s.push(at + (len * i) / n); at += len; } return s; };
+  const xs = axis(-SX, [[B.hangX, 2], [arcX, 4], [2 * B.flatX, 18], [arcX, 4], [B.hangX, 2]]);
+  const zs = axis(-(HL + arcH + B.hangH), [[B.hangH, 1], [arcH, 4], [2 * HL, 16], [arcF, 4], [B.hangF, 2]]);
+  const z0 = zs[0], zSpan = zs[zs.length - 1] - z0, pos = [], uv = [], idx = [];
+  for (const q of zs) for (const s of xs) {
+    const [hx, dx] = fold(Math.abs(s), B.flatX, B.rollX, B.hangX);
+    const [hz, dz] = q < 0 ? fold(-q, HL, B.rollH, B.hangH) : fold(q, HL, B.rollF, B.hangF);
+    let x = Math.sign(s) * hx, z = q < 0 ? ZC - hz : ZC + hz;
+    const k = smooth((B.flatX - hx) / 0.14) * smooth((HL - hz) / 0.12);
+    const turn = 0.02 * (1 - smooth((z - B.headZ - 0.15) / 0.06)); // the turned-down fold: two layers thick
+    const loft = 0.012 + turn + k * (0.02 + 0.007 * Math.cos((Math.PI * (z - B.headZ)) / 0.25) ** 2 + 0.003 * Math.sin(x * 9 + z * 4) * Math.sin(z * 7));
+    const y = B.top + loft - Math.max(dx, dz);
+    if (dx > B.rollX) x += Math.sign(s) * 0.007 * Math.sin(z * 17) * ((dx - B.rollX) / B.hangX); // soft vertical folds in the drapes
+    if (dz > B.rollF && q > 0) z += 0.007 * Math.sin(x * 17) * ((dz - B.rollF) / B.hangF);
+    pos.push(x, y, z); uv.push((s + SX) / (2 * SX), (q - z0) / zSpan);
+  }
+  const nu = xs.length;
+  for (let j = 0; j < zs.length - 1; j++) for (let i = 0; i < nu - 1; i++) { const A = j * nu + i, Bq = A + 1, C = A + nu + 1, D = A + nu; idx.push(A, D, C, A, C, Bq); }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  return geo;
+}
+// A canvas texture drawn by draw(g, w, h).
+function canvasTex(THREE, draw, w = 128, h = 128) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
+}
+
 export default {
   id: 'elder',
   title: 'Elder care',
@@ -81,13 +179,30 @@ export default {
     hall:   { icon: 'bulb', name: 'Hall light', ref: 'the hall light', initial: { on: false, brightness: 0 }, active: (s) => s.brightness > 0.02, format: (s) => (s.brightness > 0.02 ? `on · ${Math.round(s.brightness * 100)}%` : 'off'), faultText: 'off the network' },
   },
 
-  build({ R, P, M, THREE, store, parts, quiet }) {
+  // Real-world assets (js/engine/assets.js, assets/CREDITS.md). Without them (Node tests, a failed download) the flat
+  // builds from primitives and code-built furniture.
+  assets: {
+    models: ['painted_wooden_nightstand', 'ArmChair_01', 'vintage_electric_kettle', 'wooden_table_02', 'potted_plant_02', 'potted_plant_04', 'hanging_picture_frame_02'],
+    textures: ['wood_floor', 'painted_plaster_wall', 'poly_wool_herringbone'],
+    hdri: 'charolettenbrunn_park_2k.hdr',
+  },
+
+  build({ R, P, M, THREE, store, parts, quiet, assets = null }) {
     const isQuiet = typeof quiet === 'function' ? quiet : () => false; // true while a what-if replays the request quietly (A2)
-    // ceilShadows: the pendant's cone and the lamp shade darken the ceiling above them instead of leaving a hot spot
-    const shell = P.roomShell({ w: 7, d: 5, h: 2.7, window: { x: 1.9, y: 1.6, ww: 1.4, wh: 1.1 }, ceilShadows: true });
-    // The garden's trees stand 12–15 m back for eye-level cameras; from up here their tops still showed at the top of the
-    // frame, over the back wall. Push them further back.
-    for (const t of shell.trees) t.position.z -= 9;
+    const A = assets?.models ? assets : null, MOD = (id) => A?.models[id] || null, TX = (id) => A?.textures?.[id] || null;
+    const pbr = (id, rep, extra = {}) => { const set = TX(id); if (!set) return null; const m = {}; for (const k of ['map', 'normalMap', 'roughnessMap']) if (set[k]) { const t = set[k].clone(); t.repeat.set(...rep); t.needsUpdate = true; m[k] = t; } return new THREE.MeshStandardMaterial({ ...m, roughness: 1, ...extra }); };
+    const put = (geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); return P.add(m); }; // in the scene, casting and taking shadows
+    const pc = (geo, x, y, z, rx, ry, rz) => piece(THREE, geo, x, y, z, rx, ry, rz);
+    // The view out of the kitchen window: the photographed garden (HDRI), dimmed with the clock by R.daylight. Without it,
+    // the flat keeps its plain background colour.
+    if (A?.hdri && R.useHDRBackground) R.useHDRBackground(A.hdri, { rotation: Math.PI });
+    // Oak boards (2 m per tile) and white paint over the plaster's relief only (the photo's grey wash dropped), as in Home.
+    const floorMat = pbr('wood_floor', [3.5, 2.5], { roughness: 0.9 }), wallMat = pbr('painted_plaster_wall', [3, 1.3], { color: 0xF2EEE7 }); if (wallMat) { wallMat.map = null; wallMat.normalScale.set(0.6, 0.6); }
+    // ceilShadows: the pendant's shade and the lamp shade darken the ceiling above them instead of leaving a hot spot
+    const shell = P.roomShell({ w: 7, d: 5, h: 2.7, window: { x: 1.9, y: 1.6, ww: 1.4, wh: 1.1 }, ceilShadows: true, ...(floorMat ? { floorMat } : {}), ...(wallMat ? { wallMat } : {}) });
+    // The photo has its own trees and lawn: the shell's go. Without it, the garden's trees stand 12–15 m back for eye-level
+    // cameras; from up here their tops still showed at the top of the frame, over the back wall, so they go further back.
+    if (A?.hdri) { for (const t of shell.trees) t.removeFromParent(); shell.ground?.removeFromParent(); } else for (const t of shell.trees) t.position.z -= 9;
     // partition between bedroom and hall with a doorway, in the shell's wall material: like the walls (and the door leaf,
     // below) it casts shadows from both faces. Cast from its far face only, a lamp on one side lit a thin line along the
     // partition's foot and up its corner with the back wall on the other side.
@@ -125,42 +240,120 @@ export default {
     const doorPivot = new THREE.Group(); doorPivot.position.set(-0.5, 0, -0.97); R.scene.add(doorPivot);
     // the leaf fills the frame (up into the head trim, across to the latch jamb): with a gap, the hall light drew a thin
     // stripe across the bedroom walls through it while the door was shut
-    const doorM = M.door.clone(); doorM.shadowSide = THREE.DoubleSide;
+    const doorM = M.door.clone(); doorM.shadowSide = THREE.DoubleSide; doorM.color.set(0xF1EEE8); doorM.roughness = 0.45;
     const doorLeaf = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.09, 0.94), doorM); doorLeaf.position.set(0, 1.045, 0.47); doorLeaf.castShadow = doorLeaf.receiveShadow = true; doorPivot.add(doorLeaf);
-    for (const kx of [0.04, -0.04]) { const knob = new THREE.Mesh(new THREE.SphereGeometry(0.02, 12, 12), M.metal); knob.position.set(kx, 1.0, 0.8); knob.receiveShadow = true; doorPivot.add(knob); } // a knob on each face (in the leaf's shadow: the hall light doesn't reach the bedroom one)
-    const contact = P.box(0.03, 0.02, 0.06, M.white, -0.415, 2.0, 0.0); // door contact on the hall face of the latch jamb
-    // bedroom: bed, bedside table, night light, rug, picture
-    P.box(1.05, 0.25, 1.95, M.woodLight, -2.3, 0.2, -1.5, 0.01); [[-0.48, -0.9], [0.48, -0.9], [-0.48, 0.9], [0.48, 0.9]].forEach((p) => P.box(0.06, 0.08, 0.06, M.wood, -2.3 + p[0], 0.04, -1.5 + p[1]));
-    const mattress = P.box(0.98, 0.18, 1.85, M.bedding, -2.3, 0.415, -1.5, 0.03);
-    P.box(0.9, 0.12, 0.65, M.cushion, -2.3, 0.53, -0.925, 0.04); P.box(0.7, 0.09, 0.4, M.white, -2.3, 0.53, -2.15, 0.03); // duvet folded at the foot, pillow
-    P.box(1.05, 0.53, 0.06, M.woodLight, -2.3, 0.585, -2.45); // headboard, down onto the frame (no seam from behind)
+    // A painted four-panel leaf (as the custom bedroom_door): raised fields 6 mm proud on both faces, a shade deeper than
+    // the stiles and rails, which are the leaf itself; a satin-nickel lever on a rose each side (in the lock rail, where
+    // the knobs were) and three hinges on the bedroom face's hinge edge (the leaf swings into the bedroom).
+    const nickel = new THREE.MeshStandardMaterial({ color: 0xB9BDC1, metalness: 1, roughness: 0.28 });
+    {
+      const panelM = doorM.clone(); panelM.color.set(0xE6E2DA);
+      const fields = []; for (const sx of [-1, 1]) for (const [z, y, h] of [[0.275, 1.535, 0.8], [0.665, 1.535, 0.8], [0.275, 0.57, 0.7], [0.665, 0.57, 0.7]]) fields.push(pc(rbox(THREE, 0.012, h, 0.27, 0.005, { seg: 1 }), sx * 0.02, y, z));
+      doorPivot.add(merge(THREE, fields, panelM));
+      const hw = [];
+      for (const sx of [-1, 1]) {
+        const cyl = (r, h, x) => pc(new THREE.CylinderGeometry(r, r, h, 24), x, 1.0, 0.86, 0, 0, Math.PI / 2); // along x
+        hw.push(cyl(0.026, 0.008, sx * 0.024), cyl(0.009, 0.05, sx * 0.045), pc(rbox(THREE, 0.022, 0.017, 0.125, 0.0075), sx * 0.069, 1.0, 0.8075));
+        hw.push(pc(new THREE.CylinderGeometry(0.016, 0.016, 0.006, 20), sx * 0.023, 0.85, 0.86, 0, 0, Math.PI / 2)); // key rose
+      }
+      for (const y of [0.25, 1.05, 1.85]) hw.push(pc(new THREE.CylinderGeometry(0.007, 0.007, 0.09, 12), -0.024, y, 0.004));
+      const hardware = merge(THREE, hw, nickel); hardware.castShadow = false; doorPivot.add(hardware); // in the leaf's shadow: the hall light doesn't reach the bedroom lever
+    }
+    // door contact on the hall face of the latch jamb, glossy white, its magnet on the leaf beside it
+    const sensorM = new THREE.MeshPhysicalMaterial({ color: 0xF4F5F2, roughness: 0.35, clearcoat: 0.8, clearcoatRoughness: 0.15 });
+    const contact = put(rbox(THREE, 0.016, 0.065, 0.024, 0.005), sensorM, -0.422, 1.98, 0.0);
+    { const magnet = new THREE.Mesh(rbox(THREE, 0.01, 0.04, 0.014, 0.003, { seg: 1 }), sensorM); magnet.position.set(0.025, 1.98, 0.915); magnet.castShadow = false; magnet.receiveShadow = true; doorPivot.add(magnet); }
+    // bedroom: bed, bedside table, night light, rug, picture, plant
+    // The bed (as the custom bed_sensor): a single bed, 1 × 2 m, head against the back wall. An oak frame with a boarded
+    // headboard, a mattress in a fitted sheet with piping, a pillow and a duvet with a soft sheen, turned down to the foot
+    // so the sleep sensor across the middle of the mattress shows its state. Built in the bed's own frame (origin on the
+    // floor at the bed's centre, head toward -z).
+    const bed = new THREE.Group(); bed.position.set(-2.3, 0, -1.48); R.scene.add(bed);
+    const inBed = (m, shadow = true) => { m.castShadow = shadow; m.receiveShadow = true; bed.add(m); return m; };
+    {
+      const W = { seg: 1, uvScale: 1.5 }, F = (w, h, d, r, x, y, z) => pc(rbox(THREE, w, h, d, r, W), x, y, z);
+      inBed(merge(THREE, [
+        ...[-1, 1].map((sx) => F(0.065, 1.0, 0.065, 0.012, sx * 0.4675, 0.5, -0.9675)), // head posts (the legs too)
+        F(1.0, 0.07, 0.065, 0.02, 0, 0.965, -0.9675), F(0.87, 0.07, 0.05, 0.01, 0, 0.3, -0.9675), // cap and lower rail
+        ...[0, 1, 2, 3, 4].map((i) => F(0.174, 0.6, 0.024, 0.006, -0.348 + i * 0.174, 0.63, -0.968)), // boards: their rounded edges read as V-grooves
+        ...[-1, 1].map((sx) => F(0.04, 0.13, 1.87, 0.008, sx * 0.48, 0.185, 0)), // side rails
+        ...[-1, 1].map((sx) => F(0.065, 0.29, 0.065, 0.012, sx * 0.4675, 0.145, 0.9675)), F(0.87, 0.15, 0.04, 0.008, 0, 0.175, 0.97), // low foot end
+        F(0.9, 0.025, 1.8, 0.004, 0, 0.24, 0), // the slatted base the mattress lies on
+      ], M.woodLight));
+    }
+    const piping = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, w, h); g.strokeStyle = '#D9D7D1'; g.lineWidth = 3; g.strokeRect(7, 7, w - 14, h - 14); });
+    const mattress = inBed(new THREE.Mesh(rbox(THREE, 0.93, 0.2, 1.87, 0.045), new THREE.MeshPhysicalMaterial({ color: 0xF1F0EC, map: piping, roughness: 0.92, sheen: 0.6, sheenRoughness: 0.6, sheenColor: 0xFFFFFF })));
+    mattress.position.set(0, 0.352, 0); // top at 0.452
+    const fabric = (hex, bump) => new THREE.MeshPhysicalMaterial({ color: hex, roughness: 0.92, sheen: 1, sheenRoughness: 0.45, sheenColor: 0xFFFFFF, bumpMap: M.cushion.bumpMap, bumpScale: bump });
+    {
+      // the pillow: a soft box squeezed thin toward its edges
+      const pg = rbox(THREE, 0.6, 0.13, 0.38, 0.055, { seg: 2, div: [5, 1, 3] }), pp = pg.attributes.position;
+      for (let i = 0; i < pp.count; i++) { const k = Math.max(Math.abs(pp.getX(i)) / 0.3, Math.abs(pp.getZ(i)) / 0.19); pp.setY(i, pp.getY(i) * (1 - 0.5 * Math.min(1, k) ** 3)); }
+      pg.computeVertexNormals();
+      const pillow = inBed(new THREE.Mesh(pg, fabric(0xF7F5F1, 0.25))); pillow.position.set(0, 0.512, -0.75); pillow.rotation.y = 0.03;
+      const duvetMat = fabric(0xD4E0DF, 0.35); duvetMat.side = THREE.DoubleSide; duvetMat.sheenColor.setHex(0xF4FAFA);
+      inBed(new THREE.Mesh(duvetGeo(THREE, { top: 0.452, flatX: 0.447, rollX: 0.045, hangX: 0.15, headZ: 0.22, rollH: 0.03, hangH: 0.004, footZ: 0.917, rollF: 0.045, hangF: 0.15 }), duvetMat));
+    }
+    // the sleep sensor: a pressure strip across the middle of the mattress, left uncovered so its state shows, with its
+    // lead down the hall side to the controller (below)
     const matMat = M.black.clone(); matMat.metalness = 0.1; matMat.roughness = 0.8;
-    const mat = P.box(0.9, 0.012, 0.5, matMat, -2.3, 0.512, -1.6); // pressure strip across the middle of the mattress, left uncovered so its state shows
-    P.table(-1.5, -2.2, 0.45, 0.4, 0.55, M.woodLight, M.woodLight);
-    // night light: the floor-lamp parts cut down to a small lamp on the bedside table, on its 20 cm base disc (the lamp's
-    // origin sits 8 mm under the table top at 0.57, so the 3 cm disc stands 2.2 cm proud of it, round the pole's foot);
+    const mat = inBed(new THREE.Mesh(rbox(THREE, 0.9, 0.008, 0.5, 0.003, { seg: 1 }), matMat), false); mat.position.set(0, 0.457, -0.12);
+    const cordM = new THREE.MeshStandardMaterial({ color: 0xE9EBEA, roughness: 0.5 });
+    inBed(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([[0.44, 0.457, 0.0], [0.468, 0.445, 0.05], [0.472, 0.36, 0.2], [0.49, 0.262, 0.5], [0.506, 0.2, 0.7]].map((p) => new THREE.Vector3(...p))), 24, 0.0025, 6), cordM), false);
+    // Bedside table: the painted wooden nightstand, back to the wall (else a small table); the night light stands on its top.
+    const standModel = MOD('painted_wooden_nightstand'); let standTop = 0.57;
+    if (standModel) { R.scene.add(standModel); standTop = placeModel(THREE, standModel, { x: -1.5, z: -2.235 }).max.y; } else P.table(-1.5, -2.2, 0.45, 0.4, 0.55, M.woodLight, M.woodLight);
+    // night light: the floor-lamp parts cut down to a small table lamp on the bedside table (its origin 8 mm under the
+    // top). A glazed ceramic base in a pale aqua, a brushed-brass stem and a linen drum shade with a weave you can see;
     // shaded: the shade blocks its bulb (P.floorLamp; on phones, see the spot lights below)
-    const nl = P.floorLamp(-1.5, -2.2, { y: 0.562, height: 0.643, shadeScale: 0.5, base: true, shaded: true }); nl.bulb.distance = 4;
-    const nlBase = nl.group.children.find((m) => m.isMesh && ![nl.pole, nl.shade, nl.bulbMesh].includes(m)); // the disc: tapping it picks the lamp
+    const nl = P.floorLamp(-1.5, -2.2, { y: standTop - 0.008, height: 0.643, shadeScale: 0.5, base: false, shaded: true }); nl.bulb.distance = 4;
+    nl.pole.material = new THREE.MeshPhysicalMaterial({ color: 0xC9A46A, metalness: 1, roughness: 0.32, clearcoat: 0.3, clearcoatRoughness: 0.3 });
+    const nlBase = new THREE.Mesh(lathe(THREE, [[0, 0.008], [0.05, 0.008], [0.056, 0.014], [0.068, 0.045], [0.074, 0.09], [0.07, 0.13], [0.052, 0.17], [0.03, 0.2], [0.022, 0.215], [0.024, 0.225], [0, 0.226]], 40),
+      new THREE.MeshPhysicalMaterial({ color: 0xDCEBE8, roughness: 0.22, clearcoat: 0.9, clearcoatRoughness: 0.08 })); // tapping it picks the lamp
+    nlBase.castShadow = nlBase.receiveShadow = true; nl.group.add(nlBase);
+    for (const sm of [nl.shadeMat, nl.skin?.material]) if (sm) { sm.bumpMap = M.cushion.bumpMap; sm.bumpScale = 0.6; sm.needsUpdate = true; }
     // The walls are single-sided (a cut-away): what hangs on a wall hides with it when the camera orbits behind that wall
     // (userData.wall, renderer.js). The shell tags its own window, trims and trees, P.picture its frame; the right and
-    // front trims are tagged above, the upper cabinets and the kettle plug below.
-    P.rug(-2.0, -0.2, 1.6, 1.2); P.picture(-3.48, 1.6, -1.2, 0.6, 0.45);
-    // hallway: motion sensor (small dome on a plate, high on the partition), hall pendant
-    const pirPlate = P.box(0.015, 0.12, 0.12, M.white, -0.4325, 2.24, 0.6);
-    const pir = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), M.white); pir.rotation.z = -Math.PI / 2; pir.position.set(-0.425, 2.25, 0.6); R.scene.add(pir);
-    const pirLed = P.ledDot(-0.424, 2.197, 0.6, 0x2FBF71, 0.008);
+    // front trims are tagged above, the picture frame, the upper cabinets and the kettle plug below.
+    // The rug: its pattern drawn in code over a real wool weave's relief, above the floor's contact shadows.
+    const rugMat = pbr('poly_wool_herringbone', [3.3, 2.5]); if (rugMat) { rugMat.map = M.rug.map; rugMat.normalScale.set(1.4, 1.4); }
+    if (rugMat) { const rug = P.box(1.6, 0.012, 1.2, rugMat, -2.0, 0.006, -0.2); rug.castShadow = false; } else P.rug(-2.0, -0.2, 1.6, 1.2);
+    R.addContactShadows?.({ w: 7, d: 5, y: rugMat ? 0.016 : 0.009 }); // the soft dark where furniture meets the floor (renderer.js)
+    const frame = MOD('hanging_picture_frame_02');
+    if (frame) {
+      R.scene.add(frame);
+      frame.traverse((o) => { if (o.isMesh && /glass/.test(o.material.name)) { o.material = new THREE.MeshPhysicalMaterial({ color: 0xFFFFFF, roughness: 0.04, transparent: true, opacity: 0.1 }); o.castShadow = false; o.userData.noAO = true; } });
+      const fb = placeModel(THREE, frame, { x: 0, y: 1.6, z: -1.2, rotY: Math.PI / 2, s: 0.85, centreY: true }); frame.position.x += -3.499 - fb.min.x; P.onWall(frame, 1, 0, -3.5);
+    } else P.picture(-3.48, 1.6, -1.2, 0.6, 0.45);
+    const plant = MOD('potted_plant_02'); if (plant) { plant.position.set(-3.0, 0, 1.95); plant.rotation.y = 0.6; R.scene.add(plant); } // in the bedroom's front corner
+    // hallway: motion sensor high on the partition's hall face, hall pendant
+    // The PIR (as the custom hallway_motion): a slim wall plate with a short swivel neck, a rounded white head tilted down
+    // at the hall and a faceted fresnel dome on its front, the status LED above the dome. Built facing +z in a frame
+    // turned to face the hall (+x).
+    const pirAt = new THREE.Group(); pirAt.position.set(-0.44, 2.24, 0.6); pirAt.rotation.y = Math.PI / 2; R.scene.add(pirAt);
+    const absM = new THREE.MeshPhysicalMaterial({ color: 0xF1F2F0, roughness: 0.58, clearcoat: 0.1, clearcoatRoughness: 0.5 });
+    const pirPlate = merge(THREE, [pc(rbox(THREE, 0.056, 0.08, 0.01, 0.005), 0, 0, 0.005), pc(rbox(THREE, 0.03, 0.03, 0.02, 0.006), 0, 0.004, 0.018)], absM); pirAt.add(pirPlate);
+    const pirHead = new THREE.Group(); pirHead.position.set(0, 0.004, 0.026); pirHead.rotation.x = 0.3; pirAt.add(pirHead); // tilted down at the floor
+    const pirBody = new THREE.Mesh(rbox(THREE, 0.066, 0.092, 0.042, 0.01), absM); pirBody.position.set(0, 0, 0.021); pirBody.castShadow = pirBody.receiveShadow = true; pirHead.add(pirBody);
+    const pir = new THREE.Mesh(new THREE.SphereGeometry(0.024, 14, 5, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshPhysicalMaterial({ color: 0xF2F0E9, roughness: 0.4, clearcoat: 0.7, clearcoatRoughness: 0.2, flatShading: true }));
+    pir.rotation.x = Math.PI / 2; pir.scale.y = 0.85; pir.position.set(0, -0.01, 0.0415); pir.receiveShadow = true; pirHead.add(pir); // each facet catches the light, like the real lenslets
+    const pirLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.008); pirHead.add(pirLed); pirLed.position.set(0, 0.03, 0.04);
     // invisible tap target (the sensor itself is only a few pixels on a phone), stretched toward the camera rather than
     // up, so on screen it covers the sensor and the wall below it but not the doorway behind it
     const pirHit = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), new THREE.MeshBasicMaterial()); pirHit.visible = false; pirHit.scale.set(0.1, 0.13, 0.18); pirHit.position.set(-0.41, 2.24, 0.72); R.scene.add(pirHit);
-    P.cyl(0.004, 0.004, 0.5, M.black, 0.5, 2.45, 0.6, 8); const pendant = P.add(new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.16, 32, 1, true), M.shade.clone())); pendant.position.set(0.5, 2.15, 0.6);
+    // The hall pendant: a linen bell shade (open below, the same 32 cm mouth and 16 cm height as the cone it replaces, so
+    // its light and shadows are as before) on a brass socket cap, hung on a fabric flex from a white ceiling canopy.
+    P.cyl(0.004, 0.004, 0.5, M.black, 0.5, 2.45, 0.6, 8);
+    { const brass = new THREE.MeshPhysicalMaterial({ color: 0xC9A46A, metalness: 1, roughness: 0.32, clearcoat: 0.3, clearcoatRoughness: 0.3 }); P.cyl(0.018, 0.022, 0.04, brass, 0.5, 2.245, 0.6, 24); P.cyl(0.05, 0.05, 0.022, M.trim, 0.5, 2.689, 0.6, 32); }
+    const pendant = P.add(new THREE.Mesh(lathe(THREE, [[0.16, -0.08], [0.163, -0.077], [0.161, -0.07], [0.15, -0.045], [0.128, -0.012], [0.098, 0.022], [0.068, 0.05], [0.042, 0.07], [0.022, 0.079], [0, 0.081]], 48), M.shade.clone())); pendant.position.set(0.5, 2.15, 0.6);
+    pendant.material.bumpMap = M.cushion.bumpMap; pendant.material.bumpScale = 0.6;
     const hallLight = new THREE.PointLight(0xFFE2B8, 0, 6, 1.6); hallLight.position.set(0.5, 2.05, 0.6); hallLight.castShadow = true; hallLight.shadow.mapSize.set(1024, 1024); R.scene.add(hallLight);
-    // The pendant cone sits a few cm from its bulb, inside the default 0.5 m shadow near plane, so the light went straight
+    // The pendant shade sits a few cm from its bulb, inside the default 0.5 m shadow near plane, so the light went straight
     // through it (a hot spot on the ceiling). A 5 cm near plane lets it cast; the smaller depth bias keeps the old offset
     // at room distances (point shadows store perspective depth) and the normal bias keeps surfaces close to the bulb free
-    // of acne rings. The cone's inside doesn't receive shadows, so it stays lit (its outside is a skin, below). (The night
+    // of acne rings. The shade's inside doesn't receive shadows, so it stays lit (its outside is a skin, below). (The night
     // lamp does the same: shaded.)
-    // A 3-texel filter: the cone's shadow line across the partition, a metre from the bulb, came out as stair steps.
+    // A 3-texel filter: the shade's shadow line across the partition, a metre from the bulb, came out as stair steps.
     hallLight.shadow.camera.near = 0.05; hallLight.shadow.camera.updateProjectionMatrix(); Object.assign(hallLight.shadow, { bias: -0.0002, normalBias: 0.01, radius: 3 });
     pendant.receiveShadow = false;
     // Phones render without point-light shadows, and a light without a shadow shines straight through the partition and
@@ -188,33 +381,117 @@ export default {
     const setTier = () => { const phone = R.quality !== 'high'; nl.bulb.visible = hallLight.visible = !phone; for (const l of [...nlPhone, ...hallPhone]) l.visible = phone; };
     setTier(); // before the renderer's first compile; again each frame, for a drop to the phone tier while running
     // kitchen: counter along the back wall, cabinets, kettle + plug, hub
-    P.box(3.0, 0.05, 0.6, M.white, 1.9, 0.9, -2.2); P.box(3.0, 0.85, 0.58, M.woodLight, 1.9, 0.425, -2.2); for (let i = 0; i < 4; i++) P.box(0.02, 0.6, 0.03, M.metal, 0.6 + i * 0.75, 0.55, -1.9);
-    // upper cabinets either side of the window (wall-hung: they hide with the back wall), a bin
-    for (const cab of [P.box(0.75, 0.7, 0.35, M.white, 0.775, 2.1, -2.32), P.box(0.75, 0.7, 0.35, M.white, 3.025, 2.1, -2.32)]) P.onWall(cab, 0, 1, -2.5); P.box(0.5, 0.4, 0.3, M.metal, 2.9, 0.2, -1.0);
-    // kettle and its smart plug on the wall right of the window. The plug, its LED and the lead up the wall hide with the
-    // back wall (the scene toggles the LED itself, as a child of the tagged group).
-    const plug = P.box(0.08, 0.08, 0.02, M.white, 2.95, 1.15, -2.49); const plugLed = P.ledDot(2.97, 1.125, -2.478, 0x2FBF71, 0.006);
-    const kettleBody = P.cyl(0.09, 0.11, 0.22, M.metal, 2.8, 1.035, -2.15, 24); P.cyl(0.02, 0.02, 0.1, M.black, 2.8, 1.16, -2.15, 12); P.box(0.02, 0.12, 0.06, M.black, 2.91, 1.06, -2.15, 0.005);
-    const lead = P.tube([[2.84, 0.932, -2.24], [2.9, 0.932, -2.38], [2.935, 0.95, -2.462], [2.95, 1.03, -2.472], [2.95, 1.105, -2.475]], 0.005, M.white); // kettle lead up to the plug
-    P.onWall(P.group(plug, plugLed, lead), 0, 1, -2.5);
-    // steam while the kettle is on: soft puffs that rise from the lid, swell and fade (one translucent ball read as a
+    // Base units 3 m long under an oak worktop (top at 0.925, where the hub, kettle and canister stand): a recessed
+    // graphite plinth, four bays of satin-white fronts (a drawer over a door, 3 mm gaps, softened edges) with brushed-
+    // steel bar handles, and a steel sink with a gooseneck tap under the window.
+    const paint = new THREE.MeshPhysicalMaterial({ color: 0xECEDE9, roughness: 0.42, clearcoat: 0.2, clearcoatRoughness: 0.4 });
+    const steelM = new THREE.MeshStandardMaterial({ color: 0xC6CACE, metalness: 1, roughness: 0.3 });
+    const graphiteM = new THREE.MeshStandardMaterial({ color: 0x2B2F33, roughness: 0.6, metalness: 0.1 });
+    const bar = (x, y, z) => [pc(rbox(THREE, 0.18, 0.012, 0.012, 0.005, { seg: 1 }), x, y, z), ...[-0.07, 0.07].map((dx) => pc(new THREE.CylinderGeometry(0.004, 0.004, 0.022, 8), x + dx, y, z - 0.011, Math.PI / 2))]; // a bar on two standoffs, off a front facing +z
+    {
+      P.box(3.0, 0.1, 0.5, graphiteM, 1.9, 0.05, -2.25); // plinth, 6 cm behind the fronts
+      const fronts = [pc(new THREE.BoxGeometry(3.0, 0.785, 0.56), 1.9, 0.4925, -2.22)], handles = []; // carcass, z -2.5…-1.94
+      for (let i = 0; i < 4; i++) {
+        const x = 0.775 + i * 0.75;
+        fronts.push(pc(rbox(THREE, 0.744, 0.17, 0.018, 0.003, { seg: 1 }), x, 0.797, -1.931), pc(rbox(THREE, 0.744, 0.6, 0.018, 0.003, { seg: 1 }), x, 0.405, -1.931));
+        handles.push(...bar(x, 0.797, -1.9), ...bar(x, 0.66, -1.9));
+      }
+      P.add(merge(THREE, fronts, paint)); const h = P.add(merge(THREE, handles, steelM)); h.castShadow = false;
+      put(rbox(THREE, 3.02, 0.04, 0.62, 0.006, { seg: 1, uvScale: 1 }), M.woodLight, 1.9, 0.905, -2.19); // worktop: y 0.885…0.925, z -2.5…-1.88
+      // the sink: a brushed-steel rim round a darker basin (drawn), and a chrome gooseneck tap behind it, clear of the sill
+      const basin = canvasTex(THREE, (g, w, h2) => {
+        g.fillStyle = '#D9DCDF'; g.fillRect(0, 0, w, h2);
+        const gr = g.createRadialGradient(w / 2, h2 / 2, 4, w / 2, h2 / 2, w * 0.55); gr.addColorStop(0, '#6E747A'); gr.addColorStop(1, '#9AA0A6');
+        g.fillStyle = gr; g.beginPath(); g.roundRect?.(22, 16, w - 44, h2 - 32, 18); g.fill();
+        g.fillStyle = '#2A2E32'; g.beginPath(); g.arc(w / 2, h2 / 2, 9, 0, Math.PI * 2); g.fill();
+      }, 256, 256);
+      const sink = put(rbox(THREE, 0.5, 0.006, 0.38, 0.0025, { seg: 1 }), new THREE.MeshStandardMaterial({ color: 0xFFFFFF, map: basin, metalness: 0.85, roughness: 0.35 }), 1.95, 0.9262, -2.1); sink.castShadow = false;
+      const chrome = new THREE.MeshStandardMaterial({ color: 0xD6D9DC, metalness: 1, roughness: 0.15 });
+      P.cyl(0.022, 0.024, 0.03, chrome, 1.95, 0.94, -2.3, 24);
+      P.tube([[1.95, 0.95, -2.3], [1.95, 1.12, -2.3], [1.95, 1.2, -2.27], [1.95, 1.215, -2.2], [1.95, 1.18, -2.15], [1.95, 1.13, -2.145]], 0.011, chrome);
+      put(rbox(THREE, 0.012, 0.012, 0.07, 0.005, { seg: 1 }), chrome, 1.967, 1.0, -2.29); // the mixer lever
+    }
+    // upper cabinets either side of the window, in the same fronts and handles (wall-hung: they hide with the back wall)
+    for (const x of [0.775, 3.025]) {
+      const box = merge(THREE, [pc(new THREE.BoxGeometry(0.75, 0.7, 0.33), x, 2.1, -2.335), pc(rbox(THREE, 0.744, 0.694, 0.018, 0.003, { seg: 1 }), x, 2.1, -2.161)], paint);
+      const h = merge(THREE, bar(x, 1.8, -2.13), steelM); h.castShadow = false;
+      P.onWall(P.group(P.add(box), P.add(h)), 0, 1, -2.5);
+    }
+    // a brushed-steel pedal bin with a black lid
+    P.cyl(0.14, 0.13, 0.38, steelM, 2.9, 0.2, -1.0, 40); P.cyl(0.143, 0.143, 0.03, graphiteM, 2.9, 0.405, -1.0, 40); P.cyl(0.133, 0.133, 0.012, M.rubber, 2.9, 0.006, -1.0, 40); P.box(0.07, 0.014, 0.1, graphiteM, 2.735, 0.02, -1.0, 0.004);
+    // The kettle (Poly Haven's steel vintage_electric_kettle, else a turned steel body of the same shape), spout turned
+    // to the front-left, and its smart plug on the wall right of the window: a white socket faceplate with the plug in
+    // it, a button and the status LED on its front. The plug, its LED and the lead up the wall hide with the back wall
+    // (the scene toggles the LED itself, as a child of the tagged group).
+    const glossM = new THREE.MeshPhysicalMaterial({ color: 0xF4F5F2, roughness: 0.35, clearcoat: 0.8, clearcoatRoughness: 0.15 });
+    const faceplate = put(rbox(THREE, 0.086, 0.086, 0.009, 0.004), glossM, 2.95, 1.15, -2.4955);
+    const plug = put(rbox(THREE, 0.06, 0.075, 0.032, 0.008), absM, 2.95, 1.15, -2.475);
+    const plugBtn = put(new THREE.CylinderGeometry(0.009, 0.009, 0.004, 20).rotateX(Math.PI / 2), glossM, 2.935, 1.168, -2.4585); plugBtn.castShadow = false;
+    const plugLed = P.ledDot(2.97, 1.125, -2.4585, 0x2FBF71, 0.006);
+    const chromeM = () => new THREE.MeshStandardMaterial({ color: 0xD6D9DC, metalness: 1, roughness: 0.18 });
+    let kettleBody = MOD('vintage_electric_kettle');
+    if (kettleBody) { R.scene.add(kettleBody); placeModel(THREE, kettleBody, { x: 2.8, y: 0.925, z: -2.15, rotY: 0.35 }); }
+    else {
+      const bakelite = new THREE.MeshPhysicalMaterial({ color: 0x1E2023, roughness: 0.35, clearcoat: 0.6, clearcoatRoughness: 0.2 });
+      const tube = (pts, r, n = 16) => new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p))), n, r, 8);
+      const body = new THREE.Mesh(lathe(THREE, [[0.12, 0], [0.124, 0.006], [0.124, 0.05], [0.118, 0.068], [0.1, 0.082], [0.092, 0.1], [0.09, 0.13], [0.086, 0.16], [0.076, 0.185], [0.064, 0.2], [0.048, 0.212], [0.03, 0.22], [0.012, 0.226], [0, 0.227]], 36), chromeM());
+      const spout = new THREE.Mesh(tube([[-0.075, 0.11, 0], [-0.115, 0.14, 0], [-0.145, 0.175, 0], [-0.165, 0.197, 0]], 0.011), body.material);
+      const black = merge(THREE, [
+        pc(tube([[-0.068, 0.19, 0], [-0.072, 0.255, 0], [-0.045, 0.295, 0], [0, 0.302, 0], [0.045, 0.295, 0], [0.072, 0.255, 0], [0.068, 0.19, 0]], 0.009, 24)),
+        pc(new THREE.SphereGeometry(0.016, 12, 8), 0, 0.238, 0), pc(new THREE.CylinderGeometry(0.007, 0.007, 0.012, 10), 0, 0.228, 0),
+        pc(rbox(THREE, 0.05, 0.05, 0.1, 0.012, { seg: 1 }), 0.14, 0.03, 0),
+      ], bakelite);
+      for (const m of [body, spout]) m.castShadow = m.receiveShadow = true;
+      kettleBody = P.group(body, spout, black); kettleBody.position.set(2.8, 0.925, -2.15); kettleBody.rotation.y = 0.35; kettleBody.updateMatrixWorld(true);
+    }
+    // Steam rises from the spout tip; the lead leaves the cord inlet low at the back (kettle frame: spout toward -x).
+    const steamAt = kettleBody.localToWorld(new THREE.Vector3(-0.17, 0.205, 0)), inlet = kettleBody.localToWorld(new THREE.Vector3(0.15, 0.03, 0));
+    const lead = P.tube([[inlet.x, 0.935, inlet.z], [inlet.x + 0.01, 0.931, inlet.z - 0.08], [2.94, 0.931, -2.38], [2.94, 0.95, -2.46], [2.95, 1.03, -2.473], [2.95, 1.118, -2.475]], 0.005, cordM); // kettle lead up into the plug
+    lead.castShadow = false;
+    P.onWall(P.group(faceplate, plug, plugBtn, plugLed, lead), 0, 1, -2.5);
+    // steam while the kettle is on: soft puffs that rise from the spout (steamAt), swell and fade (one translucent ball read as a
     // glass bead). Sprites are unlit, so their grey follows the room's light (they don't glow in a dim kitchen).
     const puffC = document.createElement('canvas'); puffC.width = puffC.height = 64; const pg = puffC.getContext('2d');
     const pgr = pg.createRadialGradient(32, 32, 0, 32, 32, 32); pgr.addColorStop(0, 'rgba(255,255,255,.85)'); pgr.addColorStop(0.4, 'rgba(255,255,255,.4)'); pgr.addColorStop(1, 'rgba(255,255,255,0)'); pg.fillStyle = pgr; pg.fillRect(0, 0, 64, 64);
     const puffT = new THREE.CanvasTexture(puffC); puffT.colorSpace = THREE.SRGBColorSpace;
     const puffs = [0, 1, 2, 3].map(() => { const p = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffT, transparent: true, depthWrite: false, opacity: 0 })); p.visible = false; p.userData.noAO = true; p.raycast = () => {}; R.scene.add(p); return p; });
     const hub = P.hub(0.9, 0.925, -2.15, { rotY: 0.2 }); R.addPickable(hub.group, 'hub'); P.phone(1.25, 0.93, -2.05, 0.4);
-    P.box(0.25, 0.3, 0.25, M.cardboard, 3.2, 1.075, -2.2); P.cyl(0.06, 0.06, 0.2, M.white, 1.6, 1.025, -2.2, 16); // a box, a mug-ish canister (clear of the window sill)
-    P.table(1.8, 0.4, 0.9, 0.9, 0.75, M.woodLight, M.woodLight); P.box(0.42, 0.04, 0.42, M.woodLight, 1.1, 0.46, 0.4); [[-0.18, -0.18], [0.18, -0.18], [-0.18, 0.18], [0.18, 0.18]].forEach((p) => P.box(0.03, 0.46, 0.03, M.woodLight, 1.1 + p[0], 0.23, 0.4 + p[1])); P.box(0.03, 0.4, 0.42, M.woodLight, 0.905, 0.68, 0.4);
+    // a glazed canister with an oak lid (clear of the window sill), and a small succulent in the counter's right corner
+    // (else a box)
+    put(lathe(THREE, [[0, 0], [0.056, 0], [0.06, 0.006], [0.06, 0.17], [0.057, 0.176], [0, 0.176]], 32), new THREE.MeshPhysicalMaterial({ color: 0xF3F2EE, roughness: 0.25, clearcoat: 0.8, clearcoatRoughness: 0.1 }), 1.6, 0.925, -2.2);
+    put(lathe(THREE, [[0, 0.172], [0.063, 0.172], [0.063, 0.19], [0.05, 0.196], [0.014, 0.198], [0.014, 0.214], [0, 0.216]], 32), M.woodLight, 1.6, 0.925, -2.2);
+    const succulent = MOD('potted_plant_04'); if (succulent) { R.scene.add(succulent); placeModel(THREE, succulent, { x: 3.22, y: 0.925, z: -2.25 }); } else P.box(0.25, 0.3, 0.25, M.cardboard, 3.2, 1.075, -2.2);
+    // Dining: the wooden table (else a square one) with an oak chair either side, and the grey armchair in the living
+    // corner, turned to the room.
+    const tableModel = MOD('wooden_table_02');
+    if (tableModel) { R.scene.add(tableModel); placeModel(THREE, tableModel, { x: 1.8, z: 0.4, rotY: Math.PI / 2, s: 0.95 }); } else P.table(1.8, 0.4, 0.9, 0.9, 0.75, M.woodLight, M.woodLight);
+    // A dining chair (seat top 0.48, facing its local +z): turned legs that run up into the back posts, aprons, a curved
+    // top rail and a mid rail, as one oak mesh.
+    const chair = (x, z, rotY) => {
+      const ps = [pc(rbox(THREE, 0.42, 0.035, 0.42, 0.01, { seg: 1, uvScale: 1.5 }), 0, 0.4625, 0)];
+      for (const sx of [-1, 1]) {
+        ps.push(pc(new THREE.CylinderGeometry(0.013, 0.017, 0.445, 12), sx * 0.18, 0.2225, 0.18)); // front legs
+        ps.push(pc(new THREE.CylinderGeometry(0.015, 0.017, 0.9, 12), sx * 0.18, 0.45, -0.18)); // rear legs into back posts
+        ps.push(pc(rbox(THREE, 0.02, 0.06, 0.34, 0.006, { seg: 1, uvScale: 1.5 }), sx * 0.18, 0.415, 0)); // side aprons
+      }
+      for (const sz of [-1, 1]) ps.push(pc(rbox(THREE, 0.34, 0.06, 0.02, 0.006, { seg: 1, uvScale: 1.5 }), 0, 0.415, sz * 0.18)); // front and back aprons
+      const top = rbox(THREE, 0.4, 0.075, 0.025, 0.01, { seg: 1, div: [6, 1, 1], uvScale: 1.5 }), tp = top.attributes.position;
+      for (let i = 0; i < tp.count; i++) tp.setZ(i, tp.getZ(i) - 0.2 * tp.getX(i) ** 2); // bowed to the sitter's back
+      top.computeVertexNormals();
+      ps.push(pc(top, 0, 0.85, -0.185), pc(rbox(THREE, 0.34, 0.04, 0.02, 0.006, { seg: 1, uvScale: 1.5 }), 0, 0.68, -0.18));
+      const m = P.add(merge(THREE, ps, M.woodLight)); m.position.set(x, 0, z); m.rotation.y = rotY; return m;
+    };
+    chair(1.1, 0.4, Math.PI / 2); chair(2.5, 0.4, -Math.PI / 2);
+    const armchair = MOD('ArmChair_01'); if (armchair) { R.scene.add(armchair); placeModel(THREE, armchair, { x: 2.85, z: 1.85, rotY: -2.1 }); }
 
-    R.addPickable(mat, 'mat'); R.addPickable(mattress, 'mat'); R.addPickable(doorPivot, 'door'); R.addPickable(contact, 'door'); R.addPickable(pir, 'motion'); R.addPickable(pirPlate, 'motion'); R.addPickable(pirLed, 'motion'); R.addPickable(pirHit, 'motion'); R.addPickable(plug, 'kettle', { anchor: true }); R.addPickable(kettleBody, 'kettle'); R.addPickable(nl.shade, 'night'); R.addPickable(nl.pole, 'night'); R.addPickable(nlBase, 'night'); R.addPickable(nl.bulbMesh, 'night'); R.addPickable(pendant, 'hall');
+    R.addPickable(mat, 'mat'); R.addPickable(mattress, 'mat'); R.addPickable(doorPivot, 'door'); R.addPickable(contact, 'door'); R.addPickable(pir, 'motion'); R.addPickable(pirPlate, 'motion'); R.addPickable(pirBody, 'motion'); R.addPickable(pirLed, 'motion'); R.addPickable(pirHit, 'motion'); R.addPickable(plug, 'kettle', { anchor: true }); R.addPickable(faceplate, 'kettle'); R.addPickable(kettleBody, 'kettle'); R.addPickable(nl.shade, 'night'); R.addPickable(nl.pole, 'night'); R.addPickable(nlBase, 'night'); R.addPickable(nl.bulbMesh, 'night'); R.addPickable(pendant, 'hall');
     // bed sensor controller: the small box on the side of her bed that the family is sent to check (the bed sensor's
-    // what-ifs). On the bed frame's hall-side face (frame x −2.825…−1.775, y 0.075…0.325), towards the foot, below the
-    // mattress and clear of the folded duvet. No LED: a controller that has gone silent (unplugged, flat batteries)
-    // couldn't light one.
-    const matCtl = P.box(0.02, 0.05, 0.08, M.white, -1.765, 0.2, -0.75, 0.004); R.addPickable(matCtl, 'mat');
+    // what-ifs). On the side rail's hall-side face (x −1.8, y 0.12…0.25), towards the foot, below the mattress and the
+    // duvet's drape, where the strip's lead comes down. No LED: a controller that has gone silent (unplugged, flat
+    // batteries) couldn't light one.
+    const matCtl = inBed(new THREE.Mesh(rbox(THREE, 0.018, 0.05, 0.085, 0.006, { seg: 1 }), absM)); matCtl.position.set(0.509, 0.18, 0.73); R.addPickable(matCtl, 'mat');
     const rp = {}; // when each faulted device last got NCB's red pulse (update's t, in seconds)
-    const hiMap = { mat: [mat, mattress, matCtl], door: [doorLeaf, contact], motion: [pir, pirPlate], kettle: [plug, kettleBody], night: [nl.shade], hall: [pendant] };
+    const hiMap = { mat: [mat, mattress, matCtl], door: [doorLeaf, contact], motion: [pir, pirPlate, pirBody], kettle: [plug, faceplate, kettleBody], night: [nl.shade], hall: [pendant] };
     const hi = P.highlighter(hiMap);
     // A reset (a what-if's fresh room, "Another request here") cuts off any pulse still running from before it, so the
     // last scenario's red mark never glows in the reset room. The highlighter can't cancel a pulse: update() hides its
@@ -224,7 +501,7 @@ export default {
     const focus = (id, hex) => { pulsed[id] = performance.now(); hi.focus(id, hex); };
     // The pendant doesn't take shadows (inside, its own bulb would shade it), so the morning sun lit it through the walls
     // and ceiling. It keeps only its inside and gets an outer skin that does take shadows (its bulb never lights the
-    // outside); the cone itself still casts from both sides. Added after the highlighter, so a tap doesn't pulse two
+    // outside); the shade itself still casts from both sides. Added after the highlighter, so a tap doesn't pulse two
     // shells on it. (The night lamp's shade has the same skin from P.floorLamp, shaded, glowing with nl.shadeMat.)
     const skins = [pendant].map((m) => {
       const out = new THREE.Mesh(m.geometry, m.material.clone()); out.material.side = THREE.FrontSide; out.receiveShadow = true; m.add(out);
@@ -260,7 +537,7 @@ export default {
         const grey = Math.min(1, 0.3 + R.lights.hemi.intensity * 1.4 + R.lights.sun.intensity * 0.12);
         puffs.forEach((p, i) => {
           const k = (t * 0.55 + i / puffs.length) % 1; p.visible = s.kettle.on || !!s.kettle.steam; if (!p.visible) return; // steam: a boil the plug can't report
-          p.position.set(2.76 + 0.025 * Math.sin(t * 1.1 + i * 1.7) - k * 0.03, 1.2 + k * 0.2, -2.15 + 0.015 * Math.cos(t * 0.9 + i));
+          p.position.set(steamAt.x + 0.025 * Math.sin(t * 1.1 + i * 1.7) - k * 0.03, steamAt.y + k * 0.2, steamAt.z + 0.015 * Math.cos(t * 0.9 + i));
           p.scale.setScalar(0.035 + k * 0.09); p.material.opacity = 0.6 * Math.sin(k * Math.PI) * (1 - k * 0.4); p.material.color.setScalar(grey);
         });
         const nb = s.night.brightness; nl.bulb.intensity = nb * 3; nl.bulbMesh.material.emissiveIntensity = nb * 2; nl.shadeMat.emissiveIntensity = nb * 0.4;

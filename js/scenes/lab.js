@@ -91,6 +91,14 @@ const walkBack = (note) => ({ fn: async ({ store, say, tween, fast }) => {
 // A mirror mount's tile: the angles its controller reports (m1.reported / m2.reported, when a scenario sets them).
 const angles = (s) => `yaw ${deg(s.reported ?? s.yaw)} · pitch ${deg(s.pitch)}`;
 
+// Place a loaded model by its bounding box (js/engine/assets.js place()), inlined so the scene needs no extra import.
+function placeModel(THREE, obj, { x = 0, y = 0, z = 0, rotY = 0, s = 1, centreY = false } = {}) {
+  obj.rotation.y = rotY; obj.scale.setScalar(s); obj.position.set(0, 0, 0); obj.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(obj), c = b.getCenter(new THREE.Vector3());
+  obj.position.set(x - c.x, centreY ? y - c.y : y - b.min.y, z - c.z); obj.updateMatrixWorld(true);
+  return new THREE.Box3().setFromObject(obj);
+}
+
 export default {
   id: 'lab',
   title: 'Laser lab',
@@ -113,6 +121,13 @@ export default {
               faultText: 'no image', active: (s, st) => (s.frozen ? s.frozen.p > 1 : shown(st) > 1) },
   },
 
+  // Real-world assets (js/engine/assets.js, assets/CREDITS.md): the desk, the shelf units and the floor and wall
+  // textures. Without them (Node tests, a failed download) the room builds from primitives.
+  assets: {
+    models: ['metal_office_desk', 'steel_frame_shelves_02'],
+    textures: ['garage_floor', 'painted_plaster_wall'],
+  },
+
   // A typed request that doesn't run but asks for what is already so, or asks what state the shutter or laser is in:
   // the honest reply is the room's state, not "I won't guess". main.js asks this first, with interpret()'s answer `r`,
   // for any typed text that doesn't run; null means no such case (its usual reply follows).
@@ -131,106 +146,301 @@ export default {
     return null;
   },
 
-  build({ R, P, M, THREE, store, parts, speed = 1, quiet }) {
+  build({ R, P, M, THREE, store, parts, speed = 1, quiet, assets = null }) {
     const isQuiet = typeof quiet === 'function' ? quiet : () => false; // true while a what-if replays the request silently (A2)
     R.lights.sun.intensity = 0; R.lights.sun.castShadow = false; R.lights.hemi.intensity = 0.25; R.lights.fill.intensity = 0.15; R.scene.environmentIntensity = 0.25;
-    R.scene.background = new THREE.Color(0x151A1E);
-    const dark = new THREE.MeshStandardMaterial({ color: 0x6B7075, roughness: 0.95 });
-    const floorMat = new THREE.MeshStandardMaterial({ map: parts.tex(parts.tileTex('#7C8286', '#6F7579'), [3, 3]), roughness: 0.6 });
-    P.roomShell({ w: 6, d: 5, h: 3, floorMat, wallMat: dark, skirting: false });
+    R.scene.background = new THREE.Color(0x151A1E); // no window: the dark outside stays
+    const A = assets?.models ? assets : null, MOD = (id) => A?.models[id] || null, TX = (id) => A?.textures?.[id] || null;
+    const pbr = (id, rep, extra = {}, Mat = THREE.MeshStandardMaterial) => { const set = TX(id); if (!set) return null; const m = {}; for (const k of ['map', 'normalMap', 'roughnessMap']) if (set[k]) { const t = set[k].clone(); t.repeat.set(...rep); t.needsUpdate = true; m[k] = t; } return new Mat({ ...m, roughness: 1, ...extra }); };
+    // Small builders: a mesh in any parent, a rounded box with few corner segments (P.box's four are ~970 triangles a box),
+    // static parts merged into one mesh per material, cables, turned parts.
+    const mesh = (geo, mat, x = 0, y = 0, z = 0, parent = R.scene) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; parent.add(m); return m; };
+    const RBox = (() => { const m = P.box(0.01, 0.01, 0.01, M.black, 0, 0, 0, 0.002), C = m.geometry.constructor; m.removeFromParent(); m.geometry.dispose(); return C; })();
+    const rb = (w, h, d, mat, x, y, z, r = 0, parent = R.scene) => (r ? mesh(new RBox(w, h, d, 2, r), mat, x, y, z, parent) : P.box(w, h, d, mat, x, y, z));
+    // Merge meshes that share a parent (their local transforms baked in) into one mesh there.
+    const merge = (list, mat, parent = R.scene) => {
+      const pos = [], nrm = [], uvs = [], idx = [], v = new THREE.Vector3(), nm = new THREE.Matrix3();
+      for (const m of list) {
+        m.updateMatrix(); nm.getNormalMatrix(m.matrix);
+        const g = m.geometry, Pa = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv, base = pos.length / 3;
+        for (let i = 0; i < Pa.count; i++) { v.fromBufferAttribute(Pa, i).applyMatrix4(m.matrix); pos.push(v.x, v.y, v.z); v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); nrm.push(v.x, v.y, v.z); uvs.push(U ? U.getX(i) : 0, U ? U.getY(i) : 0); }
+        if (g.index) for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i)); else for (let i = 0; i < Pa.count; i++) idx.push(base + i);
+        m.removeFromParent(); g.dispose();
+      }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); geo.setIndex(idx);
+      return mesh(geo, mat, 0, 0, 0, parent);
+    };
+    const cable = (pts, r = 0.0032, segs = 40) => mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p))), segs, r, 6), F.cable);
+    const lathe = (pts, seg = 28) => new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), seg);
+    const canvasOf = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); return c; };
+    // Finishes, as on the custom-room lab devices (js/custom/devices/lab.js), tuned for this dim room: under its low
+    // environment light a fully metallic part reads near black, so the light metals keep some diffuse colour.
+    const brushed = parts.tex(canvasOf(8, 64, (g) => { for (let y = 0; y < 64; y++) { const v = 214 + ((y * 37) % 23); g.fillStyle = `rgb(${v},${v},${v + 2})`; g.fillRect(0, y, 8, 1); } }));
+    const F = {
+      anod: new THREE.MeshPhysicalMaterial({ color: 0x1D1F22, metalness: 0.5, roughness: 0.4, clearcoat: 0.25, clearcoatRoughness: 0.5 }), // black anodised
+      alu: new THREE.MeshStandardMaterial({ color: 0xFFFFFF, map: brushed, metalness: 0.55, roughness: 0.35 }),                            // brushed aluminium
+      post: new THREE.MeshStandardMaterial({ color: 0xC3C8CC, metalness: 0.6, roughness: 0.28 }),                                         // ground stainless
+      shell: new THREE.MeshPhysicalMaterial({ color: 0xC9CED1, roughness: 0.55, clearcoat: 0.3, clearcoatRoughness: 0.5 }),               // light grey ABS (pure white blooms under the lamps)
+      graphite: new THREE.MeshStandardMaterial({ color: 0x2C3034, roughness: 0.6, metalness: 0.05 }),
+      cable: new THREE.MeshStandardMaterial({ color: 0x23272B, roughness: 0.75 }),
+      knurl: new THREE.MeshStandardMaterial({ color: 0x24272B, metalness: 0.5, roughness: 0.4, flatShading: true }),
+      aqua: new THREE.MeshStandardMaterial({ color: 0x29EEE5, emissive: 0x1FA8A2, emissiveIntensity: 0.3, roughness: 0.4 }),
+    };
+    // A Ø25 mm post holder on a clamping fork at (x, z), `h` tall, its parts pushed into `bin` (merged per device later).
+    const postHolder = (bin, x, z, h = 0.04) => { const s = P.cyl(0.004, 0.004, 0.012, F.anod, x, tableY + h - 0.012, z + 0.016, 8); s.rotation.x = Math.PI / 2; bin.push(rb(0.066, 0.008, 0.028, F.anod, x, tableY + 0.004, z, 0.003), P.cyl(0.0125, 0.0125, h, F.anod, x, tableY + h / 2, z, 18), s); };
+
+    // The room: an epoxy-sealed concrete floor, light grey painted walls (the plaster's relief, not its photo) and a
+    // graphite rubber cove base all round. Without assets, a concrete texture drawn in code and plain paint.
+    const WALL = 0xB4BABE;
+    const floorMat = pbr('garage_floor', [3, 2.5], { clearcoat: 0.3, clearcoatRoughness: 0.45 }, THREE.MeshPhysicalMaterial) || new THREE.MeshStandardMaterial({ map: parts.tex(parts.concreteTex(), [2.5, 2]), roughness: 0.7 });
+
+    // The concrete photo is a warm brown: keep its relief and use its roughness map (grey mottling) as the colour, tinted grey,
+    // so the floor reads as clean sealed concrete, not dirt.
+    const greyConcrete = (m, hex) => { if (m?.normalMap && m.roughnessMap) { m.map = m.roughnessMap; m.color.set(hex); m.needsUpdate = true; } };
+    greyConcrete(floorMat, 0xC9CDD0);
+    const wallMat = pbr('painted_plaster_wall', [2.6, 1.3], { color: WALL }); if (wallMat) { wallMat.map = null; wallMat.normalScale.set(0.6, 0.6); }
+    P.roomShell({ w: 6, d: 5, h: 3, floorMat, wallMat: wallMat || new THREE.MeshStandardMaterial({ color: WALL, roughness: 0.95 }), skirting: false });
+    {
+      const cove = new THREE.MeshStandardMaterial({ color: 0x2A2D30, roughness: 0.85 });
+      P.onWall(P.flatNormals(P.box(6, 0.1, 0.012, cove, 0, 0.05, -2.494), 0, 0, 1), 0, 1, -2.5);       // back wall
+      P.onWall(P.flatNormals(P.box(5.976, 0.1, 0.012, cove, 0, 0.05, 2.494), 0, 0, -1), 0, -1, -2.5); // front wall
+      P.onWall(P.flatNormals(P.box(0.012, 0.096, 5, cove, -2.994, 0.048, 0), 1, 0, 0), 1, 0, -3);     // left wall (a few mm lower: no shared face in the corners)
+      P.onWall(P.flatNormals(P.box(0.012, 0.096, 5, cove, 2.994, 0.048, 0), -1, 0, 0), -1, 0, -3);    // right wall
+    }
+    R.addContactShadows?.({ w: 6, d: 5 }); // the soft dark under the table legs, desk and shelves
     // overhead lights (dimmed, as in a laser lab): a downlight under each panel. Point lights 15 cm under the ceiling,
     // which takes no shadows, blew it out white around the panels; a wide spot aimed straight down (86° half-angle,
     // soft edge) lights the bench, the floor and the walls, fading toward the top of the walls, and never the ceiling.
     // shadow.focus narrows the shadow frustum to 64° off the axis (bench, floor, shelf, sign and back bench) for sharper
-    // shadows of the small optics; beyond it the light is unshadowed.
-    const lampMat = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, emissive: 0xFFFFFF, emissiveIntensity: 0.6 }); const lampBoxes = [];
+    // shadows of the small optics; beyond it the light is unshadowed. Each panel is an LED troffer: a light grey frame
+    // round a glowing diffuser.
+    const lampMat = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, emissive: 0xFFFFFF, emissiveIntensity: 0.6 }), troffer = new THREE.MeshStandardMaterial({ color: 0xE1E4E6, roughness: 0.6 }); const lampBoxes = [];
     for (const x of [-1.2, 1.2]) {
       const l = new THREE.SpotLight(0xE8F0FF, LAMP_I, 9, 1.5, 0.35, 1.6); l.position.set(x, 2.95, -0.4); l.target.position.set(x, 0, -0.4); R.scene.add(l.target);
       l.castShadow = true; l.shadow.mapSize.setScalar(R.quality === 'high' ? 2048 : 1024); l.shadow.focus = 0.75; l.shadow.bias = -0.0005; l.shadow.normalBias = 0.01; R.scene.add(l);
-      lampBoxes.push(P.box(0.6, 0.03, 0.2, lampMat, x, 2.984, -0.4));
+      lampBoxes.push(P.box(0.64, 0.03, 0.24, troffer, x, 2.984, -0.4), P.box(0.6, 0.012, 0.2, lampMat, x, 2.966, -0.4));
     }
     const lamps = P.group(...lampBoxes);
 
-    // optical table: black breadboard on pneumatic legs
-    const plateMat = new THREE.MeshStandardMaterial({ map: parts.tex(parts.holeGridTex(), [3, 1.5]), roughness: 0.55, metalness: 0.3 });
+    // Optical table: a stainless top skin with M6 holes on a 25 mm grid over a painted honeycomb core, on four pneumatic
+    // vibration-isolation legs (light grey columns, graphite isolator chambers and load discs, levelling valves, rubber
+    // pads) tied by bars near the floor.
     const tableY = 0.9;
-    const plateSide = new THREE.MeshStandardMaterial({ color: 0x2B2E31, roughness: 0.55, metalness: 0.3 }); // the hole grid is on the top only: squeezed onto the 20 cm edges it read as stripes
-    P.box(2.6, 0.2, 1.3, [plateSide, plateSide, plateMat, plateSide, plateSide, plateSide], 0, tableY - 0.1, -0.2);
-    for (const [x, z] of [[-1.1, -0.7], [1.1, -0.7], [-1.1, 0.3], [1.1, 0.3]]) { P.cyl(0.08, 0.08, 0.72, M.steel, x, 0.36, z, 20); P.cyl(0.11, 0.11, 0.1, M.black, x, 0.05, z, 20); }
+    const holeGrid = (bump) => canvasOf(1024, 1024, (g) => { // 16 × 16 holes a tile, a tile 0.4 m
+      if (bump) { g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, 1024, 1024); } else { g.fillStyle = '#AEB3B7'; g.fillRect(0, 0, 1024, 1024); for (let y = 0; y < 1024; y += 2) { const v = 160 + ((y * 37) % 23); g.fillStyle = `rgba(${v},${v + 4},${v + 7},0.45)`; g.fillRect(0, y, 1024, 1); } }
+      for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) { const x = 32 + i * 64, y = 32 + j * 64; g.fillStyle = bump ? '#808080' : '#7C8286'; g.beginPath(); g.arc(x, y, 11, 0, Math.PI * 2); g.fill(); g.fillStyle = bump ? '#000000' : '#141618'; g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.fill(); }
+    });
+    const topMat = new THREE.MeshStandardMaterial({ map: parts.tex(holeGrid(false), [6.5, 3.25]), bumpMap: parts.tex(holeGrid(true), [6.5, 3.25], false), bumpScale: 1.2, metalness: 0.45, roughness: 0.42 });
+    const tableSide = new THREE.MeshStandardMaterial({ color: 0x2C3034, roughness: 0.5, metalness: 0.15 }), skinEdge = new THREE.MeshStandardMaterial({ color: 0xA4A9AD, roughness: 0.38, metalness: 0.5 });
+    P.box(2.596, 0.19, 1.296, tableSide, 0, tableY - 0.105, -0.2);                                                    // core, painted
+    P.box(2.6, 0.01, 1.3, [skinEdge, skinEdge, topMat, skinEdge, skinEdge, skinEdge], 0, tableY - 0.005, -0.2);      // the hole grid is on the top only
+    P.box(0.16, 0.04, 0.002, F.alu, 0.95, tableY - 0.1, 0.449);                                                       // maker's plate on the front edge
+    {
+      const legMat = new THREE.MeshStandardMaterial({ color: 0xC8CCCF, roughness: 0.55, metalness: 0.1 }), leg = [], dark = [], pads = [];
+      for (const [x, z] of [[-1.1, -0.7], [1.1, -0.7], [-1.1, 0.3], [1.1, 0.3]]) {
+        leg.push(rb(0.2, 0.5, 0.2, legMat, x, 0.29, z, 0.012), rb(0.26, 0.025, 0.26, legMat, x, 0.0275, z, 0.006)); // column, foot plate
+        dark.push(P.cyl(0.095, 0.095, 0.13, F.graphite, x, 0.605, z, 28), P.cyl(0.07, 0.08, 0.03, F.graphite, x, 0.685, z, 24), rb(0.05, 0.035, 0.03, F.graphite, x + Math.sign(x) * 0.115, 0.5, z, 0.004)); // isolator, load disc, valve
+        pads.push(P.cyl(0.06, 0.065, 0.015, M.rubber, x, 0.0075, z, 20));
+      }
+      leg.push(P.box(2.0, 0.08, 0.05, legMat, 0, 0.16, -0.7), P.box(2.0, 0.08, 0.05, legMat, 0, 0.16, 0.3), P.box(0.05, 0.08, 0.8, legMat, -1.1, 0.16, -0.2)); // tie bars
+      merge(leg, legMat); merge(dark, F.graphite); merge(pads, M.rubber);
+      cable([[-1.215, 0.49, 0.3], [-1.24, 0.34, 0.22], [-1.245, 0.24, -0.2], [-1.24, 0.34, -0.62], [-1.215, 0.49, -0.7]], 0.004, 24); // the air line between the left valves
+    }
     const Y = tableY + 0.1; // beam height
 
-    // laser head
-    const laserBody = P.box(0.32, 0.09, 0.09, M.anodized, -1.0, Y, 0.3, 0.008), laserMount = P.box(0.3, 0.036, 0.09, M.black, -1.0, Y - 0.0625, 0.3), laserRail = P.box(0.26, 0.02, 0.03, M.steel, -1.0, tableY + 0.01, 0.3); // body, mount (rail → body), rail
-    const laserLed = P.box(0.04, 0.03, 0.03, M.led(0xE0563A), -1.12, Y + 0.02, 0.35); laserLed.material.emissiveIntensity = 0.8; // emission LED (update() darkens it while the laser is off)
-    const shutter = P.box(0.01, 0.06, 0.06, M.steel, -0.83, Y, 0.3); // flag in front of the aperture; swings up toward +x (clear of the head, above the beam) when open
-    const shutterPivot = new THREE.Group(); shutterPivot.position.set(-0.83, Y + 0.03, 0.3); R.scene.add(shutterPivot); R.scene.remove(shutter); shutter.position.set(0, -0.03, 0); shutterPivot.add(shutter);
-    const hinge = P.box(0.014, 0.01, 0.05, M.black, -0.835, Y + 0.033, 0.3); // hinge block: laser face → flag pivot (x −0.842..−0.828, y 1.028..1.038), above the beam
+    // laser head (as the custom room's): a black anodised body with heat-sink fins on top, a brushed front housing and rear
+    // cap, a steel nose with the aperture, on two pedestal clamps over a base plate; the umbilical out of the rear cap.
+    const LZ = 0.3, laserParts = [];
+    const fins = []; for (let i = 0; i < 17; i++) fins.push(P.box(0.004, 0.016, 0.07, F.anod, -1.148 + i * 0.0115, Y + 0.047, LZ));
+    const laserBody = merge([rb(0.24, 0.08, 0.08, F.anod, -1.04, Y, LZ, 0.005), ...fins], F.anod); // core x −1.16…−0.92
+    const nose = P.cyl(0.018, 0.018, 0.025, F.alu, -0.8525, Y, LZ, 24); nose.rotation.z = Math.PI / 2; // x −0.865…−0.84
+    const bezel = P.cyl(0.011, 0.013, 0.0045, F.anod, -0.84175, Y, LZ, 20); bezel.rotation.z = Math.PI / 2;
+    const lens = mesh(new THREE.CircleGeometry(0.0075, 20), new THREE.MeshPhysicalMaterial({ color: 0x0E1620, roughness: 0.05, metalness: 0.2, clearcoat: 1 }), -0.8392, Y, LZ); lens.rotation.y = Math.PI / 2;
+    laserParts.push(merge([rb(0.055, 0.086, 0.086, F.alu, -0.8925, Y, LZ, 0.006), rb(0.015, 0.086, 0.086, F.alu, -1.1675, Y, LZ, 0.004), nose], F.alu), bezel, lens);
+    const laserMount = merge([rb(0.03, 0.048, 0.09, F.anod, -1.115, tableY + 0.036, LZ, 0.003), rb(0.03, 0.048, 0.09, F.anod, -0.965, tableY + 0.036, LZ, 0.003)], F.anod); // pedestals, base plate → body
+    const laserRail = rb(0.28, 0.012, 0.1, F.alu, -1.04, tableY + 0.006, LZ, 0.003); // base plate, screwed to the table at its corners
+    const laserLed = mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.006, 16), M.led(0xE0563A), -0.8925, Y + 0.024, LZ + 0.045); laserLed.rotation.x = Math.PI / 2; laserLed.material.emissiveIntensity = 0.8; // emission LED on the front housing (update() darkens it while the laser is off)
+    const shutter = mesh(new RBox(0.006, 0.06, 0.056, 2, 0.002), F.anod); // flag in front of the aperture; swings up toward +x (clear of the head, above the beam) when open
+    const shutterPivot = new THREE.Group(); shutterPivot.position.set(-0.83, Y + 0.03, LZ); R.scene.add(shutterPivot); R.scene.remove(shutter); shutter.position.set(0, -0.03, 0); shutterPivot.add(shutter);
+    const hinge = rb(0.037, 0.01, 0.05, F.anod, -0.8465, Y + 0.033, LZ, 0.002); // hinge block: front housing → flag pivot (x −0.865..−0.828, y 1.028..1.038), above the beam and the nose
+    const pin = P.cyl(0.003, 0.003, 0.056, F.post, -0.83, Y + 0.03, LZ, 10); pin.rotation.x = Math.PI / 2;
+    const screws = [pin]; for (const x of [-1.165, -0.915]) for (const dz of [-0.04, 0.04]) screws.push(P.cyl(0.0045, 0.0045, 0.004, F.post, x, tableY + 0.014, LZ + dz, 10));
+    // the laser warning label on the body's camera side
+    const labelTex = parts.tex(canvasOf(128, 64, (g, w, h) => {
+      g.fillStyle = '#F2C230'; g.fillRect(0, 0, w, h); g.strokeStyle = '#15171A'; g.lineWidth = 4; g.strokeRect(3, 3, w - 6, h - 6);
+      g.fillStyle = '#15171A'; g.beginPath(); g.moveTo(34, 12); g.lineTo(58, 54); g.lineTo(10, 54); g.closePath(); g.fill();
+      g.fillStyle = '#F2C230'; g.beginPath(); g.moveTo(34, 21); g.lineTo(50, 49); g.lineTo(18, 49); g.closePath(); g.fill();
+      g.fillStyle = '#15171A'; g.beginPath(); g.arc(30, 40, 4, 0, Math.PI * 2); g.fill(); g.fillRect(30, 39, 18, 2);
+      for (let i = 0; i < 4; i++) g.fillRect(68, 16 + i * 10, i === 0 ? 50 : 38 + (i % 2) * 10, i === 0 ? 5 : 3);
+    }));
+    const label = mesh(new THREE.PlaneGeometry(0.05, 0.025), new THREE.MeshStandardMaterial({ map: labelTex, roughness: 0.5, polygonOffset: true, polygonOffsetFactor: -2 }), -0.975, Y - 0.014, LZ + 0.0402); label.castShadow = false;
+    const relief = P.cyl(0.0055, 0.0075, 0.016, F.graphite, -1.183, Y - 0.01, LZ, 12); relief.rotation.z = Math.PI / 2;
+    const umbilical = cable([[-1.19, Y - 0.01, LZ], [-1.21, Y - 0.02, LZ + 0.005], [-1.235, tableY + 0.02, LZ + 0.02], [-1.27, tableY + 0.004, LZ + 0.05], [-1.3, tableY + 0.003, LZ + 0.07], [-1.318, tableY - 0.03, LZ + 0.075], [-1.322, 0.5, LZ + 0.08], [-1.33, 0.1, LZ + 0.1], [-1.4, 0.006, LZ + 0.2], [-1.7, 0.006, LZ + 0.3]], 0.0042, 48);
+    laserParts.push(merge(screws, F.post), label, relief, umbilical);
 
-    // mirror mounts (post + plate + round mirror), M1 folds +x → -z, M2 folds -z → -x. The mirror's edge is ground glass
-    // (matte): polished like its faces, the 6 mm rim caught a downlight at some orbit angles and bloomed into a white blob.
-    const mirFace = new THREE.MeshStandardMaterial({ color: 0xF0F4F8, roughness: 0.05, metalness: 1 }), mirEdge = new THREE.MeshStandardMaterial({ color: 0x8A9096, roughness: 0.6, metalness: 0.3 });
+    // Kinematic mirror mounts on posts (as the custom room's): a fixed black back plate with two knurled adjusters and the
+    // pivot ball, on a Ø12.7 mm post in a post holder; a front plate holding the round mirror tips with yaw and pitch. M1
+    // folds +x → -z, M2 folds -z → -x. The mirror's edge is ground glass (matte): polished like its faces, the 6 mm rim
+    // caught a downlight at some orbit angles and bloomed into a white blob.
+    const mirFace = new THREE.MeshStandardMaterial({ color: 0xF0F4F8, roughness: 0.05, metalness: 1 }), mirEdge = new THREE.MeshStandardMaterial({ color: 0x8FA79F, roughness: 0.6, metalness: 0 });
     function mirror(x, z, rotY) {
       const g = new THREE.Group(); g.position.set(x, Y, z); R.scene.add(g);
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.1, 16), M.steel); post.position.y = -0.05; post.castShadow = true; g.add(post);
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.01, 20), M.black); base.position.y = -0.1; g.add(base);
+      const fixed = new THREE.Group(); fixed.rotation.y = rotY; g.add(fixed);
+      const BX = -0.018; // the back plate's centre (local x, behind the mirror); the post stands under it
+      mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.012, 24), F.anod, BX, -0.094, 0, fixed);   // base, on the table
+      mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.04, 18), F.anod, BX, -0.068, 0, fixed); // post holder
+      const thumb = mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.012, 8), F.anod, BX, -0.058, 0.016, fixed); thumb.rotation.x = Math.PI / 2;
+      mesh(new THREE.CylinderGeometry(0.0064, 0.0064, 0.016, 14), F.post, BX, -0.042, 0, fixed);
+      mesh(new RBox(0.012, 0.075, 0.075, 2, 0.003), F.anod, BX, 0, 0, fixed);
+      for (const [dy, dz] of [[0.026, 0.026], [-0.026, -0.026]]) {
+        const k = mesh(new THREE.CylinderGeometry(0.0085, 0.0085, 0.012, 14), F.knurl, BX - 0.012, dy, dz, fixed); k.rotation.z = Math.PI / 2;
+        const sc = mesh(new THREE.CylinderGeometry(0.0025, 0.0025, 0.03, 8), F.post, -0.012, dy, dz, fixed); sc.rotation.z = Math.PI / 2;
+      }
+      mesh(new THREE.SphereGeometry(0.004, 10, 8), F.post, -0.008, 0.026, -0.026, fixed); // the pivot ball the front plate rocks on
       const tilt = new THREE.Group(); tilt.rotation.y = rotY; g.add(tilt);
-      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.075, 0.075), M.anodized); plate.castShadow = true; tilt.add(plate);
-      const mir = new THREE.Mesh(new THREE.CylinderGeometry(0.0254, 0.0254, 0.006, 32), [mirEdge, mirFace, mirFace]); mir.rotation.z = Math.PI / 2; mir.position.x = 0.011; tilt.add(mir); // materials: rim, then both faces
-      for (const [dy, dz] of [[0.028, 0.028], [0.028, -0.028], [-0.028, 0.028]]) { const k = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.02, 12), M.steel); k.rotation.z = Math.PI / 2; k.position.set(-0.015, dy, dz); tilt.add(k); }
-      return { group: g, tilt, plate, mir, rotY };
+      const plate = mesh(new RBox(0.012, 0.075, 0.075, 2, 0.003), F.anod, 0.002, 0, 0, tilt);
+      const mir = new THREE.Mesh(new THREE.CylinderGeometry(0.0254, 0.0254, 0.006, 32), [mirEdge, mirFace, mirFace]); mir.rotation.z = Math.PI / 2; mir.position.x = 0.011; mir.castShadow = true; tilt.add(mir); // materials: rim, then both faces
+      mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.01, 8), F.post, 0.002, -0.041, 0, tilt); // set screw under the optic
+      return { group: g, tilt, fixed, plate, mir, rotY, base: [BX * Math.cos(rotY), -BX * Math.sin(rotY)] }; // base: where the post stands in the group
     }
     const m1 = mirror(0.7, 0.3, 3 * Math.PI / 4);       // beam +x arrives, leaves -z (mirror face toward -x -z)
     const m2 = mirror(0.7, -0.45, -3 * Math.PI / 4);    // beam -z arrives, leaves -x
+    // each mount's motor lead: out of the back plate's foot, down to the table and off its edge
+    const behind = (m, x, y, z) => { m.group.updateMatrixWorld(true); const v = m.fixed.localToWorld(new THREE.Vector3(x, y, z)); return [v.x, v.y, v.z]; };
+    const m1Cable = cable([behind(m1, -0.026, -0.03, 0.02), behind(m1, -0.04, -0.06, 0.03), behind(m1, -0.06, -0.097, 0.04), [0.8, tableY + 0.003, 0.4], [1.0, tableY + 0.003, 0.43], [1.24, tableY + 0.003, 0.44], [1.285, tableY - 0.03, 0.47], [1.29, 0.4, 0.475], [1.32, 0.006, 0.5], [1.5, 0.006, 0.6]], 0.0028, 48);
+    const m2Cable = cable([behind(m2, -0.026, -0.03, 0.02), behind(m2, -0.04, -0.06, 0.03), behind(m2, -0.06, -0.097, 0.04), [0.76, tableY + 0.003, -0.6], [0.8, tableY + 0.003, -0.78], [0.82, tableY + 0.002, -0.84], [0.83, tableY - 0.03, -0.87], [0.84, 0.4, -0.875], [0.87, 0.006, -0.9], [1.0, 0.006, -1.1]], 0.0028, 48);
 
     // The drawn beam. EX exaggerates the mirror angles so a 0.1° move is visible. The last leg runs from M2 (x 0.7,
     // z −0.45) to the meter head's +x face (HEAD_X); an M2 error of e degrees swings its end SPREAD·tan(2·e·EX) sideways:
-    // 16 mm at the start (+0.120°), 23 mm at +0.170°, so every yaw the prompts use lands on the head's 60 mm face.
+    // 16 mm at the start (+0.120°), 23 mm at +0.170°, so every yaw the prompts use lands on the head's 66 mm absorber.
     // beamZ(yaw) is where that leg crosses the stage's plane (x = 0) with M1 aligned.
     const EX = 22, SPREAD = 0.174, HEAD_X = -0.722, RB = 0.004; // RB: beam radius
     const beamZ = (yaw) => -0.45 - (0.7 / (0.7 - HEAD_X)) * Math.tan(THREE.MathUtils.degToRad(2 * yaw * EX)) * SPREAD;
 
     // translation stage with an iris on it, in the M2 → meter leg
-    // Stage X travels ACROSS the M2 → meter leg (along z), carrying the iris; the micrometer at the +z end pushes the
+    // Stage X travels ACROSS the M2 → meter leg (along z), carrying the iris; the actuator at the +z end pushes the
     // carriage toward -z as x grows, drawn at 4 mm per mm. At 12.4 mm the aperture is centred on the drawn beam at M2's
     // starting yaw (+0.120°), where iris() peaks; at 10 mm it sits 9.6 mm off it, so the beam's edge grazes the aperture
-    // (RA, the ring's inner edge) while iris() passes 43%. Whatever part of the beam falls outside the aperture stops on
-    // the ring (update), so a yaw that walks the beam further out (+0.170°) shows a thinner, clipped beam past the iris.
+    // (RA, the leaves' inner edge) while iris() passes 43%. Whatever part of the beam falls outside the aperture stops on
+    // the leaves (update), so a yaw that walks the beam further out (+0.170°) shows a thinner, clipped beam past the iris.
     const IRIS_Z = (x) => beamZ(0.12) - (x - 12.4) * 0.004, RA = 0.013;
     const STAGE_Z = (IRIS_Z(10) + IRIS_Z(12.4)) / 2; // the base sits under the carriage's whole travel
-    const stageBase = P.box(0.1, 0.03, 0.16, M.anodized, 0.0, tableY + 0.015, STAGE_Z); const stageTop = P.box(0.09, 0.02, 0.12, M.steel, 0.0, tableY + 0.04, IRIS_Z(10));
-    const micro = new THREE.Group(); micro.position.set(0.0, tableY + 0.015, STAGE_Z + 0.08 + 0.04); // barrel seated 1 cm into the base end, below the carriage
-    micro.rotation.x = Math.PI / 2; R.scene.add(micro); // barrel axis along +z, thimble at the outer end
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.1, 12), M.steel); micro.add(barrel);
+    // A black anodised base with steel guide rails and end blocks; a brushed carriage with its tapped holes.
+    const stageBase = rb(0.1, 0.026, 0.16, F.anod, 0.0, tableY + 0.013, STAGE_Z, 0.003);
+    const stageRails = merge([P.box(0.008, 0.006, 0.146, F.post, -0.045, tableY + 0.029, STAGE_Z), P.box(0.008, 0.006, 0.146, F.post, 0.045, tableY + 0.029, STAGE_Z)], F.post);
+    const stageEnds = merge([rb(0.1, 0.036, 0.014, F.anod, 0, tableY + 0.018, STAGE_Z + 0.073, 0.002), rb(0.1, 0.036, 0.014, F.anod, 0, tableY + 0.018, STAGE_Z - 0.073, 0.002)], F.anod);
+    const carTop = new THREE.MeshStandardMaterial({ map: parts.tex(canvasOf(64, 64, (g) => { g.fillStyle = '#D5D9DD'; g.fillRect(0, 0, 64, 64); g.fillStyle = '#3A3F44'; for (const x of [16, 48]) for (const y of [16, 48]) { g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill(); } }), [3, 4]), metalness: 0.5, roughness: 0.35 });
+    const stageTop = P.box(0.082, 0.02, 0.11, [F.alu, F.alu, carTop, F.alu, F.alu, F.alu], 0.0, tableY + 0.042, IRIS_Z(10));
+    // The motorised actuator: a graduated steel sleeve clamped in the end block, a knurled coupling that turns as the
+    // stage moves (its aqua tick on top at 10 mm), the motor can with an aqua band, its lead to the table's back edge.
+    const micro = new THREE.Group(); micro.position.set(0.0, tableY + 0.015, STAGE_Z + 0.08 + 0.04); // sleeve seated 1 cm into the base end, below the carriage
+    micro.rotation.x = Math.PI / 2; R.scene.add(micro); // axis along +z, motor at the outer end
+    const sleeveTex = parts.tex(canvasOf(64, 128, (g) => { g.fillStyle = '#C3C8CC'; g.fillRect(0, 0, 64, 128); g.fillStyle = '#3A3F44'; g.fillRect(31, 0, 2, 128); for (let y = 2; y < 128; y += 8) g.fillRect(y % 40 === 2 ? 20 : 25, y, y % 40 === 2 ? 11 : 6, 1); }));
+    const barrel = mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.1, 16), new THREE.MeshStandardMaterial({ map: sleeveTex, metalness: 0.55, roughness: 0.3 }), 0, 0, 0, micro);
+    mesh(new THREE.CylinderGeometry(0.0095, 0.0095, 0.012, 18), F.anod, 0, -0.0335, 0, micro); // the clamp collar on the end block
     const thimble = new THREE.Group(); thimble.position.y = 0.035; micro.add(thimble);
-    const thimbleBody = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.03, 16), M.steel); thimbleBody.castShadow = true; thimble.add(thimbleBody);
-    const tick = new THREE.Mesh(new THREE.BoxGeometry(0.0025, 0.03, 0.002), M.black); tick.position.z = 0.0092; thimble.add(tick); // turns as the stage moves
-    const irisPost = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.032, 12), M.steel); irisPost.position.set(0, tableY + 0.066, IRIS_Z(10)); R.scene.add(irisPost); // stage top → bottom of the ring, clear of the aperture
-    const irisRing = new THREE.Mesh(new THREE.TorusGeometry(RA + 0.005, 0.005, 10, 30), M.anodized); irisRing.rotation.y = Math.PI / 2; irisRing.position.set(0, Y, IRIS_Z(10)); R.scene.add(irisRing);
+    const thimbleBody = mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.03, 16), F.knurl, 0, 0, 0, thimble);
+    const tick = mesh(new THREE.BoxGeometry(0.0025, 0.03, 0.002), F.aqua, 0, 0, 0.0092, thimble); tick.castShadow = false; // turns as the stage moves
+    mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.045, 20), F.graphite, 0, 0.0725, 0, micro);   // motor can
+    mesh(new THREE.CylinderGeometry(0.0105, 0.0105, 0.006, 20), F.anod, 0, 0.098, 0, micro);       // its end cap
+    mesh(new THREE.CylinderGeometry(0.0113, 0.0113, 0.003, 20), F.aqua, 0, 0.056, 0, micro);       // aqua band
+    const stageCable = cable([[0, tableY + 0.015, STAGE_Z + 0.224], [0, tableY + 0.012, STAGE_Z + 0.243], [0.03, tableY + 0.003, STAGE_Z + 0.263], [0.12, tableY + 0.003, -0.3], [0.2, tableY + 0.003, -0.6], [0.25, tableY + 0.002, -0.84], [0.26, tableY - 0.03, -0.87], [0.27, 0.4, -0.875], [0.3, 0.006, -0.9], [0.5, 0.006, -1.05]], 0.0028, 48);
+    // the iris: a post holder and post on the carriage, a black housing round the dark leaves, the adjusting lever
+    const irisPost = new THREE.Group(); irisPost.position.set(0, 0, IRIS_Z(10)); R.scene.add(irisPost); // carriage top → bottom of the housing, clear of the aperture
+    mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.016, 18), F.anod, 0, tableY + 0.06, 0, irisPost);
+    mesh(new THREE.CylinderGeometry(0.0064, 0.0064, 0.012, 14), F.post, 0, tableY + 0.073, 0, irisPost);
+    const irisRing = new THREE.Group(); irisRing.position.set(0, Y, IRIS_Z(10)); R.scene.add(irisRing); // axis along x, in the beam
+    const irisHousing = mesh(lathe([[RA + 0.0045, -0.004], [0.024, -0.004], [0.024, 0.004], [RA + 0.0045, 0.004], [RA + 0.0045, -0.004]], 36), F.anod, 0, 0, 0, irisRing); irisHousing.rotation.z = Math.PI / 2;
+    const leaves = mesh(new THREE.RingGeometry(RA, RA + 0.0048, 36), new THREE.MeshStandardMaterial({ color: 0x3A3F44, metalness: 0.5, roughness: 0.45, side: THREE.DoubleSide }), 0, 0, 0, irisRing); leaves.rotation.y = Math.PI / 2;
+    const lever = mesh(new THREE.CylinderGeometry(0.0015, 0.0015, 0.014, 6), F.post, 0, 0.026, 0.01, irisRing); lever.rotation.x = 0.6;
+    mesh(new THREE.SphereGeometry(0.0028, 8, 6), F.graphite, 0, 0.032, 0.014, irisRing);
 
-    // power meter head + readout box, beam camera + monitor
-    const head = P.box(0.05, 0.06, 0.06, M.black, -0.75, Y, -0.45, 0.005), headPost = P.cyl(0.01, 0.01, 0.1, M.steel, -0.75, tableY + 0.05, -0.45, 12);
+    // power meter: a thermal sensor head (finned turned housing, black absorber facing the beam) on a post, its cable to
+    // the benchtop console (light grey case on a graphite boot, the reading on its screen), beam camera + monitor
+    const meterParts = [], meterBin = [];
+    const HX = -0.7235; // the sensor's front face; the beam ends 1.5 mm in front of it (HEAD_X)
+    const finsP = []; for (let i = 0; i < 5; i++) { const a = 0.009 + i * 0.0068; finsP.push([0.046, a], [0.046, a + 0.003], [0.04, a + 0.0038], [0.04, a + 0.0068]); }
+    const housing = mesh(lathe([[0.033, 0.0035], [0.036, 0], [0.04, 0], [0.04, 0.008], ...finsP, [0.04, 0.046], [0.034, 0.05], [0, 0.05]], 36), F.alu, HX, Y, -0.45); housing.rotation.z = Math.PI / 2; // axis along x, front at HX
+    const absorber = mesh(new THREE.CircleGeometry(0.033, 32), new THREE.MeshStandardMaterial({ color: 0x1C1416, roughness: 0.85 }), HX - 0.0034, Y, -0.45); absorber.rotation.y = Math.PI / 2;
+    const headRelief = P.cyl(0.005, 0.007, 0.014, F.graphite, HX - 0.057, Y, -0.45, 10); headRelief.rotation.z = Math.PI / 2;
+    const head = P.group(housing, absorber, headRelief);
+    postHolder(meterBin, HX - 0.025, -0.45);
+    const headPost = P.cyl(0.0064, 0.0064, 0.016, F.post, HX - 0.025, tableY + 0.046, -0.45, 14);
+    meterBin.push(P.cyl(0.009, 0.009, 0.012, F.anod, HX - 0.025, tableY + 0.057, -0.45, 14)); // the post's adapter into the housing
     const lightGrey = new THREE.MeshStandardMaterial({ color: 0xC4C9CC, roughness: 0.7 }); // for "white" things under the lamps: pure white glared and bloomed
-    const meterBox = P.box(0.16, 0.08, 0.12, lightGrey, -1.0, tableY + 0.04, -0.15, 0.008);
+    const meterBox = rb(0.16, 0.074, 0.12, F.shell, -1.0, tableY + 0.044, -0.15, 0.008);
+    meterParts.push(merge(meterBin, F.anod),
+      merge([rb(0.166, 0.014, 0.126, F.graphite, -1.0, tableY + 0.007, -0.15, 0.004), rb(0.15, 0.064, 0.004, F.graphite, -1.0, tableY + 0.047, -0.088, 0.002)], F.graphite), // boot, front bezel
+      merge([0, 1, 2, 3].map((i) => P.box(0.016, 0.006, 0.003, lightGrey, -1.045 + i * 0.03, tableY + 0.021, -0.0855)), lightGrey), // soft keys under the screen
+      cable([[HX - 0.064, Y, -0.45], [-0.8, Y - 0.01, -0.45], [-0.83, tableY + 0.03, -0.43], [-0.88, tableY + 0.004, -0.36], [-0.97, tableY + 0.004, -0.27], [-1.0, tableY + 0.02, -0.212]], 0.0035));
     // the two screens each own one canvas + texture, redrawn in place (no new GPU texture per reading)
     const screenCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return { g: c.getContext('2d'), t, w, h }; };
     const mScr = screenCanvas(256, 96), pScr = screenCanvas(320, 200);
-    const meterScreen = P.screenPlane(0.12, 0.045, mScr.t); meterScreen.position.set(-1.0, tableY + 0.05, -0.089); meterScreen.material.emissiveIntensity = 0.9;
-    // Beam camera: a bare sensor facing a glass pickoff in the M2 → meter leg (after the iris), so it images the same
+    const meterScreen = P.screenPlane(0.12, 0.045, mScr.t); meterScreen.position.set(-1.0, tableY + 0.05, -0.0855); meterScreen.material.emissiveIntensity = 0.9;
+    // Beam camera: a profiling camera facing a glass pickoff in the M2 → meter leg (after the iris), so it images the same
     // beam the meter reads. The pickoff face normal is (1, 0, -1)/√2: it sends a faint copy toward -z onto the sensor.
+    // The pickoff is a 2" window in a black ring mount (the beam crosses it within 11 mm of its centre).
     const PKX = -0.3, PKZ = -0.458, SENSOR_Z = -0.578; // pickoff centre (mid-range of the leg at this x, yaw 0 … +0.170°), sensor face
-    const pickoff = P.box(0.003, 0.04, 0.05, new THREE.MeshStandardMaterial({ color: 0xCFE6EE, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.4 }), PKX, Y, PKZ); pickoff.rotation.y = Math.PI / 4; pickoff.castShadow = false;
-    const pkClamp = P.box(0.01, 0.01, 0.05, M.black, PKX, Y - 0.025, PKZ), pkPost = P.cyl(0.006, 0.006, 0.07, M.steel, PKX, tableY + 0.035, PKZ, 12); pkClamp.rotation.y = Math.PI / 4; // clamp under the plate, post
-    const beamcamBody = P.box(0.06, 0.05, 0.08, M.black, PKX, Y, -0.62, 0.005), camPost = P.cyl(0.008, 0.008, 0.077, M.steel, PKX, tableY + 0.0385, -0.62, 12);
-    const sensorWin = P.box(0.05, 0.04, 0.002, new THREE.MeshStandardMaterial({ color: 0x1A2A3A, roughness: 0.15, metalness: 0.6 }), PKX, Y, SENSOR_Z - 0.0015); // sensor window on the front face
-    // monitor on a bench behind the table shows the beam profile
-    P.box(1.6, 0.05, 0.6, M.woodLight, -1.4, 0.85, -2.1); P.box(0.05, 0.85, 0.55, M.steel, -2.1, 0.42, -2.1); P.box(0.05, 0.85, 0.55, M.steel, -0.7, 0.42, -2.1);
-    const monitor = [P.box(0.55, 0.36, 0.03, M.black, -1.4, 1.12, -2.2, 0.01), P.box(0.12, 0.02, 0.16, M.black, -1.4, 0.885, -2.15), P.box(0.04, 0.065, 0.02, M.black, -1.4, 0.9275, -2.2)]; // panel, foot, neck
-    const profile = P.screenPlane(0.5, 0.31, pScr.t); profile.position.set(-1.4, 1.12, -2.184);
-    // hub, laptop, safety sign, shelf with boxes
+    const camBin = [], beamcamParts = [];
+    const pick = new THREE.Group(); pick.position.set(PKX, Y, PKZ); pick.rotation.y = Math.PI / 4; R.scene.add(pick);
+    const pickoff = mesh(new THREE.CylinderGeometry(0.0254, 0.0254, 0.003, 36), new THREE.MeshStandardMaterial({ color: 0xCFE6EE, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.35 }), 0, 0, 0, pick); pickoff.rotation.z = Math.PI / 2; pickoff.castShadow = false;
+    const pkClamp = mesh(lathe([[0.0254, -0.004], [0.031, -0.004], [0.031, 0.004], [0.0254, 0.004], [0.0254, -0.004]], 40), F.anod, 0, 0, 0, pick); pkClamp.rotation.z = Math.PI / 2;
+    postHolder(camBin, PKX, PKZ);
+    const pkPost = P.cyl(0.0064, 0.0064, 0.033, F.post, PKX, tableY + 0.0545, PKZ, 14);
+    // the camera: a light grey body with a graphite front plate, the C-mount nose, the sensor behind its window
+    const CX = -0.304; // the copy lands at x −0.31 … −0.298
+    const beamcamBody = rb(0.06, 0.05, 0.066, F.shell, CX, Y, -0.627, 0.005);
+    const camNose = P.cyl(0.017, 0.017, 0.012, F.anod, CX, Y, -0.584, 28); camNose.rotation.x = Math.PI / 2; // z −0.59 … −0.578
+    const sensorWin = mesh(new THREE.CircleGeometry(0.0125, 28), new THREE.MeshStandardMaterial({ color: 0x1A2A3A, roughness: 0.15, metalness: 0.6 }), CX, Y, SENSOR_Z + 0.0004); // sensor window on the nose
+    postHolder(camBin, CX, -0.627);
+    const camPost = P.cyl(0.0064, 0.0064, 0.038, F.post, CX, tableY + 0.057, -0.627, 14);
+    beamcamParts.push(camNose, merge(camBin, F.anod), merge([rb(0.06, 0.05, 0.004, F.graphite, CX, Y, -0.592, 0.002), rb(0.02, 0.012, 0.01, F.graphite, CX, Y - 0.006, -0.664, 0.002)], F.graphite),
+      cable([[CX, Y - 0.006, -0.669], [CX, Y - 0.012, -0.69], [CX - 0.006, tableY + 0.03, -0.72], [CX - 0.026, tableY + 0.003, -0.78], [CX - 0.056, tableY + 0.002, -0.84], [CX - 0.066, tableY - 0.03, -0.865], [CX - 0.076, 0.4, -0.87], [CX - 0.096, 0.01, -0.9], [CX - 0.3, 0.006, -1.1]], 0.003, 48));
+
+    // Desk: a steel office desk against the back wall (the primitive stand-in has its height), the monitor that shows the
+    // beam profile, a keyboard and mouse, a laptop and a lab notebook.
+    const deskModel = MOD('metal_office_desk'); let DESK_TOP = 0.788;
+    if (deskModel) { R.scene.add(deskModel); DESK_TOP = placeModel(THREE, deskModel, { x: -1.4, z: -1.998 }).max.y; }
+    else {
+      const deskMat = new THREE.MeshStandardMaterial({ color: 0xB9BEC2, roughness: 0.5, metalness: 0.4 });
+      merge([P.box(2.0, 0.03, 0.92, deskMat, -1.4, DESK_TOP - 0.015, -2.0), P.box(0.41, DESK_TOP - 0.06, 0.78, deskMat, -2.12, DESK_TOP / 2 - 0.015, -2.02), P.box(0.41, DESK_TOP - 0.06, 0.78, deskMat, -0.68, DESK_TOP / 2 - 0.015, -2.02), P.box(0.98, 0.35, 0.012, deskMat, -1.4, DESK_TOP - 0.25, -2.4)], deskMat);
+    }
+    const MX = -1.4, MZ = -2.2, MY = DESK_TOP + 0.245;
+    const bezelMat = new THREE.MeshStandardMaterial({ color: 0x16181B, roughness: 0.35, metalness: 0.2 }), silver = new THREE.MeshStandardMaterial({ color: 0xC4C8CC, roughness: 0.35, metalness: 0.5 });
+    const monitor = [rb(0.52, 0.33, 0.012, bezelMat, MX, MY, MZ, 0.004), rb(0.46, 0.27, 0.022, silver, MX, MY - 0.01, MZ - 0.016, 0.008), rb(0.06, 0.24, 0.014, silver, MX, DESK_TOP + 0.13, MZ - 0.034, 0.004), rb(0.22, 0.01, 0.17, silver, MX, DESK_TOP + 0.005, MZ - 0.02, 0.004)]; // slim panel, back housing, neck, foot
+    const monLed = mesh(new THREE.BoxGeometry(0.006, 0.002, 0.001), new THREE.MeshStandardMaterial({ color: 0xEAF6FF, emissive: 0xEAF6FF, emissiveIntensity: 0.6 }), MX + 0.23, MY - 0.161, MZ + 0.0062); monLed.castShadow = false; monitor.push(monLed);
+    const profile = P.screenPlane(0.5, 0.31, pScr.t); profile.position.set(MX, MY, MZ + 0.0063);
+    const keysTex = (cols, rows) => parts.tex(canvasOf(256, 96, (g) => { g.fillStyle = '#25292D'; g.fillRect(0, 0, 256, 96); g.fillStyle = '#3B4045'; const kw = 256 / cols, kh = 96 / rows; for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { if (r === rows - 1 && c > 3 && c < cols - 4) continue; g.fillRect(c * kw + 1.5, r * kh + 1.5, kw - 3, kh - 3); } g.fillRect(4 * kw + 1.5, (rows - 1) * kh + 1.5, (cols - 8) * kw - 3, kh - 3); }));
+    const kb = rb(0.36, 0.014, 0.125, F.graphite, MX, DESK_TOP + 0.007, -1.87, 0.004);
+    const kbKeys = mesh(new THREE.PlaneGeometry(0.34, 0.11), new THREE.MeshStandardMaterial({ map: keysTex(15, 5), roughness: 0.6 }), MX, DESK_TOP + 0.0142, -1.87); kbKeys.rotation.x = -Math.PI / 2; kbKeys.castShadow = false;
+    const mouse = rb(0.06, 0.024, 0.1, F.graphite, -1.13, DESK_TOP + 0.012, -1.86, 0.011); mouse.rotation.y = 0.2;
+    {
+      const lapAlu = new THREE.MeshStandardMaterial({ color: 0xC9CDD1, roughness: 0.35, metalness: 0.55 });
+      const lapG = new THREE.Group(); lapG.position.set(-0.86, DESK_TOP, -1.98); lapG.rotation.y = 0.35; R.scene.add(lapG);
+      mesh(new RBox(0.32, 0.014, 0.22, 2, 0.004), lapAlu, 0, 0.007, 0, lapG);
+      const deck = mesh(new THREE.PlaneGeometry(0.28, 0.1), new THREE.MeshStandardMaterial({ map: keysTex(14, 6), roughness: 0.6 }), 0, 0.0142, -0.035, lapG); deck.rotation.x = -Math.PI / 2; deck.castShadow = false;
+      const pad = mesh(new THREE.PlaneGeometry(0.1, 0.062), new THREE.MeshStandardMaterial({ color: 0xB4B9BD, roughness: 0.3, metalness: 0.4 }), 0, 0.0143, 0.066, lapG); pad.rotation.x = -Math.PI / 2; pad.castShadow = false;
+      const lid = new THREE.Group(); lid.position.set(0, 0.014, -0.11); lid.rotation.x = -0.28; lapG.add(lid); // hinged at the back edge, opened past upright
+      mesh(new RBox(0.32, 0.21, 0.007, 2, 0.003), lapAlu, 0, 0.105, -0.0035, lid);
+      const lapTex = parts.tex(canvasOf(320, 200, (g) => { // an editor and a log, as shapes (no text)
+        g.fillStyle = '#0E1318'; g.fillRect(0, 0, 320, 200); g.fillStyle = '#161D24'; g.fillRect(0, 0, 64, 200); g.fillRect(0, 0, 320, 14);
+        const ink = ['#7CF0D8', '#9AA4AD', '#D9B26A', '#6FA8DC', '#9AA4AD'];
+        for (let i = 0; i < 15; i++) { const y = 24 + i * 11, x = 74 + (i % 4 === 0 ? 0 : 10 + (i % 3) * 8), w = 40 + ((i * 53) % 150); g.fillStyle = ink[i % 5]; g.globalAlpha = 0.75; g.fillRect(x, y, w, 4); if (i % 2) { g.fillStyle = ink[(i + 2) % 5]; g.fillRect(x + w + 6, y, 18 + ((i * 29) % 40), 4); } }
+        g.globalAlpha = 0.5; g.fillStyle = '#9AA4AD'; for (let i = 0; i < 12; i++) g.fillRect(8, 24 + i * 13, 30 + ((i * 17) % 20), 3); g.globalAlpha = 1;
+      }));
+      const lapScreen = mesh(new THREE.PlaneGeometry(0.29, 0.18), new THREE.MeshStandardMaterial({ map: lapTex, emissive: 0xffffff, emissiveMap: lapTex, emissiveIntensity: 0.35, roughness: 0.25 }), 0, 0.11, 0.0002, lid); lapScreen.castShadow = false; // the lid's inner face
+    }
+    const notebook = rb(0.17, 0.012, 0.23, new THREE.MeshStandardMaterial({ color: 0x3B4A57, roughness: 0.8 }), -1.9, DESK_TOP + 0.006, -1.82, 0.002); notebook.rotation.y = 0.12;
+    const pen = P.cyl(0.0045, 0.0045, 0.14, F.graphite, -1.87, DESK_TOP + 0.0165, -1.8, 10); pen.rotation.z = Math.PI / 2; pen.rotation.y = 0.5;
+    // hub, phone, and a few spare parts on the table (post holders with posts, a hex key)
     const hub = P.hub(1.05, tableY, 0.30, { rotY: -0.3 }); R.addPickable(hub.group, 'hub'); P.phone(1.18, tableY + 0.005, 0.06, 0.6);
-    P.box(0.3, 0.012, 0.22, M.steel, -1.05, 0.88, -2.0); const lap = P.box(0.3, 0.2, 0.012, M.steel, -1.05, 0.98, -2.11); lap.rotation.x = -0.25;
-    const lapScreen = new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.165), new THREE.MeshStandardMaterial({ color: 0x0E1318, roughness: 0.25, metalness: 0.2 })); lapScreen.position.set(0, 0.007, 0.0068); lap.add(lapScreen); // the lid's inner face is a dark (idle) display
-    // laser warning sign, flat on the left wall: hazard triangle with the laser starburst, and the label text
+    {
+      const spare = []; postHolder(spare, 0.36, -0.76); postHolder(spare, 0.44, -0.72); merge(spare, F.anod);
+      merge([P.cyl(0.0064, 0.0064, 0.05, F.post, 0.36, tableY + 0.06, -0.76, 14), P.cyl(0.0064, 0.0064, 0.076, F.post, 0.44, tableY + 0.073, -0.72, 14)], F.post);
+      const key = merge([P.box(0.06, 0.004, 0.004, F.graphite, 0.26, tableY + 0.002, 0.12), P.box(0.004, 0.004, 0.018, F.graphite, 0.232, tableY + 0.002, 0.129)], F.graphite); key.castShadow = false;
+    }
+    // laser warning sign, flat on the left wall: hazard triangle with the laser starburst, and the label text; above it a
+    // LASER IN USE light box, lit while the beam is out (update())
     const signFace = (() => {
       const c = document.createElement('canvas'); c.width = 512; c.height = 352; const g = c.getContext('2d'); const ink = '#15171A', yel = '#E4B53A';
       g.fillStyle = yel; g.fillRect(0, 0, 512, 352); g.strokeStyle = ink; g.lineWidth = 10; g.strokeRect(16, 16, 480, 320);
@@ -242,13 +452,37 @@ export default {
       g.fillStyle = ink; g.textBaseline = 'alphabetic'; line('LASER', 158, 88, 230); line('RADIATION', 222, 50, 230); line('AVOID DIRECT', 272, 26, 230); line('EYE EXPOSURE', 304, 26, 230);
       return parts.tex(c);
     })();
-    const signPlate = P.box(0.02, 0.35, 0.5, M.yellow, -2.988, 1.8, -0.5);
-    const signPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.33), new THREE.MeshStandardMaterial({ map: signFace, roughness: 0.6 })); signPlane.rotation.y = Math.PI / 2; signPlane.position.set(-2.9765, 1.8, -0.5); signPlane.receiveShadow = true; R.scene.add(signPlane);
-    const sign = P.group(signPlate, signPlane);
-    const shelfParts = [P.box(1.4, 0.03, 0.3, M.steel, 1.9, 1.7, -2.348)]; for (let i = 0; i < 4; i++) shelfParts.push(P.box(0.25, 0.18, 0.2, [M.cardboard, lightGrey, M.black, M.cardboard][i], 1.4 + i * 0.32, 1.805, -2.348, 0.01));
-    const shelf = P.group(...shelfParts);
+    const signPlate = rb(0.006, 0.35, 0.5, M.yellow, -2.996, 1.8, -0.5, 0.002);
+    const signPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.33), new THREE.MeshStandardMaterial({ map: signFace, roughness: 0.6 })); signPlane.rotation.y = Math.PI / 2; signPlane.position.set(-2.9925, 1.8, -0.5); signPlane.receiveShadow = true; R.scene.add(signPlane);
+    const inUseTex = parts.tex(canvasOf(512, 128, (g) => { g.fillStyle = '#240806'; g.fillRect(0, 0, 512, 128); g.fillStyle = '#FF4A3A'; g.font = '700 64px "Segoe UI", Inter, Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('LASER IN USE', 256, 66); }));
+    const inUseBox = rb(0.04, 0.12, 0.38, F.graphite, -2.98, 2.3, -0.5, 0.006);
+    const inUse = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.095), new THREE.MeshStandardMaterial({ map: inUseTex, emissive: 0xFFFFFF, emissiveMap: inUseTex, emissiveIntensity: 0.06, roughness: 0.35 })); inUse.rotation.y = Math.PI / 2; inUse.position.set(-2.9595, 2.3, -0.5); R.scene.add(inUse);
+    const sign = P.group(signPlate, signPlane, inUseBox, inUse);
+    // Storage: two steel-frame shelf units against the back wall, right of the table, with optics boxes, binders, cases
+    // and spare breadboards (shelf tops at the model's levels; the primitive stand-in has the same).
+    const SHELF_X = [1.72, 2.34], SHELF_Z = -2.2, LEVELS = [0.13, 0.64, 1.15, 1.65, 2.14];
+    const shelfModel = MOD('steel_frame_shelves_02');
+    if (shelfModel) SHELF_X.forEach((x, i) => { const m = i ? shelfModel.clone(true) : shelfModel; R.scene.add(m); placeModel(THREE, m, { x, z: SHELF_Z }); });
+    else {
+      const frame = [], boards = [];
+      for (const x of SHELF_X) { for (const sx of [-1, 1]) for (const sz of [-1, 1]) frame.push(P.box(0.025, 2.14, 0.025, M.steel, x + sx * 0.284, 1.07, SHELF_Z + sz * 0.238)); for (const l of LEVELS) boards.push(P.box(0.59, 0.02, 0.5, M.woodLight, x, l - 0.01, SHELF_Z)); }
+      merge(frame, M.steel); merge(boards, M.woodLight);
+    }
+    {
+      const SM = { c: M.cardboard, w: new THREE.MeshStandardMaterial({ color: 0xD6DADC, roughness: 0.85 }), k: M.black, g: F.graphite, a: new THREE.MeshStandardMaterial({ color: 0x5FBFBA, roughness: 0.7 }), b: F.anod };
+      const stock = [ // [unit, level, dx, w, h, d, material, y above the shelf]
+        [0, 0, 0, 0.42, 0.3, 0.38, 'c'], [0, 1, -0.15, 0.2, 0.08, 0.15, 'w'], [0, 1, -0.15, 0.2, 0.08, 0.15, 'w', 0.08], [0, 1, 0.12, 0.16, 0.1, 0.13, 'w'], [0, 1, 0.12, 0.12, 0.06, 0.1, 'k', 0.1],
+        ...['g', 'w', 'a', 'g', 'w'].map((k, i) => [0, 2, -0.2 + i * 0.055, 0.048, 0.3, 0.26, k]), [0, 2, 0.17, 0.18, 0.12, 0.2, 'k'],
+        [0, 3, -0.12, 0.25, 0.12, 0.2, 'w'], [0, 3, 0.16, 0.2, 0.15, 0.25, 'c'], [0, 4, 0, 0.45, 0.25, 0.35, 'c'],
+        [1, 0, 0, 0.5, 0.18, 0.36, 'g'], [1, 0, 0, 0.46, 0.12, 0.34, 'g', 0.18], [1, 1, 0, 0.45, 0.0127, 0.3, 'b'], [1, 1, 0, 0.45, 0.0127, 0.3, 'b', 0.0127], [1, 1, 0, 0.12, 0.06, 0.08, 'w', 0.0254],
+        [1, 2, -0.18, 0.16, 0.1, 0.2, 'w'], [1, 2, 0, 0.16, 0.1, 0.2, 'w'], [1, 2, 0.18, 0.16, 0.1, 0.2, 'w'], [1, 2, 0, 0.16, 0.08, 0.2, 'w', 0.1],
+        ...['w', 'g', 'w', 'a'].map((k, i) => [1, 3, -0.22 + i * 0.055, 0.048, 0.3, 0.26, k]), [1, 3, 0.15, 0.22, 0.1, 0.2, 'k'], [1, 4, 0.05, 0.3, 0.2, 0.3, 'c'],
+      ];
+      const bins = {}; for (const [u, l, dx, w, h, d, k, y0 = 0] of stock) (bins[k] ??= []).push(P.box(w, h, d, SM[k], SHELF_X[u] + dx, LEVELS[l] + y0 + h / 2, SHELF_Z));
+      for (const k in bins) merge(bins[k], SM[k]);
+    }
     // Wall-hung decor hides with its wall when the camera orbits outside it (renderer.js owns .visible of tagged parts).
-    P.onWall(sign, 1, 0, -3); P.onWall(shelf, 0, 1, -2.5); lamps.userData.wall = { nx: 0, ny: -1, nz: 0, d: -3 }; // ceiling fixtures: visible while the camera is below the 3 m ceiling
+    P.onWall(sign, 1, 0, -3); lamps.userData.wall = { nx: 0, ny: -1, nz: 0, d: -3 }; // ceiling fixtures: visible while the camera is below the 3 m ceiling
 
     // beam segments (emissive cylinders), rebuilt each frame from the alignment state. The core stays under the bloom
     // threshold: a 1–2 px line just over it bloomed only where it covered whole pixels, which read as a string of beads
@@ -305,22 +539,24 @@ export default {
     }
 
     // Rings and labels anchor on the first part registered for a device: the beam camera's sit on the camera body on
-    // the table, also when the visitor taps the monitor on the back bench that shows its image; the meter's on its head.
+    // the table, also when the visitor taps the monitor on the desk that shows its image; the meter's on its head.
     R.addPickable(laserBody, 'laser'); R.addPickable(shutterPivot, 'laser'); R.addPickable(m1.group, 'm1'); R.addPickable(m2.group, 'm2'); R.addPickable(stageBase, 'stage'); R.addPickable(stageTop, 'stage'); R.addPickable(head, 'meter'); R.addPickable(meterBox, 'meter'); R.addPickable(beamcamBody, 'beamcam'); R.addPickable(profile, 'beamcam');
     R.addPickable(micro, 'stage');
     // Every other visible part of a device answers a tap too (after the anchors above, so rings and labels stay put).
-    for (const o of [laserMount, laserRail, laserLed, hinge]) R.addPickable(o, 'laser');
-    R.addPickable(irisPost, 'stage'); R.addPickable(irisRing, 'stage'); R.addPickable(headPost, 'meter');
-    for (const o of [pickoff, pkClamp, pkPost, camPost, sensorWin, ...monitor]) R.addPickable(o, 'beamcam');
+    for (const o of [laserMount, laserRail, laserLed, hinge, ...laserParts]) R.addPickable(o, 'laser');
+    R.addPickable(m1Cable, 'm1'); R.addPickable(m2Cable, 'm2');
+    for (const o of [irisPost, irisRing, stageRails, stageEnds, stageCable]) R.addPickable(o, 'stage');
+    for (const o of [headPost, ...meterParts, meterScreen]) R.addPickable(o, 'meter');
+    for (const o of [pick, pkPost, camPost, sensorWin, ...beamcamParts, ...monitor]) R.addPickable(o, 'beamcam');
     // Status LEDs on the actuated devices (green once found, blinking red on a fault, dark while offline): a dead mount
     // or stage doesn't look any different otherwise. 1 cm beads, about 8 px on a desktop at the default view.
     const statusLeds = {}, ledGeo = new THREE.SphereGeometry(0.01, 14, 14);
     const addLed = (id, parent, x, y, z) => { const m = new THREE.Mesh(ledGeo, new THREE.MeshStandardMaterial({ color: 0x2FBF71, emissive: 0x2FBF71, emissiveIntensity: 0 })); m.position.set(x, y, z); parent.add(m); statusLeds[id] = m; R.addPickable(m, id); };
-    addLed('laser', R.scene, -1.06, Y + 0.02, 0.347);              // on the head's front face (z 0.345), clear of the emission LED (x −1.14…−1.10)
-    addLed('m1', m1.group, 0.01, -0.09, 0.026);                     // on the mount base's rim, camera side (the group: it doesn't tilt), clear of the post
-    addLed('m2', m2.group, 0.01, -0.09, 0.026);
+    addLed('laser', R.scene, -1.06, Y + 0.02, 0.347);              // on the head's front face (z 0.34), clear of the label and the emission LED
+    addLed('m1', m1.group, m1.base[0] + 0.012, -0.088, m1.base[1] + 0.021); // on the mount base's rim, camera side (the group: it doesn't tilt), clear of the holder
+    addLed('m2', m2.group, m2.base[0] + 0.012, -0.088, m2.base[1] + 0.021);
     addLed('stage', R.scene, 0.05, tableY + 0.015, STAGE_Z + 0.05); // on the base's +x face (camera side), under the carriage at every x
-    const HL = { laser: [laserBody], m1: [m1.plate], m2: [m2.plate], stage: [stageBase, stageTop, barrel, thimbleBody, irisPost, irisRing], meter: [head, meterBox], beamcam: [beamcamBody] }; // the meter pulses where its ring is (head) and its readout; the stage with the iris it carries
+    const HL = { laser: [laserBody, laserParts[0]], m1: [m1.tilt, m1.fixed], m2: [m2.tilt, m2.fixed], stage: [stageBase, stageTop, barrel, thimbleBody, irisPost, irisRing], meter: [head, meterBox], beamcam: [beamcamBody, camNose] }; // the meter pulses where its ring is (head) and its readout; the stage with the iris it carries
     const hi = P.highlighter(HL);
     // The pulse is cyan, except right after a device faults: main.js focuses it then, under a red ring and label, and
     // the pulse goes red with them. (The shells are the highlighter's children of each mesh; one material per device.)
@@ -366,6 +602,7 @@ export default {
         m2.tilt.rotation.y = m2.rotY - THREE.MathUtils.degToRad(s.m2.yaw * EX); m2.tilt.rotation.z = THREE.MathUtils.degToRad(s.m2.pitch * EX);
         const sz = IRIS_Z(s.stage.x); stageTop.position.z = sz; irisPost.position.z = sz; irisRing.position.z = sz; thimble.rotation.y = Math.PI + (s.stage.x - 10) * Math.PI * 4; // 0.5 mm pitch; tick on top at 10 mm
         const p = shown(s); const live = s.laser.on && flagRot > 1.05;
+        if (inUse.userData.on !== live) { inUse.userData.on = live; inUse.material.emissiveIntensity = live ? 1.1 : 0.06; } // the LASER IN USE box: lit while the beam is out
         // beam: laser → M1 → M2 → iris → meter head, with the M2 error steering the last leg (SPREAD). It ends on the
         // head's +x face: centred when aligned, off centre at the start (+0.120°), near the edge at +0.170°.
         const e2y = THREE.MathUtils.degToRad(s.m2.yaw * EX) * 2, e2p = THREE.MathUtils.degToRad(s.m2.pitch * EX) * 2, e1 = THREE.MathUtils.degToRad(s.m1.yaw * EX) * 2;
