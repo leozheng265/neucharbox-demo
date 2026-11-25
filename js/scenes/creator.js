@@ -32,6 +32,114 @@ const HOLD = { wait: 3000 };
 // You, talking: the mic level moving around `db` for 2 s. It shows in the mic tile that sound is (still) flowing.
 const talk = (db) => [{ tween: 'mic.level', to: db + 2, ms: 700 }, { tween: 'mic.level', to: db - 1, ms: 700 }, { tween: 'mic.level', to: db, ms: 600 }];
 
+// Place a loaded model by its bounding box (js/engine/assets.js place()), inlined so the scene needs no extra import.
+function placeModel(THREE, obj, { x = 0, y = 0, z = 0, rotY = 0, s = 1, centreY = false } = {}) {
+  obj.rotation.y = rotY; obj.scale.setScalar(s); obj.position.set(0, 0, 0); obj.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(obj), c = b.getCenter(new THREE.Vector3());
+  obj.position.set(x - c.x, centreY ? y - c.y : y - b.min.y, z - c.z); obj.updateMatrixWorld(true);
+  return new THREE.Box3().setFromObject(obj);
+}
+
+// Shapes for the remodelled kit, after the custom-room versions (js/custom/devices/creator.js): rounded slabs, rods,
+// cables, lathes and merged parts. None is added to the scene: the room adds or merges them.
+function kit(THREE) {
+  const V3 = (p) => (p.isVector3 ? p.clone() : new THREE.Vector3(...p));
+  // A rounded rectangle's outline, as exact points (no zero-length edges for ExtrudeGeometry's bevel to trip on).
+  const rrect = (w, h, r, n = 5) => {
+    const pts = [], cx = w / 2 - r, cy = h / 2 - r;
+    for (const [sx, sy, a0] of [[1, -1, -Math.PI / 2], [1, 1, 0], [-1, 1, Math.PI / 2], [-1, -1, Math.PI]])
+      for (let i = 0; i <= n; i++) { const a = a0 + (i / n) * (Math.PI / 2); pts.push(new THREE.Vector2(sx * cx + r * Math.cos(a), sy * cy + r * Math.sin(a))); }
+    return pts;
+  };
+  // ExtrudeGeometry shades faceted: each corner point takes the area-weighted normal of the faces meeting there, except
+  // across edges sharper than `crease`.
+  const smooth = (geo, crease = 1.1) => {
+    const pos = geo.attributes.position, nrm = geo.attributes.normal, n = pos.count, fn = [], groups = new Map();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), s = new THREE.Vector3(), u = new THREE.Vector3(), w = new THREE.Vector3();
+    for (let i = 0; i < n; i += 3) { a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2); fn.push(c.sub(b).cross(a.sub(b)).clone()); }
+    const key = (i) => `${Math.round(pos.getX(i) * 1e5)},${Math.round(pos.getY(i) * 1e5)},${Math.round(pos.getZ(i) * 1e5)}`;
+    for (let i = 0; i < n; i++) { const k = key(i); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(i); }
+    const cos = Math.cos(crease);
+    for (const list of groups.values()) for (const i of list) {
+      u.copy(fn[(i / 3) | 0]).normalize(); s.set(0, 0, 0);
+      for (const j of list) { w.copy(fn[(j / 3) | 0]); if (w.lengthSq() > 0 && w.clone().normalize().dot(u) >= cos) s.add(w); }
+      if (s.lengthSq() > 0) { s.normalize(); nrm.setXYZ(i, s.x, s.y, s.z); }
+    }
+    nrm.needsUpdate = true;
+    return geo;
+  };
+  const mesh = (geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; return m; };
+  // A slab w × h × d centred on its origin, its corners rounded in x–y and a soft bevel on every edge.
+  const slab = (w, h, d, r, mat, x = 0, y = 0, z = 0, bevel = Math.min(0.002, d / 4)) => {
+    const bs = bevel * 0.9;
+    const g = new THREE.ExtrudeGeometry(new THREE.Shape(rrect(w - 2 * bs, h - 2 * bs, Math.max(r - bs, 0.0005))), { depth: d - 2 * bevel, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bs, bevelSegments: 2, curveSegments: 1 });
+    g.translate(0, 0, -d / 2 + bevel);
+    return mesh(smooth(g), mat, x, y, z);
+  };
+  // The same lying flat (corners rounded as seen from above): a desk mat, a seat, a keyboard case.
+  const flat = (w, h, d, r, mat, x, y, z, bevel) => { const m = slab(w, d, h, r, mat, x, y, z, bevel); m.rotation.x = -Math.PI / 2; return m; };
+  // A flat rounded rectangle facing +z with 0–1 uvs (a sign face).
+  const roundPlane = (w, h, r) => {
+    const g = new THREE.ShapeGeometry(new THREE.Shape(rrect(w, h, r)), 1), uv = g.attributes.uv, p = g.attributes.position;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, p.getX(i) / w + 0.5, p.getY(i) / h + 0.5);
+    return g;
+  };
+  const box = (w, h, d, mat, x, y, z) => mesh(new THREE.BoxGeometry(w, h, d), mat, x, y, z);
+  const cyl = (rt, rb, h, mat, x, y, z, seg = 16) => mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat, x, y, z);
+  const cylX = (r, len, mat, x, y, z, seg = 16) => { const m = cyl(r, r, len, mat, x, y, z, seg); m.rotation.z = Math.PI / 2; return m; };
+  const cylZ = (r, len, mat, x, y, z, seg = 16) => { const m = cyl(r, r, len, mat, x, y, z, seg); m.rotation.x = Math.PI / 2; return m; };
+  // A cylinder from a to b (radius r0 at a, r1 at b).
+  const rod = (a, b, r0, r1, mat, seg = 10) => {
+    const A = V3(a), d = V3(b).sub(A), len = d.length();
+    const m = mesh(new THREE.CylinderGeometry(r1, r0, len, seg), mat);
+    m.position.copy(A).addScaledVector(d, 0.5); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+    return m;
+  };
+  const cable = (pts, r, mat, seg = 40, radial = 6) => mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(V3), false, 'centripetal'), seg, r, radial), mat); // centripetal: no overshoot through the floor
+  const lathe = (prof, mat, seg = 40) => mesh(new THREE.LatheGeometry(prof.map(([x, y]) => new THREE.Vector2(x, y)), seg), mat);
+  // Meshes (not in the scene, each placed by its own position, rotation and scale) baked into one. userData.tint on a part
+  // gives it a vertex colour: a hex, or (nx, ny, nz) → hex by its local face normal (a book's page edges).
+  const merge = (meshes, mat) => {
+    const pos = [], nrm = [], uvs = [], col = [], idx = [], v = new THREE.Vector3(), nm = new THREE.Matrix3(), c = new THREE.Color();
+    const tinted = meshes.some((m) => m.userData.tint != null);
+    for (const m of meshes) {
+      m.updateMatrix(); nm.getNormalMatrix(m.matrix);
+      const g = m.geometry, P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv, base = pos.length / 3, t = m.userData.tint;
+      for (let i = 0; i < P.count; i++) {
+        v.fromBufferAttribute(P, i).applyMatrix4(m.matrix); pos.push(v.x, v.y, v.z);
+        v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); nrm.push(v.x, v.y, v.z);
+        uvs.push(U ? U.getX(i) : 0, U ? U.getY(i) : 0);
+        if (tinted) { c.set(typeof t === 'function' ? t(N.getX(i), N.getY(i), N.getZ(i)) : (t ?? 0xFFFFFF)); col.push(c.r, c.g, c.b); }
+      }
+      if (g.index) for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i));
+      else for (let i = 0; i < P.count; i++) idx.push(base + i);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    if (tinted) geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    return mesh(geo, mat);
+  };
+  const canvasTex = (draw, w = 64, h = 64, srgb = true) => {
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h; draw(cv.getContext('2d'), w, h);
+    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  // Fine random speckle for a bump map: camera leatherette, foam.
+  const speckle = (size = 128, dots = 900, r = 2) => canvasTex((g, w, h) => {
+    g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < dots; i++) { const k = Math.random() < 0.5 ? 40 : 210; g.fillStyle = `rgb(${k},${k},${k})`; g.beginPath(); g.arc(Math.random() * w, Math.random() * h, r * (0.5 + Math.random()), 0, Math.PI * 2); g.fill(); }
+  }, size, size, false);
+  // Stripes across u (ribbed lens rings) or along v (a coil spring).
+  const stripes = (along = 'u') => canvasTex((g, w, h) => { g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, w, h); g.fillStyle = '#5A5F64'; for (let i = 0; i < 4; i++) if (along === 'u') g.fillRect(i * 16 + 8, 0, 7, h); else g.fillRect(0, i * 16 + 8, w, 7); });
+  // Vent slots, dark on white (multiplied by the material colour).
+  const slots = (rows, w = 256, h = 128) => canvasTex((g, cw, ch) => {
+    g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, cw, ch); g.fillStyle = '#2A2D30'; const p = ch / rows;
+    for (let i = 0; i < rows; i++) { g.beginPath(); g.roundRect(cw * 0.04, i * p + p * 0.3, cw * 0.92, p * 0.4, p * 0.2); g.fill(); }
+  }, w, h);
+  return { rrect, slab, flat, roundPlane, mesh, box, cyl, cylX, cylZ, rod, cable, lathe, merge, canvasTex, speckle, stripes, slots };
+}
+
 export default {
   id: 'creator',
   title: 'Creator desk',
@@ -63,12 +171,25 @@ export default {
       active: (s) => s.on && s.brightness > 0.005, faultText: 'off the network' },
   },
 
-  build({ R, P, M, THREE, store, parts, quiet, speed = 1 }) {
+  // Real-world assets (js/engine/assets.js, assets/CREDITS.md). Without them (Node tests, a failed download) the room
+  // builds from primitives: the flat navy walls, the shared floor, a box desk and the wall shelf.
+  assets: {
+    models: ['wooden_table_02', 'steel_frame_shelves_02', 'potted_plant_04'],
+    textures: ['wood_floor', 'painted_plaster_wall'],
+  },
+
+  build({ R, P, M, THREE, store, parts, quiet, speed = 1, assets = null }) {
     const isQuiet = typeof quiet === 'function' ? quiet : () => false; // true while a what-if replays the request quietly
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x2E3A48, roughness: 0.95 });
-    // The floor is a little more matte than the shared one: at 80% the key light's reflection in the glossy finish blew out
-    // a wide patch of floor in front of the chair, seen from the front-left end of the view's sway.
-    const floorMat = M.floor.clone(); Object.assign(floorMat, { roughness: 0.6, clearcoat: 0.12, clearcoatRoughness: 0.55 });
+    const A = assets?.models ? assets : null, MOD = (id) => A?.models[id] || null, TX = (id) => A?.textures?.[id] || null;
+    const pbr = (id, rep, extra = {}) => { const set = TX(id); if (!set) return null; const m = {}; for (const k of ['map', 'normalMap', 'roughnessMap']) if (set[k]) { const t = set[k].clone(); t.repeat.set(...rep); t.needsUpdate = true; m[k] = t; } return new THREE.MeshStandardMaterial({ ...m, roughness: 1, ...extra }); };
+    const K = kit(THREE), add = (o) => { R.scene.add(o); return o; };
+    // Navy paint over the plaster's relief (its photo dropped, as in Home's white walls), on a real oak floor, a little
+    // darker and matte: at 80% the key light's reflection in a glossy finish blew out a wide patch of floor in front of the
+    // chair, seen from the front-left end of the view's sway. Without the textures, flat navy and the shared floor, matted.
+    const wallPbr = pbr('painted_plaster_wall', [2.2, 1.2], { color: 0x2E3A48 }); if (wallPbr) { wallPbr.map = null; wallPbr.normalScale.set(0.6, 0.6); }
+    const wallMat = wallPbr || new THREE.MeshStandardMaterial({ color: 0x2E3A48, roughness: 0.95 });
+    let floorMat = pbr('wood_floor', [2.5, 2.25], { color: 0xCFC6BC, roughness: 0.9 });
+    if (!floorMat) { floorMat = M.floor.clone(); Object.assign(floorMat, { roughness: 0.6, clearcoat: 0.12, clearcoatRoughness: 0.55 }); }
     P.roomShell({ w: 5, d: 4.5, h: 2.7, wallMat, floorMat });
     // Skirting and crown on the right wall (x = 2.5: the view's sway shows it about half the time) and the front wall
     // (z = 2.25, seen from behind the back wall), which the shell leaves bare. A few mm lower than the shell's, so no two
@@ -84,68 +205,278 @@ export default {
     const lamp = new THREE.Group(); lamp.position.set(0.5, 2.7, 0.6); lamp.userData.wall = { nx: 0, ny: -1, nz: 0, d: -2.7 }; R.scene.add(lamp);
     const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.03, 40), new THREE.MeshStandardMaterial({ color: 0x5E646A, metalness: 0.6, roughness: 0.4 })); lampBase.position.y = -0.015; // a darker rim: it outlines the lamp in its own glow
     const lampDiffuser = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.035, 40), new THREE.MeshStandardMaterial({ color: 0xFFFFFF, emissive: 0xFFF1DC, emissiveIntensity: 1.1, roughness: 0.6 })); lampDiffuser.position.y = -0.0375; lamp.add(lampBase, lampDiffuser);
-    // desk against the back wall; its top is satin rather than semi-gloss, so looking into the key light doesn't blow it out
-    const deskMat = M.wood.clone(); deskMat.roughness = 0.75;
-    // Matte black for the gear on and over the desk. The key light is only a metre from the camera rig, and M.black's
-    // specular turned the camera, its arm, the keyboard and the monitor's side white whenever the light was on.
+    // Contact shadows: the soft dark where the desk legs, the chair's casters, the shelf and the stands meet the floor.
+    R.addContactShadows?.({ w: 5, d: 4.5 });
+
+    // Finishes. Matte black for the gear on and over the desk: the key light is only a metre from the camera rig, and
+    // M.black's specular turned the camera, its arm, the keyboard and the monitor's side white whenever the light was on.
+    // Everything near the light keeps a low specular for the same reason.
     const gear = new THREE.MeshPhysicalMaterial({ color: 0x141619, roughness: 0.8, metalness: 0, specularIntensity: 0.3 });
-    P.box(1.8, 0.04, 0.8, deskMat, 0, 0.74, -1.75, 0.01); [[-0.85, -0.35], [0.85, -0.35], [-0.85, 0.35], [0.85, 0.35]].forEach((p) => P.box(0.05, 0.72, 0.05, M.black, p[0], 0.36, -1.75 + p[1]));
-    // monitor with the overlay scene on it
-    const monitor = P.box(0.62, 0.38, 0.03, gear, 0, 1.14, -2.0, 0.01), monBase = P.box(0.14, 0.02, 0.18, gear, 0, 0.77, -1.95), monPost = P.box(0.04, 0.18, 0.04, gear, 0, 0.86, -2.0);
-    const screen = P.screenPlane(0.58, 0.34, null); screen.position.set(0, 1.14, -1.983); screen.material.roughness = 0.85; // matte: the key light, grazing it, doesn't wash the picture out
-    P.box(0.42, 0.02, 0.14, gear, 0, 0.77, -1.6, 0.005); P.box(0.06, 0.015, 0.1, gear, 0.45, 0.77, -1.6, 0.005); // keyboard, mouse
-    // camera on an arm above the monitor
-    const camArm = P.box(0.03, 0.03, 0.5, gear, 0.35, 1.44, -1.85), camPost = P.box(0.03, 0.695, 0.03, gear, 0.35, 1.1075, -2.1); // post: desk top (0.76) up to the arm
-    const camBody = P.box(0.1, 0.08, 0.12, gear, 0.35, 1.48, -1.62, 0.01); const camLens = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.05, 20), M.anodized); camLens.rotation.x = Math.PI / 2; camLens.position.set(0.35, 1.48, -1.54); R.scene.add(camLens); const camLed = P.ledDot(0.315, 1.512, -1.558, 0xE0563A, 0.006); // tally, on the front face
-    // spare USB webcam on top of the monitor (plugged into the PC, not the capture card)
+    const rub = new THREE.MeshStandardMaterial({ color: 0x17191B, roughness: 0.9 }); // cables, knobs, feet
+    const powder = new THREE.MeshPhysicalMaterial({ color: 0x1E2124, roughness: 0.6, metalness: 0.25, specularIntensity: 0.5, clearcoat: 0.1, clearcoatRoughness: 0.6 }); // powder-coated stands and arms
+    const cables = []; // every lead in the room, merged into one mesh at the end
+
+    // ---------- desk ----------
+    // A plain wooden table stretched to a 1.8 × 0.8 m desk with its top at 0.76: all its vertices sit near its ends and
+    // corners, so moving each end out (and the top down) widens the top without fattening the legs. Its own copy of the
+    // geometry: the loaded one is shared with every other copy of the model.
+    const DESK_Z = -1.75, deskModel = MOD('wooden_table_02');
+    if (deskModel) {
+      deskModel.traverse((o) => {
+        if (!o.isMesh) return;
+        const g = o.geometry.clone(); g.userData.shared = false; g.computeBoundingBox();
+        const b = g.boundingBox, p = g.attributes.position, cx = (b.min.x + b.max.x) / 2, cz = (b.min.z + b.max.z) / 2;
+        const dx = Math.max(0, (1.8 - (b.max.x - b.min.x)) / 2), dz = Math.max(0, (0.8 - (b.max.z - b.min.z)) / 2), dy = b.max.y - b.min.y - 0.76, yCut = b.min.y + 0.6 * (b.max.y - b.min.y);
+        for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i); p.setXYZ(i, x + Math.sign(x - cx) * dx, y > yCut ? y - dy : y, z + Math.sign(z - cz) * dz); }
+        p.needsUpdate = true; g.computeBoundingBox(); g.computeBoundingSphere(); o.geometry = g;
+      });
+      add(deskModel); placeModel(THREE, deskModel, { x: 0, z: DESK_Z });
+    } else {
+      const deskMat = M.wood.clone(); deskMat.roughness = 0.75; // satin rather than semi-gloss, so looking into the key light doesn't blow it out
+      P.box(1.8, 0.04, 0.8, deskMat, 0, 0.74, DESK_Z, 0.01); [[-0.85, -0.35], [0.85, -0.35], [-0.85, 0.35], [0.85, 0.35]].forEach((p) => P.box(0.05, 0.72, 0.05, M.black, p[0], 0.36, DESK_Z + p[1]));
+    }
+    // A felt desk mat under a tenkeyless keyboard (graphite case, PBT caps, an aqua Esc) and a mouse.
+    add(K.flat(1.0, 0.003, 0.28, 0.014, new THREE.MeshPhysicalMaterial({ color: 0x2A2D32, roughness: 1, sheen: 0.6, sheenRoughness: 0.8, sheenColor: 0x4A4F56, bumpMap: M.sofa.bumpMap, bumpScale: 0.3 }), 0.05, 0.7615, -1.53, 0.001));
+    {
+      const u = 0.019, Y0 = 0.763, KZ = -1.6, caseMat = new THREE.MeshPhysicalMaterial({ color: 0x2C3035, metalness: 0.5, roughness: 0.55, specularIntensity: 0.4 });
+      add(K.flat(0.362, 0.02, 0.138, 0.008, caseMat, 0, Y0 + 0.01, KZ, 0.002));
+      // Rows from the back: e = Esc, g = a gap, m = a modifier, plain numbers = letter keys (widths in key units).
+      const rows = [['e1', 'g1', 1, 1, 1, 1, 'g.5', 1, 1, 1, 1, 'g.5', 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 'm2'], ['m1.5', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 'm1.5'],
+        ['m1.75', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 'm2.25'], ['m2.25', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 'm2.75'], ['m1.25', 'm1.25', 'm1.25', 6.25, 'm1.25', 'm1.25', 'm1.25', 'm1.25']];
+      const nav = [[0, 1, 2], [0, 1, 2], [0, 1, 2], [], [1], [0, 1, 2]]; // the cluster right of the main block, per row
+      const TONE = { k: [0x3B4047, 0x474D55], m: [0x272B30, 0x30353B], e: [0x249E9A, 0x33C2BC] }, caps = [];
+      const x0 = -0.1734, z0 = KZ - 0.0595;
+      const cap = (x, z, w, kind) => { const m = K.box(w * u - 0.0035, 0.008, u - 0.0035, null, x + (w * u) / 2, Y0 + 0.024, z); const [side, top] = TONE[kind]; m.userData.tint = (nx, ny) => (ny > 0.5 ? top : side); caps.push(m); };
+      rows.forEach((row, r) => {
+        const z = z0 + (r + (r > 0 ? 0.25 : 0)) * u + u / 2; let x = x0;
+        for (const k of row) { const kind = typeof k === 'string' ? k[0] : 'k', w = typeof k === 'string' ? parseFloat(k.slice(1)) : k; if (kind !== 'g') cap(x, z, w, kind); x += w * u; }
+        for (const c of nav[r]) cap(x0 + 15.25 * u + c * u, z, 1, 'm');
+      });
+      add(K.merge(caps, new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.75, specularIntensity: 0.4 })));
+      const mouseMat = new THREE.MeshPhysicalMaterial({ color: 0x1B1D21, roughness: 0.55, specularIntensity: 0.5, clearcoat: 0.2, clearcoatRoughness: 0.5 });
+      const shell = K.mesh(new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), mouseMat, 0.45, Y0, -1.6); shell.scale.set(0.031, 0.036, 0.059);
+      add(K.merge([shell], mouseMat)); add(K.cylX(0.008, 0.007, rub, 0.45, Y0 + 0.03, -1.625, 16));
+      cables.push(K.cable([[-0.1, Y0 + 0.012, KZ - 0.069], [-0.12, Y0 + 0.003, -1.72], [-0.16, Y0 + 0.003, -1.95], [-0.13, Y0 + 0.003, -2.12], [-0.11, 0.72, -2.168], [-0.06, 0.3, -2.185], [0.3, 0.01, -2.19], [0.56, 0.12, -2.09], [0.6, 0.27, -2.072]], 0.0028, rub, 64));
+    }
+
+    // ---------- monitor, with the overlay scene on it ----------
+    // A 27-inch monitor: a slim dark shell with a rear housing, on a neck and a flat foot. The screen is matte: the key
+    // light, grazing it, doesn't wash the picture out.
+    const shellMat = new THREE.MeshPhysicalMaterial({ color: 0x17191D, roughness: 0.75, specularIntensity: 0.3 });
+    const standMat = new THREE.MeshPhysicalMaterial({ color: 0x3A3E44, metalness: 0.3, roughness: 0.6, specularIntensity: 0.5 });
+    const monitor = add(K.merge([K.slab(0.62, 0.38, 0.012, 0.006, shellMat, 0, 1.14, -1.991), K.slab(0.44, 0.24, 0.026, 0.03, shellMat, 0, 1.15, -2.01, 0.004)], shellMat));
+    const monPost = add(K.merge([K.slab(0.05, 0.34, 0.018, 0.008, standMat, 0, 0.95, -2.042), K.slab(0.07, 0.05, 0.02, 0.008, standMat, 0, 1.12, -2.03)], standMat));
+    const monBase = add(K.flat(0.24, 0.012, 0.17, 0.03, standMat, 0, 0.766, -1.985, 0.003));
+    const screen = P.screenPlane(0.58, 0.34, null); screen.position.set(0, 1.14, -1.983); screen.material.roughness = 0.85;
+    cables.push(K.cable([[0.04, 1.03, -2.025], [0.035, 0.95, -2.054], [0.035, 0.8, -2.056], [0.035, 0.764, -2.1], [0.04, 0.763, -2.142], [0.045, 0.72, -2.168], [0.09, 0.3, -2.182], [0.3, 0.02, -2.185], [0.55, 0.15, -2.09], [0.58, 0.29, -2.072]], 0.0035, rub, 64));
+    // spare USB webcam clipped on top of the monitor (plugged into the PC, not the capture card)
     const WEB = [0.1, 1.33 + 0.018, -1.99]; // sits on the monitor's top edge (y = 1.33)
-    const webcam = P.box(0.085, 0.036, 0.045, gear, ...WEB, 0.008); const webLens = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.013, 0.008, 20), M.anodized); webLens.rotation.x = Math.PI / 2; webLens.position.set(WEB[0], WEB[1], WEB[2] + 0.0265); R.scene.add(webLens);
-    const webGlass = new THREE.Mesh(new THREE.CircleGeometry(0.0085, 20), new THREE.MeshStandardMaterial({ color: 0x0A0F14, roughness: 0.1, metalness: 0.3 })); webGlass.position.set(WEB[0], WEB[1], WEB[2] + 0.0307); R.scene.add(webGlass);
-    const webcamLed = P.ledDot(WEB[0] + 0.03, WEB[1] + 0.007, WEB[2] + 0.0225, 0x2FBF71, 0.004);
-    // mic on a boom arm from the desk's left edge
-    const micPost = P.cyl(0.015, 0.015, 0.6, gear, -0.85, 1.06, -1.5, 12); const boom = P.box(0.6, 0.02, 0.02, gear, -0.55, 1.35, -1.5); boom.rotation.z = 0.15; const micBody = P.cyl(0.035, 0.035, 0.16, M.steel, -0.3, 1.32, -1.5, 20); micBody.rotation.x = 0.5; const micLed = P.ledDot(-0.3, 1.302, -1.4675, 0xE0563A, 0.006); // on the front face of the tilted mic
-    // capture card box + hub + phone
-    const capBox = P.box(0.14, 0.03, 0.09, M.anodized, 0.7, 0.775, -1.85, 0.006); const capLed = P.ledDot(0.65, 0.78, -1.803, 0x2FBF71, 0.005); // on the front face
+    const webMat = new THREE.MeshPhysicalMaterial({ color: 0x1A1C1F, roughness: 0.5, specularIntensity: 0.5, clearcoat: 0.3, clearcoatRoughness: 0.4 });
+    const webcam = add(K.mesh(new THREE.CapsuleGeometry(0.016, 0.058, 6, 16), webMat, ...WEB)); webcam.rotation.z = Math.PI / 2; webcam.scale.set(1, 1, 0.9);
+    const webClip = add(K.merge([K.box(0.04, 0.004, 0.026, gear, WEB[0], 1.332, -1.99), K.box(0.036, 0.05, 0.004, gear, WEB[0], 1.307, -2.0), K.box(0.03, 0.012, 0.008, gear, WEB[0], 1.338, -1.99)], gear));
+    const webLens = add(K.cylZ(0.0115, 0.003, M.anodized, WEB[0], WEB[1], WEB[2] + 0.0148, 24));
+    const webGlass = new THREE.Mesh(new THREE.CircleGeometry(0.0085, 20), new THREE.MeshPhysicalMaterial({ color: 0x0A0F14, roughness: 0.08, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.03 })); webGlass.position.set(WEB[0], WEB[1], WEB[2] + 0.0166); R.scene.add(webGlass);
+    const webcamLed = P.ledDot(WEB[0] + 0.024, WEB[1] + 0.006, WEB[2] + 0.0134, 0x2FBF71, 0.003);
+    cables.push(K.cable([[WEB[0], 1.285, -2.003], [0.09, 1.2, -2.027], [0.075, 0.95, -2.05], [0.07, 0.8, -2.055], [0.07, 0.764, -2.1], [0.075, 0.763, -2.142], [0.08, 0.72, -2.168], [0.12, 0.3, -2.18], [0.32, 0.02, -2.18], [0.57, 0.16, -2.09], [0.61, 0.3, -2.072]], 0.0025, rub, 64));
+
+    // ---------- main camera on a desk-clamped arm above the monitor ----------
+    // A mirrorless camera (leatherette body, grip, viewfinder hump, a coated zoom lens) on a ball head, turned a little
+    // down and towards the chair. The arm clamps on the desk's back edge behind the monitor.
+    const camPost = add(K.merge([
+      K.slab(0.045, 0.012, 0.06, 0.003, gear, 0.35, 0.766, -2.125), K.slab(0.045, 0.09, 0.012, 0.003, gear, 0.35, 0.7275, -2.156), K.slab(0.045, 0.012, 0.05, 0.003, gear, 0.35, 0.689, -2.13),
+      K.cyl(0.005, 0.005, 0.035, gear, 0.35, 0.668, -2.128, 10), K.cyl(0.016, 0.016, 0.01, gear, 0.35, 0.648, -2.128, 20), // clamp screw and its knob
+      K.cyl(0.012, 0.012, 0.648, gear, 0.35, 1.096, -2.1, 14), K.cyl(0.017, 0.017, 0.03, gear, 0.35, 1.405, -2.1, 16)], gear));
+    const camArm = add(K.merge([K.rod([0.35, 1.415, -2.1], [0.35, 1.432, -1.86], 0.009, 0.009, gear, 10), K.cylX(0.018, 0.032, gear, 0.35, 1.432, -1.86, 18), K.cylX(0.013, 0.012, gear, 0.372, 1.432, -1.86, 16),
+      K.rod([0.35, 1.432, -1.86], [0.35, 1.425, -1.66], 0.009, 0.009, gear, 10), K.mesh(new THREE.SphereGeometry(0.014, 14, 10), gear, 0.35, 1.427, -1.645), K.cyl(0.012, 0.016, 0.012, gear, 0.35, 1.418, -1.645, 16)], gear));
+    const camBody = add(new THREE.Group()); camBody.position.set(0.35, 1.441, -1.645); camBody.rotation.order = 'YXZ'; camBody.rotation.set(0.1, -0.3, 0);
+    let camLed;
+    {
+      const leather = new THREE.MeshPhysicalMaterial({ color: 0x232629, roughness: 0.7, bumpMap: K.speckle(), bumpScale: 0.6, specularIntensity: 0.4 }); leather.bumpMap.repeat.set(40, 40);
+      const topM = new THREE.MeshPhysicalMaterial({ color: 0x2C3034, metalness: 0.4, roughness: 0.5, specularIntensity: 0.5 });
+      const ribbed = new THREE.MeshStandardMaterial({ color: 0x2A2D30, roughness: 0.85, map: K.stripes() }); ribbed.map.repeat.set(30, 1);
+      const lensMat = new THREE.MeshPhysicalMaterial({ color: 0x1D2023, roughness: 0.55, specularIntensity: 0.4 });
+      const coat = new THREE.MeshPhysicalMaterial({ color: 0x0A1016, roughness: 0.04, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.02, iridescence: 0.7, iridescenceIOR: 1.6 }); // multicoated front element
+      const lens = new THREE.Group(); lens.add(
+        K.lathe([[0.029, 0], [0.032, 0.002], [0.032, 0.012], [0.0335, 0.014], [0.0335, 0.086], [0.0345, 0.089], [0.032, 0.093], [0.0272, 0.093], [0.0262, 0.086]], lensMat, 40),
+        K.cyl(0.0345, 0.0345, 0.026, ribbed, 0, 0.033, 0, 40), K.cyl(0.0345, 0.0345, 0.015, ribbed, 0, 0.068, 0, 40), K.cyl(0.0305, 0.0305, 0.004, M.metal, 0, 0, 0, 32));
+      const glass = new THREE.Mesh(new THREE.SphereGeometry(0.06, 32, 4, 0, Math.PI * 2, 0, 0.45), coat); glass.position.y = 0.0285; lens.add(glass);
+      lens.rotation.x = Math.PI / 2; lens.position.set(0.01, -0.002, 0.02);
+      const rear = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.0465), new THREE.MeshPhysicalMaterial({ color: 0x07090B, roughness: 0.12, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.04 })); rear.rotation.y = Math.PI; rear.position.set(0.012, -0.004, -0.0232); rear.userData.noAO = true;
+      // the body faces +z, its grip on the -x side (the operator's right); the plate under it sits on the ball head
+      const body = new THREE.Group(); body.position.set(-0.01, 0.044, 0); camBody.add(body);
+      body.add(
+        K.merge([K.slab(0.128, 0.072, 0.04, 0.008, leather), K.slab(0.034, 0.07, 0.03, 0.012, leather, -0.047, -0.001, 0.03)], leather),
+        K.merge([K.slab(0.054, 0.026, 0.05, 0.008, topM, 0.01, 0.045, -0.004), K.cyl(0.011, 0.011, 0.007, topM, -0.045, 0.0395, 0.008, 24), K.cyl(0.012, 0.012, 0.008, topM, 0.05, 0.04, 0, 24), K.slab(0.052, 0.008, 0.042, 0.004, topM, 0.01, -0.04, 0)], topM),
+        K.merge([K.slab(0.04, 0.026, 0.012, 0.006, rub, 0.01, 0.045, -0.034), K.slab(0.078, 0.054, 0.003, 0.004, rub, 0.012, -0.004, -0.0215)], rub),
+        K.merge([K.cyl(0.005, 0.005, 0.004, M.metal, -0.047, 0.0375, 0.03, 14), K.box(0.022, 0.003, 0.018, M.metal, 0.01, 0.0595, -0.006), K.cylX(0.0035, 0.006, M.metal, -0.066, 0.02, -0.005, 10), K.cylX(0.0035, 0.006, M.metal, 0.066, 0.02, -0.005, 10)], M.metal),
+        rear, lens);
+      camLed = P.ledDot(0, 0, 0, 0xE0563A, 0.005); body.add(camLed); camLed.position.set(0.01, 0.0585, 0.014); // tally lamp, on the front of the hump
+    }
+
+    // ---------- mic: a broadcast dynamic mic in a yoke, on a desk-clamped spring boom from the desk's left edge ----------
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    const B = V(-0.86, 0.93, -1.55), E = V(-0.72, 1.46, -1.68), T = V(-0.3, 1.43, -1.5); // base pivot, elbow, tip
+    const micPost = add(K.merge([
+      K.slab(0.06, 0.012, 0.05, 0.003, powder, -0.865, 0.766, -1.55), K.slab(0.012, 0.09, 0.05, 0.003, powder, -0.906, 0.7275, -1.55), K.slab(0.05, 0.012, 0.05, 0.003, powder, -0.87, 0.689, -1.55),
+      K.cyl(0.005, 0.005, 0.035, powder, -0.87, 0.668, -1.55, 10), K.cyl(0.016, 0.016, 0.01, powder, -0.87, 0.648, -1.55, 20),
+      K.cyl(0.02, 0.02, 0.03, powder, -0.86, 0.787, -1.55, 18), K.cyl(0.014, 0.014, 0.16, powder, -0.86, 0.852, -1.55, 14)], powder));
+    const boomParts = [], knobParts = [], springs = [], hubAxis = new THREE.Vector3().crossVectors(T.clone().sub(B), V(0, 1, 0)).normalize();
+    for (const [a, b] of [[B, E], [E, T]]) { // each section: two parallel bars with a coil spring above them
+      const d = b.clone().sub(a).normalize(), n = V(0, 1, 0).addScaledVector(d, -d.y).normalize(); // the arm's "up", in its own vertical plane
+      for (const o of [-0.011, 0.011]) boomParts.push(K.rod(a.clone().addScaledVector(n, o), b.clone().addScaledVector(n, o), 0.0055, 0.0055, powder, 8));
+      const springMat = new THREE.MeshStandardMaterial({ color: 0xB9BEC3, metalness: 1, roughness: 0.3, map: K.stripes('v') }); springMat.map.repeat.set(1, (a.distanceTo(b) * 0.65) / 0.004);
+      springs.push(add(K.rod(a.clone().lerp(b, 0.18).addScaledVector(n, 0.027), b.clone().lerp(a, 0.18).addScaledVector(n, 0.027), 0.0045, 0.0045, springMat, 10)));
+    }
+    for (const p of [B, E, T]) { boomParts.push(K.rod(p.clone().addScaledVector(hubAxis, -0.016), p.clone().addScaledVector(hubAxis, 0.016), 0.016, 0.016, powder, 18)); knobParts.push(K.rod(p.clone().addScaledVector(hubAxis, 0.016), p.clone().addScaledVector(hubAxis, 0.026), 0.011, 0.011, rub, 16)); }
+    boomParts.push(K.rod(T, V(T.x, T.y - 0.03, T.z), 0.006, 0.006, powder, 10)); // the threaded stud down into the yoke
+    const boom = add(K.merge(boomParts, powder)), boomKnobs = add(K.merge(knobParts, rub));
+    // The mic hangs in its yoke (turned to the chair) and tilts in it, front down at the streamer's mouth.
+    const MIC = T.clone().add(V(0, -0.085, 0)), MOUTH = V(0, 1.17, -0.95);
+    const micBody = add(new THREE.Group()); micBody.position.copy(MIC); micBody.rotation.y = Math.atan2(MOUTH.x - MIC.x, MOUTH.z - MIC.z);
+    micBody.add(K.merge([K.box(0.084, 0.008, 0.016, powder, 0, 0.058, 0), K.box(0.006, 0.062, 0.016, powder, -0.039, 0.03, 0), K.box(0.006, 0.062, 0.016, powder, 0.039, 0.03, 0), K.cyl(0.006, 0.006, 0.03, powder, 0, 0.075, 0, 10)], powder),
+      K.merge([K.cylX(0.012, 0.01, rub, -0.047, 0, 0, 18), K.cylX(0.012, 0.01, rub, 0.047, 0, 0, 18)], rub));
+    const micTilt = new THREE.Group(); micTilt.rotation.x = Math.atan2(MIC.y - MOUTH.y, Math.hypot(MOUTH.x - MIC.x, MOUTH.z - MIC.z)); micBody.add(micTilt);
+    const micAxis = new THREE.Group(); micAxis.rotation.x = Math.PI / 2; micTilt.add(micAxis); // built along +y, turned to face +z
+    let micLed;
+    {
+      const bodyMat = new THREE.MeshPhysicalMaterial({ color: 0x2B2F33, metalness: 0.4, roughness: 0.5, specularIntensity: 0.5, clearcoat: 0.2, clearcoatRoughness: 0.4 });
+      const foamMat = new THREE.MeshPhysicalMaterial({ color: 0x2A2D31, roughness: 1, bumpMap: K.speckle(128, 1400, 1.5), bumpScale: 1.2, sheen: 1, sheenRoughness: 0.8, sheenColor: 0x5A5F64 }); foamMat.bumpMap.repeat.set(6, 4);
+      const foam = K.mesh(new THREE.SphereGeometry(1, 22, 14), foamMat, 0, 0.056, 0); foam.scale.set(0.034, 0.05, 0.034);
+      const band = K.mesh(new THREE.CylinderGeometry(0.0312, 0.0312, 0.008, 32, 1, true), M.steel, 0, -0.055, 0);
+      micAxis.add(K.lathe([[0, -0.1], [0.013, -0.1], [0.02, -0.094], [0.027, -0.075], [0.03, -0.04], [0.031, 0], [0.0305, 0.04], [0.028, 0.055], [0, 0.055]], bodyMat, 32), foam, band, K.cyl(0.012, 0.012, 0.004, M.steel, 0, -0.102, 0, 20));
+      micLed = P.ledDot(0, 0, 0, 0xE0563A, 0.005); micAxis.add(micLed); micLed.position.set(0, -0.07, -0.0275); // on top of the body, near its back
+    }
+    {
+      micBody.updateMatrixWorld(true); const back = micAxis.localToWorld(V(0, -0.104, 0));
+      cables.push(K.cable([back, back.clone().add(V(0, -0.035, 0.0)), V(T.x - 0.03, T.y - 0.06, T.z - 0.02), E.clone().lerp(T, 0.5).add(V(0, -0.035, 0)), E.clone().add(V(0, -0.035, 0.01)), B.clone().lerp(E, 0.5).add(V(0.01, 0, 0.03)),
+        B.clone().add(V(0.02, -0.05, 0.03)), V(-0.82, 0.763, -1.62), V(-0.78, 0.763, -1.95), V(-0.75, 0.763, -2.13), V(-0.72, 0.71, -2.168), V(-0.66, 0.3, -2.19), V(-0.58, 0.05, -2.2), V(-0.45, 0.004, -2.2), V(-0.1, 0.004, -2.2), V(0.3, 0.004, -2.2), V(0.48, 0.03, -2.16), V(0.6, 0.15, -2.09), V(0.64, 0.28, -2.072)], 0.0032, rub, 120));
+    }
+
+    // ---------- capture card, the hub, the phone ----------
+    // An aluminium capture box between black end caps, HDMI in and out towards the camera post, USB-C towards the PC; the
+    // OLED window on top shows its input and whether a picture arrives.
+    const capBox = add(new THREE.Group()); capBox.position.set(0.7, 0.76, -1.85); capBox.rotation.y = -Math.PI / 2; // its front (+z, the HDMI end) faces -x
+    let capLed, oledTex;
+    {
+      const alu = new THREE.MeshStandardMaterial({ color: 0xBFC4C9, metalness: 1, roughness: 0.45 }), capMat = new THREE.MeshPhysicalMaterial({ color: 0x17191B, roughness: 0.55 }), Y = 0.017, FONT = 'Inter, "Segoe UI", sans-serif';
+      const portTex = K.canvasTex((g) => {
+        g.fillStyle = '#17191B'; g.fillRect(0, 0, 256, 37); g.fillStyle = '#7A8188'; g.font = `600 7px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+        for (const [x, label] of [[58, 'IN'], [138, 'OUT']]) {
+          g.fillText(label, x, 7);
+          g.fillStyle = '#9AA0A6'; g.beginPath(); g.moveTo(x - 15, 15); g.lineTo(x + 15, 15); g.lineTo(x + 15, 22); g.lineTo(x + 12, 26); g.lineTo(x - 12, 26); g.lineTo(x - 15, 22); g.closePath(); g.fill();
+          g.fillStyle = '#060708'; g.fillRect(x - 13, 17, 26, 6); g.fillStyle = '#7A8188';
+        }
+        g.fillText('AUDIO', 208, 7); g.fillStyle = '#9AA0A6'; g.beginPath(); g.arc(208, 21, 6, 0, Math.PI * 2); g.fill(); g.fillStyle = '#060708'; g.beginPath(); g.arc(208, 21, 4, 0, Math.PI * 2); g.fill();
+      }, 256, 37);
+      const usbTex = K.canvasTex((g) => { g.fillStyle = '#17191B'; g.fillRect(0, 0, 256, 37); g.fillStyle = '#9AA0A6'; g.beginPath(); g.roundRect(39, 16, 18, 6, 3); g.fill(); g.fillStyle = '#060708'; g.beginPath(); g.roundRect(41, 17.5, 14, 3, 1.5); g.fill(); }, 256, 37);
+      const decal = (tex, z, back) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.128, 0.0185), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55 })); m.position.set(0, Y, z); if (back) m.rotation.y = Math.PI; m.userData.noAO = true; return m; };
+      const plugs = [K.slab(0.021, 0.0095, 0.03, 0.002, rub, -0.035, Y, 0.0635), K.rod([-0.035, Y, 0.078], [-0.035, Y, 0.095], 0.0042, 0.0034, rub, 10), K.slab(0.012, 0.006, 0.022, 0.002, rub, 0.04, Y, -0.0595), K.rod([0.04, Y, -0.0705], [0.04, Y, -0.082], 0.0032, 0.0026, rub, 10)];
+      const feet = [[-0.055, -0.035], [0.055, -0.035], [-0.055, 0.035], [0.055, 0.035]].map(([x, z]) => K.cyl(0.006, 0.006, 0.004, rub, x, 0.002, z, 10));
+      const window_ = new THREE.Mesh(K.roundPlane(0.092, 0.041, 0.004), new THREE.MeshPhysicalMaterial({ color: 0x07090B, roughness: 0.12, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.04 })); window_.rotation.x = -Math.PI / 2; window_.position.set(-0.014, 0.0302, 0.004); window_.userData.noAO = true;
+      const oc = document.createElement('canvas'); oc.width = 192; oc.height = 80; oledTex = new THREE.CanvasTexture(oc); oledTex.colorSpace = THREE.SRGBColorSpace; oledTex.userData.g = oc.getContext('2d');
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(0.084, 0.035), new THREE.MeshStandardMaterial({ map: oledTex, emissive: 0xffffff, emissiveMap: oledTex, emissiveIntensity: 0.7, roughness: 0.3 })); label.rotation.x = -Math.PI / 2; label.position.set(-0.014, 0.0305, 0.004); label.userData.noAO = true;
+      capBox.add(K.slab(0.14, 0.026, 0.09, 0.008, alu, 0, Y, 0, 0.0015), K.merge([K.slab(0.137, 0.0235, 0.003, 0.0068, capMat, 0, Y, 0.0465), K.slab(0.137, 0.0235, 0.003, 0.0068, capMat, 0, Y, -0.0465)], capMat),
+        decal(portTex, 0.0481, false), decal(usbTex, -0.0481, true), K.merge([...plugs, ...feet], rub), window_, label);
+      capLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.005); capBox.add(capLed); capLed.position.set(0.05, 0.03, 0.03); // on top, by the HDMI end
+      capBox.updateMatrixWorld(true); const W = (x, y, z) => capBox.localToWorld(V(x, y, z));
+      // HDMI from the camera, down its post and across the desk; USB-C off the desk's right edge to the PC under it
+      cables.push(K.cable([W(-0.035, Y, 0.094), W(-0.04, 0.005, 0.13), V(0.5, 0.763, -1.92), V(0.42, 0.763, -2.04), V(0.368, 0.775, -2.098), V(0.366, 1.0, -2.112), V(0.366, 1.35, -2.112), V(0.372, 1.43, -2.06), V(0.38, 1.452, -1.86), V(0.392, 1.462, -1.7), V(0.405, 1.472, -1.64)], 0.0032, rub, 80),
+        K.cable([W(0.04, Y, -0.081), W(0.042, 0.004, -0.11), V(0.88, 0.763, -1.86), V(0.912, 0.74, -1.872), V(0.92, 0.6, -1.9), V(0.86, 0.35, -1.98), V(0.76, 0.3, -2.06), V(0.68, 0.32, -2.074)], 0.0026, rub, 48));
+    }
     // The hub sits right of the monitor, clear of the camera post, the mouse and the capture card, and turned a little to the
     // default view: from there (on a phone too) it, its ring and its label stay clear of the chair back. The phone is by it.
     const hub = P.hub(0.5, 0.76, -1.78, { rotY: 0.3 }); R.addPickable(hub.group, 'hub'); P.phone(0.75, 0.765, -1.56, 0.35);
-    // key light: stand right of the desk, in front of the chair, softbox aimed at where the streamer sits.
-    // lookAt turns the box's +z face (the diffuser) to the chair, which also faces it to the default view behind the chair.
+    // The PC under the desk, right side: a dark case with a perforated front and a smoked-glass side.
+    {
+      const caseMat = new THREE.MeshPhysicalMaterial({ color: 0x1A1C1F, roughness: 0.5, metalness: 0.3, clearcoat: 0.2, clearcoatRoughness: 0.5 });
+      add(K.slab(0.21, 0.46, 0.43, 0.012, caseMat, 0.62, 0.238, -1.85, 0.003));
+      const perf = K.canvasTex((g) => { g.fillStyle = '#26292D'; g.fillRect(0, 0, 32, 32); g.fillStyle = '#08090A'; for (const [x, y] of [[8, 8], [24, 24], [24, 8], [8, 24]]) { g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); } }, 32, 32); perf.repeat.set(22, 56);
+      const front = add(K.mesh(new THREE.PlaneGeometry(0.17, 0.42), new THREE.MeshStandardMaterial({ map: perf, roughness: 0.7, metalness: 0.3 }), 0.62, 0.238, -1.634)); front.userData.noAO = true; front.castShadow = false;
+      const side = add(K.mesh(new THREE.PlaneGeometry(0.38, 0.4), new THREE.MeshPhysicalMaterial({ color: 0x07090B, roughness: 0.1, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.05 }), 0.5145, 0.238, -1.85)); side.rotation.y = -Math.PI / 2; side.userData.noAO = true; side.castShadow = false;
+    }
+
+    // ---------- key light ----------
+    // An LED key panel (an edge-lit diffuser in an anodised frame) on a light stand right of the desk, in front of the
+    // chair, aimed at where the streamer sits. lookAt turns the panel's +z face (the diffuser) to the chair, which also
+    // faces it to the default view behind the chair. An arm from the stand's top meets its tilt bracket.
     const KEY = [1.35, 1.7, -1.95], KEY_AIM = [0, 1.15, -0.9], KEY_SPOT = [-0.1, 0.95, -1.25]; // spot centred between desk and chair
-    const softbox = P.box(0.5, 0.5, 0.06, M.black, ...KEY, 0.01); softbox.lookAt(...KEY_AIM);
-    const kAim = new THREE.Vector3(...KEY_AIM).sub(new THREE.Vector3(...KEY)).normalize(); const kBack = new THREE.Vector3(...KEY).addScaledVector(kAim, -0.03); // centre of the back face
-    const kPole = new THREE.Vector3(-kAim.x, 0, -kAim.z).normalize().multiplyScalar(0.14).add(new THREE.Vector3(KEY[0], 1.58, KEY[2])); // stand top, behind the box
-    const kStand = P.cyl(0.015, 0.015, kPole.y, M.black, kPole.x, kPole.y / 2, kPole.z, 12), kBase = P.cyl(0.18, 0.18, 0.02, M.black, kPole.x, 0.01, kPole.z, 24);
-    const kArm = P.cyl(0.012, 0.012, kPole.distanceTo(kBack), M.black, (kPole.x + kBack.x) / 2, (kPole.y + kBack.y) / 2, (kPole.z + kBack.z) / 2, 10); kArm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), kBack.clone().sub(kPole).normalize());
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.46), new THREE.MeshStandardMaterial({ color: 0x8C8C8C, emissive: 0xFFF6E8, emissiveIntensity: 0, side: THREE.DoubleSide })); panel.position.set(0, 0, 0.031); softbox.add(panel);
+    const kAim = new THREE.Vector3(...KEY_AIM).sub(new THREE.Vector3(...KEY)).normalize(); const kBack = new THREE.Vector3(...KEY).addScaledVector(kAim, -0.039); // the bracket's back
+    const kPole = new THREE.Vector3(-kAim.x, 0, -kAim.z).normalize().multiplyScalar(0.14).add(new THREE.Vector3(KEY[0], 1.58, KEY[2])); // stand top, behind the panel
+    const softbox = add(new THREE.Group()); softbox.position.set(...KEY); softbox.lookAt(...KEY_AIM);
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x3A3E43, metalness: 1, roughness: 0.38 });
+    const panel = K.slab(0.434, 0.294, 0.004, 0.006, new THREE.MeshPhysicalMaterial({ color: 0x9A9EA2, emissive: 0xFFF6E8, emissiveIntensity: 0, roughness: 0.4, clearcoat: 0.3, clearcoatRoughness: 0.3 }), 0, 0, 0.0125);
+    const vents = K.mesh(new THREE.PlaneGeometry(0.4, 0.25), new THREE.MeshStandardMaterial({ map: K.slots(14), color: 0x3A3E43, metalness: 0.8, roughness: 0.45 }), 0, 0, -0.0135); vents.rotation.y = Math.PI; vents.userData.noAO = true; vents.castShadow = false;
+    softbox.add(K.merge([K.slab(0.46, 0.32, 0.026, 0.014, frameMat), K.slab(0.05, 0.04, 0.028, 0.006, frameMat, 0, 0, -0.025)], frameMat), panel, vents, K.cylX(0.011, 0.01, rub, 0.031, 0, -0.025, 18));
+    // The stand: three legs hinged on a collar 42 cm up and braced from a lower one (one leg towards the room, none
+    // towards the wall), rubber feet, a two-section pole with a T-knob lock at the joint.
+    const PX = kPole.x, PZ = kPole.z, legs = [], feet = [];
+    for (let i = 0; i < 3; i++) {
+      const a = Math.PI / 2 + i * (Math.PI * 2 / 3), c = Math.cos(a), s = Math.sin(a), top = [PX + c * 0.022, 0.42, PZ + s * 0.022], foot = [PX + c * 0.22, 0.014, PZ + s * 0.22];
+      legs.push(K.rod(top, foot, 0.009, 0.008, powder, 8), K.rod([PX + c * 0.018, 0.2, PZ + s * 0.018], top.map((v, k) => (v + foot[k]) / 2), 0.005, 0.005, powder, 6));
+      feet.push(K.cyl(0.011, 0.013, 0.018, rub, PX + c * 0.22, 0.009, PZ + s * 0.22, 10));
+    }
+    legs.push(K.cyl(0.022, 0.022, 0.06, powder, PX, 0.42, PZ, 16), K.cyl(0.02, 0.02, 0.03, powder, PX, 0.2, PZ, 16));
+    const kBase = add(K.merge(legs, powder)), kFeet = add(K.merge([...feet, K.cylX(0.011, 0.012, rub, PX + 0.05, 0.97, PZ, 16)], rub));
+    const kStand = add(K.merge([K.cyl(0.016, 0.016, 0.82, powder, PX, 0.56, PZ, 14), K.cyl(0.021, 0.021, 0.045, powder, PX, 0.97, PZ, 16), K.cyl(0.012, 0.012, 0.61, powder, PX, 1.275, PZ, 12), K.cylX(0.004, 0.03, powder, PX + 0.033, 0.97, PZ, 8)], powder));
+    const kArm = add(K.merge([K.rod(kPole, kBack, 0.01, 0.01, powder, 10), K.mesh(new THREE.SphereGeometry(0.017, 14, 10), powder, kPole.x, kPole.y, kPole.z)], powder));
     // A 40° half-angle with a wide soft edge: the chair, the streamer's head, the desk and the camera (12–18° off the axis)
     // stay in the full beam, while the floor past the chair falls in the soft edge. At 52° it lit that floor to a white pool.
     // Its reach is 5 m: the beam fades before the left wall, 4.4 m away along its axis past the chair, where at 6 m it left a
     // hot spot on the white skirting (phones, which have no AO, bloomed it). The chair and desk, 2 m away, lose about 2%.
     const keyLight = new THREE.SpotLight(0xFFF6E8, 0, 5, 0.7, 0.7, 1.2); keyLight.position.set(...KEY); keyLight.target.position.set(...KEY_SPOT); keyLight.castShadow = true; keyLight.shadow.mapSize.setScalar(R.quality === 'high' ? 2048 : 1024); keyLight.shadow.bias = -0.002; keyLight.shadow.normalBias = 0.02; R.scene.add(keyLight); R.scene.add(keyLight.target); // normalBias: the light grazes the back wall, which otherwise shows moiré rings (shadow acne)
-    // A 50 cm softbox a metre from the camera rig casts a faint, very soft shadow, not a hard black cut-out of the rig on the
+    // A 50 cm panel a metre from the camera rig casts a faint, very soft shadow, not a hard black cut-out of the rig on the
     // left wall: partial (intensity) and blurred (radius, in shadow-map texels).
     keyLight.shadow.intensity = 0.55; keyLight.shadow.radius = 4;
-    // on-air sign on the back wall above the monitor
-    const signBox = P.box(0.46, 0.17, 0.04, M.black, 0, 1.8, -2.25 + 0.02 + 0.002, 0.01); // just inside the wall plane at z = -2.25
-    const signFace = P.screenPlane(0.42, 0.13, parts.labelTex('ON AIR', { bg: '#1A0A0A', fg: '#FF3030', size: 56, w: 420, h: 130 })); signFace.position.set(0, 1.8, -2.25 + 0.04 + 0.002 + 0.003); signFace.material.emissiveIntensity = 0; signFace.material.roughness = 0.85; // matte, like the screen: seen along the wall, the key light's glare turned it white
-    // LED strip on the wall behind the desk, just inside the wall plane (z = -2.25) and above the desk top + shelf with things
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.018, 0.012), new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x6B4FD8, emissiveIntensity: 2 })); strip.position.set(0, 0.86, -2.25 + 0.006 + 0.002); R.scene.add(strip);
+
+    // ---------- on-air sign on the back wall above the monitor ----------
+    // A lit box sign: a graphite housing with a red acrylic face, "ON AIR" glowing through it while on; its cord runs into
+    // a wall outlet just below. Its back is just inside the wall plane at z = -2.25.
+    const SIGN_Z = -2.25 + 0.002 + 0.025;
+    const signBox = add(K.slab(0.46, 0.17, 0.05, 0.02, new THREE.MeshPhysicalMaterial({ color: 0x2A2E32, roughness: 0.6, metalness: 0.3, clearcoat: 0.15, clearcoatRoughness: 0.5 }), 0, 1.8, SIGN_Z, 0.004));
+    const signTex = K.canvasTex((g) => {
+      const gr = g.createLinearGradient(0, 0, 0, 160); gr.addColorStop(0, '#220808'); gr.addColorStop(0.5, '#2E0A0A'); gr.addColorStop(1, '#1A0606'); g.fillStyle = gr; g.fillRect(0, 0, 512, 160);
+      g.strokeStyle = 'rgba(255,48,48,.5)'; g.lineWidth = 4; g.beginPath(); g.roundRect(14, 14, 484, 132, 12); g.stroke();
+      g.fillStyle = '#FF3030'; g.shadowColor = '#FF3030'; g.shadowBlur = 16; g.font = '800 84px Inter, "Segoe UI", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('ON AIR', 256, 84); g.shadowBlur = 0;
+    }, 512, 160); signTex.wrapS = signTex.wrapT = THREE.ClampToEdgeWrapping; signTex.anisotropy = 8;
+    // matte, like the screen: seen along the wall, the key light's glare turned it white
+    const signFace = add(K.mesh(K.roundPlane(0.43, 0.14, 0.01), new THREE.MeshStandardMaterial({ map: signTex, emissive: 0xffffff, emissiveMap: signTex, emissiveIntensity: 0, roughness: 0.85 }), 0, 1.8, SIGN_Z + 0.0255)); signFace.castShadow = false;
+    const signExtras = [
+      add(K.merge([-0.222, 0.222].map((x) => K.cylZ(0.0035, 0.002, M.steel, x, 1.8, SIGN_Z + 0.0255, 12)), M.steel)),
+      add(K.merge([K.rod([0.19, 1.717, SIGN_Z - 0.005], [0.19, 1.7, SIGN_Z - 0.005], 0.0045, 0.0035, rub, 10), K.cable([[0.19, 1.702, SIGN_Z - 0.005], [0.19, 1.67, SIGN_Z - 0.009], [0.19, 1.64, SIGN_Z - 0.013], [0.19, 1.63, SIGN_Z - 0.017]], 0.003, rub, 16)], rub)),
+      add(K.slab(0.05, 0.05, 0.008, 0.006, new THREE.MeshPhysicalMaterial({ color: 0xD9DCDF, roughness: 0.55 }), 0.19, 1.615, -2.25 + 0.006)),
+    ];
+
+    // ---------- LED strip on the wall behind the desk ----------
+    // A diffused LED channel: an aluminium profile with an opal cover (the part that glows), end caps and mounting clips,
+    // just inside the wall plane (z = -2.25) and above the desk top, wired to a small controller at its right end.
+    const SZ = -2.25 + 0.002, stripAlu = new THREE.MeshStandardMaterial({ color: 0xA9AEB3, metalness: 1, roughness: 0.4 });
+    const clips = []; for (const x of [-0.7, 0, 0.7]) for (const y of [-0.0105, 0.0105]) clips.push(K.box(0.012, 0.003, 0.009, stripAlu, x, 0.86 + y, SZ + 0.0045));
+    const stripChannel = add(K.merge([K.slab(1.8, 0.018, 0.007, 0.002, stripAlu, 0, 0.86, SZ + 0.0035, 0.001), K.slab(0.006, 0.02, 0.012, 0.002, stripAlu, -0.902, 0.86, SZ + 0.006), K.slab(0.006, 0.02, 0.012, 0.002, stripAlu, 0.902, 0.86, SZ + 0.006), ...clips], stripAlu));
+    const strip = add(K.mesh(new THREE.CylinderGeometry(0.0072, 0.0072, 1.796, 18, 1, true, -Math.PI / 2, Math.PI), new THREE.MeshStandardMaterial({ color: 0xBFC3C8, emissive: 0x6B4FD8, emissiveIntensity: 2, roughness: 0.35 }), 0, 0.86, SZ + 0.0068));
+    strip.rotation.z = Math.PI / 2; strip.scale.set(1, 1, 0.55); strip.castShadow = false; // a low opal dome over the channel
     // Never drawn: a tap target bigger than the strip. A plane facing the room, not a box: picking only takes its front
     // face, so from behind the back wall it doesn't catch taps meant for the hub or the capture card in front of it.
     const stripPick = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.1), new THREE.MeshBasicMaterial({ visible: false })); stripPick.position.set(0, 0.86, -2.17); R.scene.add(stripPick);
     const stripLights = [-0.5, 0.5].map((x) => { const l = new THREE.PointLight(0x6B4FD8, 1, 2.5, 1.5); l.position.set(x, 0.95, -2.17); R.scene.add(l); return l; }); // wall wash either side of the monitor
+    const stripCtl = add(K.slab(0.06, 0.03, 0.016, 0.005, new THREE.MeshPhysicalMaterial({ color: 0x2B2F33, roughness: 0.55, clearcoat: 0.2, clearcoatRoughness: 0.5 }), 0.94, 0.86, -2.242)); // the strip's controller, at its right end, clear of the desk in the default view
+    const stripExtras = [add(K.cylZ(0.005, 0.003, M.steel, 0.922, 0.86, -2.2325, 16)),
+      add(K.merge([K.cable([[0.9, 0.86, SZ + 0.005], [0.905, 0.855, SZ + 0.006], [0.911, 0.86, SZ + 0.007]], 0.0022, rub, 8), K.cable([[0.955, 0.846, SZ + 0.006], [0.958, 0.8, SZ + 0.005], [0.965, 0.4, SZ + 0.004], [0.97, 0.012, SZ + 0.004]], 0.0025, rub, 24)], rub))];
+
+    // ---------- status LEDs and fault glows ----------
     // Status LEDs for the three devices with no fault cue of their own (the key light's panel, the sign's lettering and
     // the strip show only what they were last set to): green and dim while connected, blinking red in fault like the
     // tally and the mic LED, hidden while not connected. update() sets their .visible, so none is wall-tagged itself: the
     // two on the back wall are children of wall-tagged parts and hide with them.
-    // The key light's LED sits on a small controller clamped to its stand, below the softbox: on the softbox's frame the
+    // The key light's LED sits on its smart dimmer pod clamped to the stand, below the panel: on the panel's frame the
     // diffuser's glow swallowed it while the light was on.
-    const keyCtl = P.box(0.045, 0.07, 0.035, gear, kPole.x, 1.22, kPole.z, 0.004); const keyLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.008); keyCtl.add(keyLed); keyLed.position.set(0, 0.018, 0.018); // its front face
-    const signLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.006); signBox.add(signLed); signLed.position.set(0.2, -0.075, 0.0245); // the sign frame, bottom right
-    const stripCtl = P.box(0.06, 0.03, 0.016, gear, 0.94, 0.86, -2.242, 0.004); // the strip's controller, at its right end, clear of the desk in the default view
+    const keyCtl = add(K.merge([K.slab(0.044, 0.07, 0.03, 0.008, null, PX, 1.22, PZ + 0.028), K.box(0.02, 0.03, 0.014, null, PX, 1.22, PZ + 0.01)], new THREE.MeshPhysicalMaterial({ color: 0xE4E7E9, roughness: 0.55, clearcoat: 0.3, clearcoatRoughness: 0.4 }))); // pod and its clamp
+    const keyDial = add(K.cylZ(0.009, 0.004, M.steel, PX, 1.204, PZ + 0.045, 20));
+    const keyLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.007); keyCtl.add(keyLed); keyLed.position.set(PX, 1.24, PZ + 0.0445); // its front face
+    cables.push(K.cable([[kBack.x, kBack.y - 0.02, kBack.z], [PX + 0.01, 1.45, PZ + 0.015], [PX, 1.3, PZ + 0.03], [PX, 1.257, PZ + 0.03]], 0.0035, rub, 24),
+      K.cable([[PX, 1.185, PZ + 0.03], [PX + 0.004, 1.1, PZ + 0.022], [PX + 0.02, 0.6, PZ + 0.02], [PX + 0.024, 0.45, PZ + 0.03], [PX + 0.06, 0.12, PZ + 0.02], [PX + 0.1, 0.008, PZ - 0.06], [PX + 0.16, 0.006, -2.2], [PX + 0.3, 0.006, -2.236]], 0.0035, rub, 40));
+    const signLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.006); signBox.add(signLed); signLed.position.set(0.2, -0.0775, 0.0255); // the sign frame, bottom right
     const stripLed = P.ledDot(0, 0, 0, 0x2FBF71, 0.005); stripCtl.add(stripLed); stripLed.position.set(0.015, 0, 0.0095);
-    for (const l of [keyLed, signLed, stripLed]) l.userData.noHighlight = true; // a tap pulses the device, not a halo round its LED
+    for (const l of [keyLed, signLed, stripLed, camLed, micLed, capLed]) l.userData.noHighlight = true; // a tap pulses the device, not a halo round its LED
     // Every fault LED here is a dot of a few pixels (one or two on a phone), and its bright blink tone-maps to near white:
     // once the fault ring has gone, the room hardly showed which device was down. In fault, a soft red glow of constant
     // screen size blinks with the LED (as the home scene does). Normal blending, depth-tested, kept 12 cm towards the
@@ -158,14 +489,93 @@ export default {
       return (k) => { sp.visible = k > 0.01; if (!sp.visible) return; sp.material.opacity = k; v.subVectors(R.camera.position, at); const d = v.length() || 1; sp.position.copy(at).addScaledVector(v, Math.min(0.12, d * 0.5) / d); };
     };
     const glows = { keylight: glow(keyLed), cam: glow(camLed), mic: glow(micLed), capture: glow(capLed), onair: glow(signLed, true), strip: glow(stripLed, true) };
-    P.onWall(P.box(1.2, 0.03, 0.22, M.wood, -1.3, 1.9, -2.13), 0, 1, -2.25); // shelf, top at y = 1.915
-    const plant = P.plant(-1.7, -2.1, { scale: 0.45, y: 1.915, front: true }); // on the shelf
-    for (let i = 0; i < 3; i++) P.onWall(P.box(0.05, 0.22, 0.16, [M.yellow, M.white, M.cardboard][i], -1.05 + i * 0.07, 2.025, -2.12), 0, 1, -2.25);
+
+    // ---------- acoustic foam, the shelf, the chair ----------
+    // Wedge-cut acoustic foam tiles, laid in a checkerboard (every other one turned a quarter): two blocks of nine either
+    // side of the sign on the back wall and six on the left wall. Charcoal, with a few in a deep petrol. Each wall's tiles
+    // are one mesh, hung on (and hiding with) that wall.
+    {
+      const pts = [[-0.15, 0], [0.15, 0], [0.15, 0.012]]; for (let k = 5; k >= 0; k--) pts.push([-0.15 + (k + 0.5) * 0.05, 0.048], [-0.15 + k * 0.05, 0.012]);
+      const geo = new THREE.ExtrudeGeometry(new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y))), { depth: 0.296, bevelEnabled: false }); geo.translate(0, 0, -0.148); geo.rotateX(Math.PI / 2); // ridges along y, its back at z = 0
+      const foamMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, bumpMap: K.speckle(128, 1400, 1.5), bumpScale: 0.8 }); foamMat.bumpMap.repeat.set(9, 9);
+      const TONES = [0x2A2F36, 0x252A31, 0x2E333B], PETROL = 0x1D4148;
+      const tile = (x, y, z, rotY, i, j, hex) => { const m = new THREE.Mesh(geo, foamMat); m.position.set(x, y, z); m.rotation.set(0, rotY, (i + j) % 2 ? Math.PI / 2 : 0); m.userData.tint = hex ?? TONES[(i * 7 + j * 5) % 3]; return m; };
+      const back = [], left = [], accent = { '-1': ['0,0', '2,2'], 1: ['0,2', '2,0'] };
+      for (const side of [-1, 1]) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) back.push(tile(side * 0.85 + (i - 1) * 0.31, 1.47 + j * 0.31, -2.248, 0, i, j, accent[side].includes(`${i},${j}`) ? PETROL : null));
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) left.push(tile(-2.498, 1.5 + j * 0.31, -0.8 + (i - 1) * 0.31, Math.PI / 2, i, j, i === 1 && j === 1 ? PETROL : null));
+      const onBack = add(K.merge(back, foamMat)), onLeft = add(K.merge(left, foamMat)); onBack.castShadow = onLeft.castShadow = false;
+      P.onWall(onBack, 0, 1, -2.25); P.onWall(onLeft, 1, 0, -2.5);
+    }
+    // A narrow steel-and-wood shelf in the back-left corner: the plant on the eye-level board, books below it and on top,
+    // fabric bins and a box of kit lower down. Without the model, the wall shelf with its plant and three books.
+    const shelfModel = MOD('steel_frame_shelves_02');
+    if (shelfModel) {
+      add(shelfModel); const sb = placeModel(THREE, shelfModel, { x: -1.9, z: -2.25 + 0.012 + 0.23, s: 0.92 });
+      const lv = (y) => sb.min.y + (y / 2.141) * (sb.max.y - sb.min.y), SX = -1.9, SZc = (sb.min.z + sb.max.z) / 2, FRONT = SZc + 0.2; // board tops in the model's metres (it is 2.141 m tall)
+      const plantModel = MOD('potted_plant_04');
+      if (plantModel) { add(plantModel); placeModel(THREE, plantModel, { x: SX + 0.08, y: lv(1.651), z: SZc + 0.03, s: 1.35, rotY: 0.5 }); } else P.plant(SX + 0.08, SZc + 0.03, { scale: 0.32, y: lv(1.651) });
+      // Books: covers in muted colours, their tops and fore-edges page-cream, a light band on each spine.
+      let seed = 11; const rnd = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
+      const COVERS = [0x2F4858, 0x8C3B2F, 0xC8B68E, 0x3E5641, 0x1F2A36, 0xA6623A, 0x5B4A6B, 0xD9D2C2, 0x264653, 0x7A2E3A, 0x4A5A6A, 0xB59A5B], PAGES = 0xE4DBC6, BANDS = [0xD8C79A, 0xEDE6D6, 0x16181B];
+      const books = [];
+      const upright = (x, y, t, h, d, lean = 0) => { // x: its left edge on the board
+        const hex = COVERS[Math.floor(rnd() * COVERS.length)], z = FRONT - d / 2;
+        const b = K.box(t, h, d, null, x + t / 2, y + h / 2, z); b.userData.tint = (nx, ny, nz) => (ny > 0.5 || nz < -0.5 ? PAGES : hex);
+        const band = K.box(t + 0.0008, 0.012, 0.0012, null, x + t / 2, y + h * 0.72, FRONT + 0.0004); band.userData.tint = BANDS[Math.floor(rnd() * BANDS.length)];
+        if (lean) for (const m of [b, band]) { const p = m.position.clone().sub(V(x, y, z)); m.position.copy(p.applyAxisAngle(V(0, 0, 1), lean).add(V(x, y, z))); m.rotation.z = lean; } // on its bottom-left edge
+        books.push(b, band);
+      };
+      const lying = (x, y, w, t, d) => { const hex = COVERS[Math.floor(rnd() * COVERS.length)], b = K.box(w, t, d, null, x, y + t / 2, FRONT - d / 2); b.userData.tint = (nx, ny, nz) => (Math.abs(nx) > 0.5 || nz < -0.5 ? PAGES : hex); books.push(b); return y + t; };
+      { // a row on the board below the plant, two leaning at its end, a small stack and a spare lens on it
+        const y = lv(1.148); let x = SX - 0.24;
+        while (x < SX - 0.03) { const t = 0.018 + rnd() * 0.022; upright(x, y, t, 0.18 + rnd() * 0.07, 0.13 + rnd() * 0.04); x += t + 0.001; }
+        upright(x + 0.22 * Math.sin(0.28) + 0.002, y, 0.026, 0.22, 0.15, 0.28); // its top resting on the row
+        let top = y; for (const [w, t] of [[0.13, 0.03], [0.12, 0.024], [0.11, 0.02]]) top = lying(SX + 0.175, top, w, t, 0.15 + w * 0.2);
+        add(K.merge([K.cyl(0.032, 0.032, 0.07, null, SX + 0.175, top + 0.035, FRONT - 0.07, 28)], new THREE.MeshPhysicalMaterial({ color: 0x1D2023, roughness: 0.5, specularIntensity: 0.5 })));
+      }
+      { let top = lv(2.135); for (const [w, t] of [[0.24, 0.035], [0.21, 0.028], [0.22, 0.03]]) top = lying(SX - 0.06, top, w, t, 0.2); } // a stack on top
+      { const y = lv(1.651); let top = y; for (const [w, t] of [[0.18, 0.025], [0.16, 0.022]]) top = lying(SX - 0.13, top, w, t, 0.13); } // by the plant
+      { let top = lv(0.132); for (const [w, t] of [[0.22, 0.035], [0.2, 0.03]]) top = lying(SX + 0.12, top, w, t, 0.24); } // coffee-table books at the bottom
+      add(K.merge(books, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 })));
+      // two felt storage bins on the board below the books, and a carton of spare kit at the bottom
+      const felt = M.sofa.clone(); felt.color.set(0x6E747C);
+      for (const x of [SX - 0.118, SX + 0.118]) { add(K.slab(0.226, 0.2, 0.34, 0.012, felt, x, lv(0.641) + 0.1, SZc + 0.03, 0.006)); const hole = add(K.mesh(K.roundPlane(0.09, 0.03, 0.015), new THREE.MeshBasicMaterial({ color: 0x0A0B0D }), x, lv(0.641) + 0.16, SZc + 0.2005)); hole.castShadow = false; hole.userData.noAO = true; }
+      P.parcel(SX - 0.115, lv(0.132), SZc - 0.02, 0.22);
+    } else {
+      P.onWall(P.box(1.2, 0.03, 0.22, M.wood, -1.3, 1.9, -2.13), 0, 1, -2.25); // shelf, top at y = 1.915
+      const plant = P.plant(-1.7, -2.1, { scale: 0.45, y: 1.915, front: true }); P.onWall(plant.group, 0, 1, -2.25); // on the shelf
+      for (let i = 0; i < 3; i++) P.onWall(P.box(0.05, 0.22, 0.16, [M.yellow, M.white, M.cardboard][i], -1.05 + i * 0.07, 2.025, -2.12), 0, 1, -2.25);
+    }
+    // The chair: a mesh-back task chair facing the desk on a five-star base with twin-wheel casters, a gas lift, a padded
+    // seat and armrests. Low-back: the backrest's top is at 0.90, under the view line to the hub and capture card as the
+    // view sways past it.
+    {
+      const CZ = -0.9, base = new THREE.MeshPhysicalMaterial({ color: 0x2E3236, metalness: 0.6, roughness: 0.45, clearcoat: 0.2, clearcoatRoughness: 0.5 });
+      const nylon = new THREE.MeshStandardMaterial({ color: 0x16181B, roughness: 0.65 }), fabric = M.sofa.clone(); fabric.color.set(0x80868E); // the grey weave, darkened to charcoal, with its sheen
+      const metal = [K.cyl(0.05, 0.055, 0.05, base, 0, 0.105, CZ, 24)], black = [];
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 + Math.PI / 10, c = Math.cos(a), s = Math.sin(a);
+        metal.push(K.rod([c * 0.04, 0.11, CZ + s * 0.04], [c * 0.3, 0.085, CZ + s * 0.3], 0.022, 0.013, base, 10));
+        black.push(K.cyl(0.011, 0.013, 0.03, nylon, c * 0.3, 0.062, CZ + s * 0.3, 10));
+        for (const o of [-0.011, 0.011]) { const w = K.cylX(0.024, 0.014, nylon, c * (0.32 + o), 0.024, CZ + s * (0.32 + o), 18); w.rotation.y = -a; black.push(w); } // twin wheels on one axle
+      }
+      black.push(K.cyl(0.028, 0.03, 0.2, nylon, 0, 0.23, CZ, 20), K.slab(0.2, 0.045, 0.22, 0.01, nylon, 0, 0.43, CZ, 0.003), K.rod([0.1, 0.43, CZ - 0.05], [0.2, 0.425, CZ - 0.09], 0.005, 0.005, nylon, 8),
+        K.flat(0.48, 0.02, 0.46, 0.06, nylon, 0, 0.452, CZ, 0.004));
+      for (const sx of [-1, 1]) black.push(K.cable([[sx * 0.09, 0.43, CZ + 0.02], [sx * 0.22, 0.435, CZ + 0.02], [sx * 0.266, 0.47, CZ + 0.02], [sx * 0.27, 0.6, CZ], [sx * 0.27, 0.642, CZ - 0.01]], 0.014, nylon, 24, 8), K.flat(0.075, 0.026, 0.24, 0.03, nylon, sx * 0.27, 0.655, CZ - 0.03, 0.008));
+      add(K.merge(metal, base)); add(K.merge(black, nylon)); add(K.cyl(0.014, 0.014, 0.1, M.metal, 0, 0.375, CZ, 16)); // chrome piston
+      add(K.flat(0.5, 0.06, 0.48, 0.07, fabric, 0, 0.49, CZ, 0.014)); // seat, top at 0.52
+      add(K.cable([[0, 0.43, CZ + 0.1], [0, 0.445, CZ + 0.24], [0, 0.5, CZ + 0.28], [0, 0.6, CZ + 0.278], [0, 0.625, CZ + 0.27]], 0.018, base, 24, 10)); // the back's spine
+      // the backrest: a curved mesh panel in a frame, reclined a little; its top at 0.90
+      const back = add(new THREE.Group()); back.position.set(0, 0.57, CZ + 0.255); back.rotation.x = 0.12;
+      const backMat = fabric.clone(); backMat.side = THREE.DoubleSide; backMat.color.set(0x6A7078);
+      const R_ = 0.55, half = 0.23 / R_, pg = new THREE.CylinderGeometry(R_, R_, 0.3, 18, 1, true, -half, 2 * half); pg.translate(0, 0.15, -R_);
+      const ring = K.rrect(0.46, 0.3, 0.045, 4).map((p) => { const th = p.x / R_; return new THREE.Vector3(R_ * Math.sin(th), p.y + 0.15, R_ * Math.cos(th) - R_); });
+      back.add(K.mesh(pg, backMat), K.mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(ring, true), 96, 0.012, 6, true), nylon));
+    }
+    add(K.merge(cables, rub));
     // Hung on the back wall (z = -2.25): hidden with it once the camera is behind it (renderer.js). Not the strip's lights
     // (the room's lighting must not change with the view) nor stripPick (never drawn).
-    for (const o of [signBox, signFace, strip, stripCtl, plant.group]) P.onWall(o, 0, 1, -2.25);
-    // chair
-    P.box(0.5, 0.08, 0.5, M.black, 0, 0.48, -0.9, 0.03); P.box(0.5, 0.39, 0.07, M.black, 0, 0.705, -0.665, 0.03); P.cyl(0.03, 0.03, 0.4, M.steel, 0, 0.24, -0.9, 12); for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; P.box(0.3, 0.02, 0.04, M.black, Math.cos(a) * 0.15, 0.03, -0.9 + Math.sin(a) * 0.15).rotation.y = -a; } // low-back chair: backrest top at 0.90, under the view line to the hub and capture card as the view sways past it
+    for (const o of [signBox, signFace, ...signExtras, strip, stripChannel, stripCtl, ...stripExtras]) P.onWall(o, 0, 1, -2.25);
 
     // The monitor: what the overlay app draws. tag: a note in the monitor's margin, never on the stream; caption: a bar ON
     // the stream's picture; dim: the key light is out (a darker figure); fault: the app is hung, so its last frame stays up,
@@ -195,9 +605,9 @@ export default {
     R.addPickable(softbox, 'keylight'); R.addPickable(camBody, 'cam'); R.addPickable(webcam, 'webcam'); R.addPickable(micBody, 'mic'); R.addPickable(capBox, 'capture'); R.addPickable(screen, 'overlay'); R.addPickable(monitor, 'overlay'); R.addPickable(signBox, 'onair'); R.addPickable(signFace, 'onair'); R.addPickable(strip, 'strip'); R.addPickable(stripPick, 'strip');
     // The rest of each device (after the parts above, which stay where rings and labels appear): a tap on a stand, post or
     // boom selects its device instead of passing through to what is behind it (the monitor's stand picked the LED strip).
-    for (const [o, id] of [[monPost, 'overlay'], [monBase, 'overlay'], [camArm, 'cam'], [camPost, 'cam'], [micPost, 'mic'], [boom, 'mic'], [kStand, 'keylight'], [kArm, 'keylight'], [kBase, 'keylight'], [keyCtl, 'keylight'], [stripCtl, 'strip']]) R.addPickable(o, id);
+    for (const [o, id] of [[monPost, 'overlay'], [monBase, 'overlay'], [camArm, 'cam'], [camPost, 'cam'], [micPost, 'mic'], [boom, 'mic'], [boomKnobs, 'mic'], ...springs.map((sp) => [sp, 'mic']), [kStand, 'keylight'], [kArm, 'keylight'], [kBase, 'keylight'], [kFeet, 'keylight'], [keyCtl, 'keylight'], [keyDial, 'keylight'], [stripCtl, 'strip'], [stripChannel, 'strip'], [webClip, 'webcam']]) R.addPickable(o, id);
     // Hidden with the back wall, the sign and the strip must not catch taps either: picking doesn't check .visible.
-    for (const o of [signBox, signFace, strip, stripCtl]) o.raycast = function (ray, hits) { if (this.visible) THREE.Mesh.prototype.raycast.call(this, ray, hits); };
+    for (const o of [signBox, signFace, strip, stripChannel, stripCtl]) o.raycast = function (ray, hits) { if (this.visible) THREE.Mesh.prototype.raycast.call(this, ray, hits); };
     const hi = P.highlighter({ keylight: [softbox, keyCtl], cam: [camBody], mic: [micBody], capture: [capBox], overlay: [screen], onair: [signBox], strip: [strip, stripCtl], webcam: [webcam] });
     const col = new THREE.Color();
     // Point at the moments the story turns on in the room (main.js already pings discovery and faults). Not while a
@@ -217,6 +627,15 @@ export default {
       else if (path === 'overlay.tag' && value === 'mic cut') mark('overlay', 'Stream sound · mic cut'); // at the app that cut it: the mic's own red fault marker stays
       else if (path === 'overlay.tag' && /^marker/.test(value)) mark('overlay', `Recording ${value}`);
     });
+    // The capture card's OLED: its input and a dot, green with a picture and grey without; "OFF" with its input disabled,
+    // dark while the card is down (offline, or in fault: off the PC's USB, which powers it).
+    let oledShown = '';
+    const drawOled = (st) => {
+      const up = st.status !== 'offline' && st.status !== 'fault', key = up ? `${st.input}|${!!st.signal}` : 'dark'; if (key === oledShown) return; oledShown = key;
+      const g = oledTex.userData.g, off = st.input === 'disabled'; g.fillStyle = '#0B0E12'; g.fillRect(0, 0, 192, 80);
+      if (up) { g.fillStyle = off ? '#3A4048' : st.signal ? '#2FBF71' : '#6B747C'; g.beginPath(); g.arc(24, 40, 9, 0, Math.PI * 2); g.fill(); g.fillStyle = off ? '#5E6670' : '#E8EEF2'; g.font = '600 30px Inter, "Segoe UI", sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(off ? 'OFF' : String(st.input), 46, 40); }
+      oledTex.needsUpdate = true;
+    };
     const statusLed = (led, st, t) => { const f = st.status === 'fault'; led.visible = st.status !== 'offline'; led.material.color.set(f ? 0xE0563A : 0x2FBF71); led.material.emissive.copy(led.material.color); led.material.emissiveIntensity = f ? (Math.floor(t * 3) % 2 ? 6 : 1) : 0.8; };
 
     return {
@@ -232,6 +651,7 @@ export default {
         // capture LED: blue with a signal, amber without, dark with its input disabled; blinking red in fault, steady red in
         // fault with its input disabled (flagged, but held safe)
         const capBad = s.capture.status === 'fault', capOff = s.capture.input === 'disabled'; capLed.material.color.set(capBad ? 0xE0563A : capOff ? 0x1A1C1E : s.capture.signal ? 0x3AB7FF : 0xFFB020); capLed.material.emissive.copy(capLed.material.color); capLed.material.emissiveIntensity = capBad ? (capOff ? 2.5 : Math.floor(t * 3) % 2 ? 6 : 1) : capOff ? 0 : 2; capLed.visible = s.capture.status !== 'offline';
+        drawOled(s.capture);
         statusLed(keyLed, s.keylight, t); statusLed(signLed, s.onair, t); statusLed(stripLed, s.strip, t);
         const blink = Math.floor(t * 3) % 2; // the LEDs' blink phase: glow full with the bright one, faint with the dim one
         for (const id of ['keylight', 'cam', 'mic', 'onair', 'strip']) glows[id](s[id].status === 'fault' ? (blink ? 1 : 0.25) : 0);

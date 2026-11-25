@@ -1,4 +1,16 @@
 // Scene 4 — Warehouse (illustrative). Proves: a line that runs as planned, and handles a unit dropping out (opt-in what-ifs).
+// The room's kit follows the custom-room remodels (js/custom/devices/warehouse.js); kit.js imports nothing, so Node builds it.
+import { mergeMeshes, canvasTex } from '../custom/devices/kit.js';
+
+const TAU = Math.PI * 2, FONT = 'Inter, "Segoe UI", sans-serif';
+const rng = (seed) => { let s = seed >>> 0 || 1; return () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296; }; // seeded: the room is the same every visit
+// Place a loaded model by its bounding box (js/engine/assets.js place()), inlined as in home.js.
+function placeModel(THREE, obj, { x = 0, y = 0, z = 0, rotY = 0, s = 1 } = {}) {
+  obj.rotation.y = rotY; obj.scale.setScalar(s); obj.position.set(0, 0, 0); obj.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(obj), c = b.getCenter(new THREE.Vector3());
+  obj.position.set(x - c.x, y - b.min.y, z - c.z); obj.updateMatrixWorld(true);
+  return new THREE.Box3().setFromObject(obj);
+}
 
 // Cart loop in front of the line, shared by the room and the scripts. u = 0 is alongside the end of C1 (pick-up),
 // u = 1 alongside C3 (drop-off); 1 < u < 2 is the way back on the return lane, and u = 2 is u = 0 again.
@@ -219,29 +231,182 @@ export default {
     dock:    { icon: 'dock', name: 'Dock 2', ref: 'dock 2', initial: { light: 'red', parcels: 0, target: 40, stuck: false, shut: true }, format: (s) => { const n = Math.round(s.parcels); return `${s.light === 'green' ? 'open' : s.shut ? 'closed' : 'closing'} · ${n}${s.target ? `/${s.target} parcels` : n === 1 ? ' parcel' : ' parcels'}`; }, faultText: 'door fault' }, // target 0: none (Divert), "1 parcel"
   },
 
-  build({ R, P, M, THREE, store, parts, speed = 1, quiet }) {
+  // Real-world assets (js/engine/assets.js, assets/CREDITS.md). Without them (Node tests, a failed download) the room
+  // builds from primitives: the procedural concrete floor, a code-built packing table and supplies shelf.
+  assets: {
+    models: ['wooden_table_02', 'steel_frame_shelves_03'],
+    textures: ['garage_floor', 'painted_plaster_wall'],
+  },
+
+  build({ R, P, M, THREE, store, parts, speed = 1, quiet, assets = null }) {
     const isQuiet = typeof quiet === 'function' ? quiet : () => false; // A2: true from a what-if's quiet replay until its first step
-    const concreteC = parts.concreteTex();
-    const concrete = new THREE.MeshStandardMaterial({ map: parts.tex(concreteC, [4, 3]), roughness: 0.85 });
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xB9BDBB, roughness: 0.95 });
-    P.roomShell({ w: 14, d: 10, h: 5, floorMat: concrete, wallMat, skirting: false });
+    const AST = assets?.models ? assets : null, MOD = (id) => AST?.models[id] || null, TX = (id) => AST?.textures?.[id] || null;
+    const pbr = (id, rep, extra = {}) => { const set = TX(id); if (!set) return null; const m = {}; for (const k of ['map', 'normalMap', 'roughnessMap']) if (set[k]) { const t = set[k].clone(); t.repeat.set(...rep); t.needsUpdate = true; m[k] = t; } return new THREE.MeshStandardMaterial({ ...m, roughness: 1, ...extra }); };
+    const rnd = rng(17); // the room is the same on every visit
+    // Rounded boxes with 1 or 2 segments per corner (about 100 or 300 triangles; P.box's 4 make about 1k). The class comes
+    // from P.box itself, as js/custom/devices/warehouse.js does.
+    const RBox = (() => { const m = P.box(0.1, 0.1, 0.1, M.steel, 0, 0, 0, 0.01), C = m.geometry.constructor; m.removeFromParent(); m.geometry.dispose(); return C; })();
+    const rb = (w, h, d, mat, x, y, z, r, seg = 1) => { const m = new THREE.Mesh(new RBox(w, h, d, seg, Math.min(r, w / 2, h / 2, d / 2)), mat); m.position.set(x, y, z); return P.add(m); };
+    const merge = (meshes, mat, tint = false) => P.add(mergeMeshes(THREE, meshes, mat, { consume: true, tint }));
+    const alongX = (m) => { m.rotation.z = Math.PI / 2; return m; }, alongZ = (m) => { m.rotation.x = Math.PI / 2; return m; };
+    const lensMat = (hex) => new THREE.MeshStandardMaterial({ color: hex, emissive: hex, emissiveIntensity: 1.5, roughness: 0.3 }); // a lamp's own lens, driven by setLamp
+
+    // ---- finishes ----
+    const paint = (hex, rough = 0.5) => new THREE.MeshPhysicalMaterial({ color: hex, roughness: rough, metalness: 0.15, clearcoat: 0.35, clearcoatRoughness: 0.45 }); // powder coat
+    const galv = (map = null) => new THREE.MeshStandardMaterial({ color: map ? 0xFFFFFF : 0xB4BABF, map, metalness: 1, roughness: 0.38 });
+    const frameMat = galv(), yellow = paint(0xF2B705, 0.45), graphite = paint(0x3A3F45, 0.5), panel = paint(0xD9DCDE, 0.55), shellMat = paint(0xE4E7E9, 0.45), red = paint(0xC8261E, 0.35), greenBtn = paint(0x2E9E58, 0.4);
+    const tapeMat = new THREE.MeshStandardMaterial({ color: 0xD8D5CB, roughness: 0.85 }); // off-white and matte, so it doesn't bloom under the ceiling lights
+    // ---- canvas textures (detail drawn, not modelled) ----
+    // A dark PVC belt with a fine weave and a lighter splice stripe every 10 cm along u (z for `alongZ`): the offset scrolls it.
+    const beltTex = (len, alongZ = false) => {
+      const t = canvasTex(THREE, (g, w, h) => {
+        g.fillStyle = '#272B2F'; g.fillRect(0, 0, w, h);
+        g.fillStyle = 'rgba(255,255,255,0.05)'; for (let y = 0; y < h; y += 4) for (let x = (y / 2) % 4; x < w; x += 4) g.fillRect(x, y, 2, 1);
+        if (alongZ) { g.fillStyle = '#3C434A'; g.fillRect(0, 0, w, 9); g.fillStyle = '#1B1E21'; g.fillRect(0, 9, w, 3); } else { g.fillStyle = '#3C434A'; g.fillRect(0, 0, 9, h); g.fillStyle = '#1B1E21'; g.fillRect(9, 0, 3, h); }
+      });
+      if (alongZ) t.repeat.set(1, len / 0.1); else t.repeat.set(len / 0.1, 1); t.anisotropy = 8;
+      return t;
+    };
+    const hazardTex = (rx, ry) => { const t = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#F2B705'; g.fillRect(0, 0, w, h); g.fillStyle = '#1C1C1C'; for (let i = -2; i < 2; i++) { g.beginPath(); g.moveTo(i * w, h); g.lineTo(i * w + w / 2, h); g.lineTo(i * w + w * 1.5, 0); g.lineTo(i * w + w, 0); g.closePath(); g.fill(); } }); t.repeat.set(rx, ry); return t; };
+    const hazMat = (rx, ry) => new THREE.MeshStandardMaterial({ map: hazardTex(rx, ry), roughness: 0.55 });
+    // a side channel's face: brushed galvanised steel with a roller-axle nut every 15 cm
+    const sideMat = (len) => { const t = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#B9BFC4'; g.fillRect(0, 0, w, h); g.fillStyle = 'rgba(0,0,0,0.06)'; for (let y = 0; y < h; y += 3) g.fillRect(0, y, w, 1); g.fillStyle = '#7B8288'; g.beginPath(); g.arc(w / 2, h * 0.3, 6, 0, TAU); g.fill(); g.fillStyle = '#D9DDE0'; g.beginPath(); g.arc(w / 2 - 1, h * 0.3 - 1, 3, 0, TAU); g.fill(); }); t.repeat.set(len / 0.15, 1); return galv(t); };
+    const slotTex = (horizontal) => { const t = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#C3C8CD'; g.fillRect(0, 0, w, h); g.fillStyle = '#3E444A'; g.fillRect(w / 2 - 6, 0, 12, h); g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillRect(w / 2 - 8, 0, 2, h); g.fillRect(w / 2 + 6, 0, 2, h); }); if (horizontal) { t.center.set(0.5, 0.5); t.rotation = Math.PI / 2; } return t; };
+    const finTex = () => { const t = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#4A5057'; g.fillRect(0, 0, w, h); for (let x = 0; x < w; x += 8) { g.fillStyle = '#2A2E33'; g.fillRect(x, 0, 3, h); g.fillStyle = '#636A72'; g.fillRect(x + 3, 0, 1, h); } }); t.repeat.set(3, 1); return t; };
+    // Kraft board: fibre specks and a darker rim where the faces meet (each face of a rounded box maps the whole canvas).
+    const kraftT = canvasTex(THREE, (g, w, h) => {
+      g.fillStyle = '#CDA778'; g.fillRect(0, 0, w, h);
+      const r = rng(5); for (let i = 0; i < 2400; i++) { g.fillStyle = r() < 0.55 ? `rgba(96,64,32,${0.05 + r() * 0.08})` : `rgba(255,240,214,${0.04 + r() * 0.06})`; g.fillRect(r() * w, r() * h, 1 + r() * 3, 1); }
+      for (let k = 0; k < 9; k++) { g.strokeStyle = `rgba(78,50,24,${0.06 - k * 0.006})`; g.lineWidth = 3; g.strokeRect(k * 3 + 1.5, k * 3 + 1.5, w - k * 6 - 3, h - k * 6 - 3); }
+    }, 256, 256); kraftT.anisotropy = 8;
+    const kraft = (hex) => new THREE.MeshStandardMaterial({ map: kraftT, color: hex, roughness: 0.92 });
+    const KRAFT = [0xFFFFFF, 0xE9D7C2, 0xD9C0A0].map(kraft);
+    // A shipping label: address lines, a dock code and a barcode, on matte white paper.
+    const labelT = canvasTex(THREE, (g, w, h) => {
+      const r = rng(9); g.fillStyle = '#F6F5F0'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#1E2226'; g.font = `bold 22px ${FONT}`; g.textBaseline = 'top'; g.fillText('SHIP TO', 12, 10);
+      for (let i = 0; i < 4; i++) g.fillRect(12, 42 + i * 14, 70 + r() * 80, 6);
+      g.fillRect(w - 62, 10, 50, 50); g.fillStyle = '#F6F5F0'; g.font = `bold 28px ${FONT}`; g.fillText('D2', w - 56, 20);
+      g.fillStyle = '#1E2226'; for (let x = 12; x < w - 12;) { const bw = 1 + Math.floor(r() * 4); g.fillRect(x, 108, bw, 50); x += bw + 1 + Math.floor(r() * 3); }
+      g.fillRect(0, 100, w, 2);
+    }, 256, 176); labelT.anisotropy = 8;
+    const labelMat = new THREE.MeshStandardMaterial({ map: labelT, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -2 });
+    const labelGeo = new THREE.PlaneGeometry(1, 1);
+    // A carton (w × h × d centred at x, y, z): kraft, slightly rounded, a tape strip along its top and a label on top or in front.
+    function carton(w, h, d, mat, x, y, z, { tape = true, label = 'top' } = {}) {
+      const m = rb(w, h, d, mat, x, y, z, Math.min(0.012, w * 0.04), 1);
+      if (tape) { const t = new THREE.Mesh(new THREE.BoxGeometry(Math.min(0.06, w * 0.2), 0.002, d + 0.002), tapeMat); t.position.y = h / 2 + 0.0005; m.add(t); }
+      if (label) {
+        const l = new THREE.Mesh(labelGeo, labelMat), lw = Math.min(0.15, w * 0.3);
+        if (label === 'top') { l.scale.set(lw, lw * 0.69, 1); l.rotation.x = -Math.PI / 2; l.position.set(w * 0.27, h / 2 + 0.0012, d * 0.1); } else { l.scale.set(lw, lw * 0.69, 1); l.position.set((rnd() - 0.5) * (w - lw) * 0.6, h * 0.12, d / 2 + 0.0012); }
+        m.add(l);
+      }
+      return m;
+    }
+
+    // ---- room: garage concrete tiled every 2 m, painted block walls ----
+    const floorMat = pbr('garage_floor', [7, 5], { color: 0xF2F2F0 }) || new THREE.MeshStandardMaterial({ map: parts.tex(parts.concreteTex(), [4, 3]), roughness: 0.85 });
+
+    // The concrete photo is a warm brown: keep its relief and use its roughness map (grey mottling) as the colour, tinted grey,
+    // so the floor reads as clean sealed concrete, not dirt.
+    const greyConcrete = (m, hex) => { if (m?.normalMap && m.roughnessMap) { m.map = m.roughnessMap; m.color.set(hex); m.needsUpdate = true; } };
+    greyConcrete(floorMat, 0xC4C7C8);
+    // Painted concrete block, 40 × 20 cm, light grey over a mid-grey 1.2 m dado (one tile: 2 m wide, the wall's full 5 m).
+    const blockC = (() => {
+      const c = document.createElement('canvas'); c.width = 512; c.height = 1024; const g = c.getContext('2d'), r = rng(23), bw = 512 / 5, bh = 1024 / 25;
+      for (let row = 0; row < 25; row++) {
+        const y = 1024 - (row + 1) * bh, low = row < 6, base = low ? [150, 156, 160] : [214, 217, 215];
+        for (let i = -1; i < 6; i++) { const x = i * bw + (row % 2 ? bw / 2 : 0), k = 1 + (r() - 0.5) * 0.035; g.fillStyle = `rgb(${base.map((v) => Math.round(v * k)).join(',')})`; g.fillRect(x, y, bw, bh); }
+        g.fillStyle = low ? 'rgba(40,44,48,0.35)' : 'rgba(60,64,66,0.22)'; g.fillRect(0, y, 512, 2); for (let i = 0; i < 6; i++) g.fillRect(i * bw + (row % 2 ? bw / 2 : 0), y, 2, bh);
+      }
+      g.fillStyle = 'rgba(30,34,38,0.5)'; g.fillRect(0, 1024 - 6 * bh - 3, 512, 3); // the dado's top edge
+      return c;
+    })();
+    const wallTex = (rx) => { const t = new THREE.CanvasTexture(blockC); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; t.repeat.set(rx, 1); return t; };
+    let wallMat = pbr('painted_plaster_wall', [7, 2.5]);
+    if (wallMat) { wallMat.map = wallTex(7); wallMat.normalScale.set(0.5, 0.5); } else wallMat = new THREE.MeshStandardMaterial({ map: wallTex(7), roughness: 0.92 });
+    const shell = P.roomShell({ w: 14, d: 10, h: 5, floorMat, wallMat, skirting: false });
+    { // the side walls are 10 m wide, not 14: their own copy keeps the blocks 40 cm
+      const sm = shell.walls.left.material.clone(); for (const k of ['map', 'normalMap', 'roughnessMap']) if (sm[k]) { sm[k] = sm[k].clone(); sm[k].repeat.x *= 5 / 7; sm[k].needsUpdate = true; }
+      shell.walls.left.material = sm; shell.walls.right.material = sm;
+    }
     // yard around the building: the default view is from outside the cut-away front wall, so the ground never ends in
     // view. It reaches past the camera's far plane (80 m) from anywhere the orbit goes (the camera stays within 19.2 m of
     // its target), so its edge never shows, even from behind at full zoom-out: the far plane cuts it along the horizon.
-    const yard = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ map: parts.tex(concreteC, [57, 57]), color: 0x9EA3A3, roughness: 0.95 })); yard.rotation.x = -Math.PI / 2; yard.position.set(0, -0.012, 0); yard.receiveShadow = true; R.scene.add(yard);
+    const yardMat = pbr('garage_floor', [100, 100], { color: 0xA9AEAE }) || new THREE.MeshStandardMaterial({ map: parts.tex(parts.concreteTex(), [57, 57]), color: 0x9EA3A3, roughness: 0.95 });
+    greyConcrete(yardMat, 0x9FA4A4);
+    const yard = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), yardMat); yard.rotation.x = -Math.PI / 2; yard.position.set(0, -0.012, 0); yard.receiveShadow = true; R.scene.add(yard);
     R.lights.sun.intensity = 0; R.lights.sun.castShadow = false; R.lights.hemi.intensity = 0.45; R.lights.fill.intensity = 0.25; R.scene.background = new THREE.Color(0xA8B0B4);
-    // ceiling lights: the fixtures hang on the 5 m ceiling, so they hide with it when the camera is above it
+    // ceiling lights: linear LED high-bays on the 5 m ceiling (white housing, glowing diffuser); they hide with it when the
+    // camera is above it
     const fixMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5 });
-    for (const x of [-4, 0, 4]) for (const z of [-3, 1]) { const l = new THREE.PointLight(0xF4F1E8, 9, 16, 1.5); l.position.set(x, 4.8, z); if (x === 0 && z === 1) { l.castShadow = true; l.shadow.mapSize.set(2048, 2048); l.shadow.bias = -0.001; } R.scene.add(l); const fx = P.box(1.2, 0.05, 0.3, fixMat, x, 4.974, z); fx.userData.wall = { nx: 0, ny: -1, nz: 0, d: -5 }; }
+    const housings = [], diffusers = [];
+    for (const x of [-4, 0, 4]) for (const z of [-3, 1]) {
+      const l = new THREE.PointLight(0xF4F1E8, 9, 16, 1.5); l.position.set(x, 4.8, z); if (x === 0 && z === 1) { l.castShadow = true; l.shadow.mapSize.set(2048, 2048); l.shadow.bias = -0.001; } R.scene.add(l);
+      housings.push(P.box(1.3, 0.07, 0.34, M.white, x, 4.965, z), P.box(0.04, 0.03, 0.3, M.black, x - 0.6, 4.915, z), P.box(0.04, 0.03, 0.3, M.black, x + 0.6, 4.915, z));
+      diffusers.push(P.box(1.16, 0.012, 0.26, fixMat, x, 4.925, z));
+    }
+    for (const m of [merge(housings, M.white), merge(diffusers, fixMat)]) { m.castShadow = false; m.userData.wall = { nx: 0, ny: -1, nz: 0, d: -5 }; }
     // floor markings: line zone boundaries, and a dashed divider between the carts' belt-side lane and return lane
-    const line = new THREE.MeshStandardMaterial({ color: 0xE4B53A, roughness: 0.9 }), dash = new THREE.MeshStandardMaterial({ color: 0xE9E7E0, roughness: 0.9 });
-    const paint = (w, d, mat, x, z) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.004, z); m.receiveShadow = true; R.scene.add(m); };
-    for (const z of [-2.9, 2.4]) paint(12, 0.08, line, 0, z);
-    for (let x = X_PICK + 0.15; x < X_DROP - 0.1; x += 0.6) paint(0.3, 0.05, dash, x, (Z_IN + Z_OUT) / 2);
-    // racks along the back wall with pallets; pallets rest on the floor or a shelf, cartons rest on their pallet. The
-    // shelves are matte galvanized decks: polished steel mirrored the ceiling lights into white hot spots from above.
-    const shelfMat = new THREE.MeshStandardMaterial({ color: 0x9AA1A7, roughness: 0.75, metalness: 0.35 });
-    for (let r = 0; r < 4; r++) { const x = -5.2 + r * 2.6; for (const dx of [-1.1, 1.1]) { P.box(0.08, 4.2, 0.08, M.steel, x + dx, 2.1, -4.7); P.box(0.08, 4.2, 0.08, M.steel, x + dx, 2.1, -3.7); } for (const y of [0.9, 2.2, 3.5]) { P.box(2.3, 0.06, 1.1, shelfMat, x, y, -4.2); } for (const y of [0.0, 0.93, 2.23]) for (const dx of [-0.55, 0.55]) { if (Math.random() < 0.8) { const h = 0.45 + Math.random() * 0.3; P.box(0.9, 0.1, 0.9, M.woodLight, x + dx, y + 0.05, -4.2); P.box(0.8, h, 0.8, M.cardboard, x + dx, y + 0.1 + h / 2, -4.2, 0.01); } } }
+    const line = new THREE.MeshStandardMaterial({ color: 0xE4B53A, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -1 }), dash = new THREE.MeshStandardMaterial({ color: 0xE9E7E0, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -1 });
+    const paintStrip = (w, d, mat, x, z) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.004, z); m.receiveShadow = true; R.scene.add(m); };
+    for (const z of [-2.9, 2.4]) paintStrip(12, 0.08, line, 0, z);
+    for (let x = X_PICK + 0.15; x < X_DROP - 0.1; x += 0.6) paintStrip(0.3, 0.05, dash, x, (Z_IN + Z_OUT) / 2);
+
+    // ---- pallet racking along the back wall: blue slotted upright frames with bracing, orange step beams, mesh decks ----
+    // Pallets rest on the floor or a deck; cartons stand on their pallet. The decks are matte galvanised: polished steel
+    // mirrored the ceiling lights into white hot spots from above.
+    {
+      const upT = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#2F5E9E'; g.fillRect(0, 0, w, h); g.fillStyle = '#16263A'; g.beginPath(); g.roundRect(w / 2 - 4, 8, 8, 20, 4); g.fill(); g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(0, 0, 2, h); }, 32, 64); upT.repeat.set(1, 42);
+      const upMat = new THREE.MeshStandardMaterial({ map: upT, roughness: 0.5, metalness: 0.25 }), braceMat = paint(0x2F5E9E, 0.5), beamMat = paint(0xE2621B, 0.45);
+      const deckT = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#9AA1A7'; g.fillRect(0, 0, w, h); g.fillStyle = 'rgba(38,42,46,0.55)'; g.fillRect(0, 0, w, 3); g.fillRect(0, 0, 3, h); g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(0, 3, w, 1); }, 32, 32); deckT.repeat.set(2.11 / 0.05, 1.0 / 0.1);
+      const deckMat = new THREE.MeshStandardMaterial({ map: deckT, roughness: 0.75, metalness: 0.35 });
+      const palT = parts.grainTex({ light: [206, 176, 132], dark: [164, 130, 90], rings: 10, seed: 13, size: 256 });
+      const palletMat = new THREE.MeshStandardMaterial({ map: parts.tex(palT, [1, 1]), roughness: 0.9 });
+      const ups = [], braces = [], beams = [], decks = [], plates = [], guards = [], pal = [], boxes = [], tapes = [], labels = [];
+      const tint = [0xFFFFFF, 0xF2E6D6, 0xE6D3BB, 0xDCC5A6, 0xF7EDE0, 0xE0CBB0].map((c) => new THREE.MeshBasicMaterial({ color: c })); // vertex tints, merged into one kraft mesh
+      const pallet = (x, y, z) => {
+        for (let i = 0; i < 5; i++) pal.push(P.box(0.9, 0.018, 0.12, palletMat, x, y + 0.091, z - 0.39 + i * 0.195));
+        for (const dz of [-0.39, 0, 0.39]) { pal.push(P.box(0.9, 0.018, 0.12, palletMat, x, y + 0.009, z + dz)); for (const dx of [-0.39, 0, 0.39]) pal.push(P.box(0.11, 0.064, 0.12, palletMat, x + dx, y + 0.05, z + dz)); }
+      };
+      // cartons on a pallet (or loose on a deck): an n × n grid, one or two layers; tape on top, labels on the front row
+      const load = (x, y, z, n, layers, hc, size = 0.88) => {
+        const cw = (size - (n - 1) * 0.012) / n;
+        for (let L = 0; L < layers; L++) for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+          const cx = x - size / 2 + cw / 2 + i * (cw + 0.012) + (rnd() - 0.5) * 0.012, cz = z - size / 2 + cw / 2 + j * (cw + 0.012) + (rnd() - 0.5) * 0.012, cy = y + hc / 2 + L * hc;
+          const b = rb(cw, hc - 0.004, cw, tint[Math.floor(rnd() * tint.length)], cx, cy, cz, 0.012, 1); b.rotation.y = (rnd() - 0.5) * 0.04; boxes.push(b);
+          if (L === layers - 1) tapes.push(P.box(Math.min(0.06, cw * 0.2), 0.002, cw + 0.004, tapeMat, cx, cy + hc / 2 - 0.001, cz));
+          if (j === n - 1 && rnd() < 0.85) { const l = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), labelMat), lw = Math.min(0.13, cw * 0.4); l.scale.set(lw, lw * 0.69, 1); l.position.set(cx + (rnd() - 0.5) * (cw - lw) * 0.6, cy + hc * 0.12, cz + cw / 2 + 0.006); P.add(l); labels.push(l); }
+        }
+      };
+      for (let r = 0; r < 4; r++) {
+        const x = -5.2 + r * 2.6;
+        for (const dx of [-1.1, 1.1]) {
+          for (const z of [-4.7, -3.7]) { ups.push(P.box(0.09, 4.2, 0.07, upMat, x + dx, 2.1, z)); plates.push(P.box(0.16, 0.012, 0.14, M.steel, x + dx, 0.006, z)); }
+          guards.push(P.box(0.13, 0.4, 0.11, yellow, x + dx, 0.212, -3.7)); // upright protector on the aisle side
+          // the frame's lacing: horizontals top and bottom, diagonals between them
+          for (const y of [0.15, 4.05]) braces.push(P.box(0.035, 0.035, 0.93, braceMat, x + dx, y, -4.2));
+          const steps = 4, hy = (4.05 - 0.15) / steps;
+          for (let i = 0; i < steps; i++) { const y0 = 0.15 + i * hy, dir = i % 2 ? 1 : -1, len = Math.hypot(0.93, hy); const b = P.box(0.03, len, 0.03, braceMat, x + dx, y0 + hy / 2, -4.2); b.rotation.x = dir * Math.atan2(0.93, hy); braces.push(b); }
+        }
+        for (const y of [0.9, 2.2, 3.5]) { for (const z of [-4.7, -3.7]) beams.push(P.box(2.11, 0.11, 0.05, beamMat, x, y + 0.03 - 0.055, z)); decks.push(P.box(2.11, 0.012, 0.95, deckMat, x, y + 0.024, -4.2)); }
+        for (const y of [0.0, 0.93, 2.23]) for (const dx of [-0.55, 0.55]) {
+          if (rnd() < 0.8) { const h = 0.45 + rnd() * 0.3, n = rnd() < 0.35 ? 3 : 2, layers = h > 0.58 ? 2 : 1; pallet(x + dx, y, -4.2); load(x + dx, y + 0.1, -4.2, n, layers, h / layers); }
+        }
+        for (const dx of [-0.6, 0.6]) if (rnd() < 0.45) load(x + dx, 3.53, -4.2 + 0.1, 2, 1, 0.24 + rnd() * 0.12, 0.6); // loose cartons on the top deck
+      }
+      merge(ups, upMat); merge(braces, braceMat); merge(beams, beamMat); merge(decks, deckMat); merge(plates, M.steel); merge(guards, yellow); merge(pal, palletMat);
+      merge(boxes, new THREE.MeshStandardMaterial({ map: kraftT, vertexColors: true, roughness: 0.92 }), true); merge(tapes, tapeMat); const lm = merge(labels, labelMat); lm.castShadow = false;
+    }
+    // supplies shelf in the back right corner (a real steel shelving unit when the assets are in)
+    {
+      const shelf = MOD('steel_frame_shelves_03');
+      if (shelf) { R.scene.add(shelf); placeModel(THREE, shelf, { x: 5.3, z: -5 + 0.38 }); }
+      else {
+        const sp = []; for (const dx of [-1.15, 1.15]) for (const dz of [-0.33, 0.33]) sp.push(P.box(0.04, 2.3, 0.04, M.steel, 5.3 + dx, 1.15, -4.62 + dz));
+        for (const y of [0.15, 0.8, 1.45, 2.1]) sp.push(P.box(2.34, 0.03, 0.7, M.steel, 5.3, y, -4.62)); merge(sp, M.steel);
+      }
+    }
 
     // Wall-hung parts hide with their wall when the camera is outside it (renderer.js); `hang` gathers everything built
     // since `from` into one tagged group, so the door's own animation (slats, lamps) stays the scene's. Hidden, the group
@@ -261,82 +426,206 @@ export default {
     };
     // Parcels never show past the receiving hatch or the trailer panel: they slide out of the one and into the other.
     const IN_X = -6.99, OUT_X = 6.975;
-    // dock 2 on the right wall: a roll-up door that opens while the dock light is green, drum housing with the light on
-    // top, bumpers, the sign and the signal. The sign hangs over the signal, beside the door rather than above it: the
-    // "Dock 2" label the room shows over the door (discovery, a tap) covered a sign above the door on desktop, and the
-    // phone view's hint pill (top right of the room) reaches down to the top of the door.
+    // dock 2 on the right wall: a galvanised roller shutter (slats drawn on a texture, so they keep their 10 cm as the
+    // curtain rolls up) with an aluminium bottom bar, in steel guides with striped impact guards, under a rounded coil box
+    // with the dock light on top; laminated bumpers, the sign, the signal and a pushbutton station. It opens while the
+    // dock light is green. The sign hangs over the signal, beside the door rather than above it: the "Dock 2" label the
+    // room shows over the door (discovery, a tap) covered a sign above the door on desktop, and the phone view's hint
+    // pill (top right of the room) reaches down to the top of the door.
     const dock0 = R.scene.children.length;
-    const door = P.box(0.06, 3.2, 3.0, new THREE.MeshStandardMaterial({ color: 0x6E7478, roughness: 0.7, metalness: 0.4 }), 6.96, 1.6, 0.6);
-    const slats = []; for (let i = 0; i < 8; i++) slats.push(P.box(0.02, 0.02, 3.0, M.black, 6.92, 0.4 + i * 0.4, 0.6));
+    const SLATS = 32; // 10 cm slats over the 3.2 m curtain
+    const slatT = canvasTex(THREE, (g, w, h) => {
+      const lg = g.createLinearGradient(0, 0, 0, h); lg.addColorStop(0, '#DADEE1'); lg.addColorStop(0.5, '#C4C9CD'); lg.addColorStop(0.85, '#AAB0B5'); lg.addColorStop(1, '#8E9499');
+      g.fillStyle = lg; g.fillRect(0, 0, w, h); g.fillStyle = 'rgba(0,0,0,0.14)'; g.fillRect(0, h / 2, w, 2);
+      g.fillStyle = '#5A6065'; g.fillRect(0, h - 6, w, 3); g.fillStyle = 'rgba(255,255,255,0.5)'; g.fillRect(0, h - 3, w, 2);
+    }); slatT.repeat.set(1, SLATS); slatT.anisotropy = 8;
+    const door = P.box(0.06, 3.2, 3.0, new THREE.MeshStandardMaterial({ map: slatT, bumpMap: slatT, bumpScale: 1.2, metalness: 0.55, roughness: 0.45 }), 6.96, 1.6, 0.6); door.userData.noContact = true;
+    const bottomBar = P.group(P.box(0.075, 0.05, 3.0, M.metal, 0, 0, 0), P.box(0.05, 0.012, 2.98, M.rubber, 0, -0.031, 0)); bottomBar.position.set(6.955, 0.025, 0.6); bottomBar.userData.noContact = true;
     // the trailer's dark interior behind the open door: one panel facing the room, at OUT_X
     const trailer = new THREE.Mesh(new THREE.PlaneGeometry(2.98, 3.18), new THREE.MeshStandardMaterial({ color: 0x15181B, roughness: 1 })); trailer.rotation.y = -Math.PI / 2; trailer.position.set(OUT_X, 1.59, 0.6); trailer.receiveShadow = true; R.scene.add(trailer);
-    const dockHousing = P.box(0.24, 0.26, 3.1, M.steel, 6.878, 3.33, 0.6);
-    const dockLight = P.beacon(6.88, 3.47, 0.6); dockLight.scale.set(2, 1.6, 2);
+    const guardMat = hazMat(1.5, 8), guides = P.group(merge([-0.94, 2.14].map((z) => P.box(0.1, 3.26, 0.08, frameMat, 6.95, 1.63, z)), frameMat), merge([-0.94, 2.14].map((z) => P.box(0.11, 0.6, 0.1, guardMat, 6.94, 0.3, z)), guardMat));
+    const dockHousing = P.group(rb(0.26, 0.28, 3.24, frameMat, 6.87, 3.34, 0.6, 0.07, 2), merge([-1.025, 2.225].map((z) => P.box(0.27, 0.29, 0.012, M.steel, 6.87, 3.34, z)), M.steel));
+    P.cyl(0.055, 0.06, 0.03, M.black, 6.88, 3.495, 0.6, 20);
+    const dockLight = P.add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.09, 24), lensMat(0xE0563A))); dockLight.position.set(6.88, 3.555, 0.6);
+    P.cyl(0.052, 0.052, 0.014, M.black, 6.88, 3.607, 0.6, 20);
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.3), signMat('DOCK 2', 256, 96, 70)); sign.rotation.y = -Math.PI / 2; sign.position.set(6.99, 2.85, -1.4); R.scene.add(sign);
-    P.box(0.3, 0.3, 0.4, M.rubber, 6.848, 0.2, -1.1); P.box(0.3, 0.3, 0.4, M.rubber, 6.848, 0.2, 2.3);
-    // dock signal on the wall beside the door, at eye height: red over green, the lit one is the dock's state
-    const sigHousing = P.box(0.08, 0.44, 0.22, M.black, 6.95, 2.25, -1.4, 0.02);
-    const lamp = (hex, y) => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.075, 20, 14), new THREE.MeshStandardMaterial({ color: hex, emissive: hex, emissiveIntensity: 0 })); m.position.set(6.9, y, -1.4); m.userData.hex = hex; R.scene.add(m); return m; };
+    // laminated rubber bumpers between steel angles, outboard of the guides
+    {
+      const lamT = canvasTex(THREE, (g, w, h) => { for (let y = 0, i = 0; y < h; y += 8, i++) { g.fillStyle = i % 2 ? '#1E2022' : '#26292B'; g.fillRect(0, y, w, 8); g.fillStyle = '#101112'; g.fillRect(0, y + 7, w, 1); } }); lamT.repeat.set(1, 0.3 / 0.08);
+      const lam = new THREE.MeshStandardMaterial({ map: lamT, roughness: 0.92 });
+      merge([-1.2, 2.4].map((z) => P.box(0.26, 0.3, 0.36, lam, 6.86, 0.2, z)), lam);
+      merge([-1.2, 2.4].flatMap((z) => [0.04, 0.36].map((y) => P.box(0.27, 0.014, 0.38, M.steel, 6.86, y, z))), M.steel);
+    }
+    // dock signal on the wall beside the door, at eye height: red over green under visors, the lit one is the dock's state
+    const sigHousing = P.group(rb(0.08, 0.44, 0.22, M.black, 6.95, 2.25, -1.4, 0.02, 2), merge([2.445, 2.225].map((y) => P.box(0.07, 0.008, 0.18, M.black, 6.88, y, -1.4)), M.black));
+    const lamp = (hex, y) => { const m = alongX(new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.03, 28), new THREE.MeshStandardMaterial({ color: hex, emissive: hex, emissiveIntensity: 0, roughness: 0.25 }))); m.position.set(6.9, y, -1.4); m.userData.hex = hex; R.scene.add(m); return m; };
     const sigRed = lamp(0xE0563A, 2.36), sigGreen = lamp(0x2FBF71, 2.14), SIG = [sigRed, sigGreen];
+    // pushbutton station under the signal: up and down (black), stop (red)
+    const station = P.group(rb(0.05, 0.2, 0.12, panel, 6.965, 1.45, -1.4, 0.008, 2), ...[[1.51, M.black], [1.45, red], [1.39, M.black]].map(([y, m]) => alongX(P.cyl(0.016, 0.016, 0.012, m, 6.935, y, -1.4, 16))));
     hang(dock0, -1, -7); // the right wall, x = 7
+    // the dock leveller on the floor inside the door: tread plate with a striped front edge
+    {
+      const tread = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#8B9197'; g.fillRect(0, 0, w, h); const bar = (x, y, a) => { g.save(); g.translate(x, y); g.rotate(a); g.fillStyle = '#5F656B'; g.beginPath(); g.ellipse(1, 1.5, 11, 3, 0, 0, TAU); g.fill(); g.fillStyle = '#C0C6CB'; g.beginPath(); g.ellipse(0, 0, 11, 3, 0, 0, TAU); g.fill(); g.restore(); }; bar(16, 16, 0.75); bar(48, 48, 0.75); bar(48, 16, -0.75); bar(16, 48, -0.75); }); tread.repeat.set(0.7 / 0.06, 2.9 / 0.06);
+      const plate = P.box(0.7, 0.014, 2.9, new THREE.MeshStandardMaterial({ map: tread, metalness: 0.85, roughness: 0.45 }), 6.6, 0.007, 0.6); plate.castShadow = false; plate.userData.noContact = true; // flush with the floor: no baked dark rim
+      const edge = P.box(0.06, 0.016, 2.9, hazMat(0.5, 2.9 / 0.06), 6.22, 0.008, 0.6); edge.castShadow = false; edge.userData.noContact = true;
+    }
 
-    // three conveyor sections along x at z = 0.5, belt top at 0.83. Drives and status beacons sit on the back rail,
-    // so the front stays clear for the carts. The back rail is open where lane B leaves.
-    const belt = new THREE.MeshStandardMaterial({ color: 0x22262A, roughness: 0.9 });
+    // Three conveyor sections along x at z = 0.5, belt top at 0.83: flat belts in galvanised side channels on H-frame
+    // legs with levelling feet, the return belt underneath. The gearmotors and stack lights sit on the back rail, so the
+    // front stays clear for the carts. The back rail is open where lane B leaves. The belts' splice stripes scroll with
+    // their speed (update()).
     const beltY = 0.8, LZ = 0.5, GAP = [0.945, 1.655];
-    const rail = (x0, x1, z) => { if (x1 - x0 > 0.001) P.box(x1 - x0, 0.14, 0.05, M.steel, (x0 + x1) / 2, beltY - 0.02, z); };
+    const rails = (x0, x1, z, into) => { if (x1 - x0 > 0.001) { into.side.push(P.box(x1 - x0, 0.14, 0.05, into.mat, (x0 + x1) / 2, beltY - 0.02, z)); for (const y of [beltY + 0.053, beltY - 0.087]) into.lips.push(P.box(x1 - x0, 0.006, 0.06, frameMat, (x0 + x1) / 2, y, z)); } };
+    // H-frame legs every 1.5 m at most, with a long brace and levelling feet; x0..x1 the section, at z (± 0.28)
+    const legs = (x0, x1, into, z = LZ) => {
+      const n = Math.max(2, Math.ceil((x1 - x0 - 0.5) / 1.5) + 1), xs = []; for (let i = 0; i < n; i++) xs.push(x0 + 0.25 + (x1 - x0 - 0.5) * (i / (n - 1)));
+      for (const lx of xs) {
+        for (const dz of [-0.28, 0.28]) { into.lips.push(P.box(0.05, beltY - 0.1, 0.05, frameMat, lx, 0.025 + (beltY - 0.1) / 2, z + dz)); into.feet.push(P.cyl(0.032, 0.036, 0.016, M.rubber, lx, 0.008, z + dz, 14)); }
+        into.lips.push(P.box(0.05, 0.04, 0.62, frameMat, lx, beltY - 0.05, z), P.box(0.035, 0.035, 0.56, frameMat, lx, 0.2, z));
+      }
+      into.lips.push(P.box(xs[xs.length - 1] - xs[0], 0.035, 0.035, frameMat, (xs[0] + xs[xs.length - 1]) / 2, 0.2, z));
+    };
+    const finMat = new THREE.MeshStandardMaterial({ map: finTex(), metalness: 0.5, roughness: 0.5 });
     function conveyor(x0, x1) {
-      const len = x1 - x0, cx = (x0 + x1) / 2;
-      const beltMesh = P.box(len, 0.06, 0.62, belt, cx, beltY, LZ);
-      rail(x0, x1, LZ + 0.33); rail(x0, Math.min(x1, Math.max(x0, GAP[0])), LZ - 0.33); rail(Math.max(x0, Math.min(x1, GAP[1])), x1, LZ - 0.33);
-      for (const lx of [x0 + 0.25, x1 - 0.25]) for (const dz of [-0.28, 0.28]) P.box(0.05, beltY - 0.05, 0.05, M.steel, lx, (beltY - 0.05) / 2, LZ + dz);
-      const motor = P.box(0.22, 0.18, 0.18, M.black, x1 - 0.3, 0.72, LZ - 0.33 - 0.025 - 0.09, 0.01);
-      P.box(0.03, 0.25, 0.03, M.black, x1 - 0.3, beltY + 0.175, LZ - 0.33);
-      const led = P.beacon(x1 - 0.3, beltY + 0.31, LZ - 0.33);
-      return { x0, x1, beltMesh, motor, led };
+      const len = x1 - x0, cx = (x0 + x1) / 2, tex = beltTex(len);
+      const beltMesh = P.box(len, 0.06, 0.62, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }), cx, beltY, LZ);
+      const into = { mat: sideMat(len), side: [], lips: [], feet: [] };
+      rails(x0, x1, LZ + 0.33, into); rails(x0, Math.min(x1, Math.max(x0, GAP[0])), LZ - 0.33, into); rails(Math.max(x0, Math.min(x1, GAP[1])), x1, LZ - 0.33, into);
+      legs(x0, x1, into);
+      const ret = P.box(len - 0.08, 0.006, 0.5, M.rubber, cx, beltY - 0.12, LZ); into.feet.push(ret);
+      const railMesh = merge(into.side, into.mat), frame = P.group(merge(into.lips, frameMat), merge(into.feet, M.rubber));
+      // gearmotor on the back of the drive end: gearbox, finned barrel, fan cowl, terminal box, output shaft into the channel
+      const mx = x1 - 0.3, mz = LZ - 0.33 - 0.025 - 0.09;
+      const motor = P.group(
+        rb(0.13, 0.17, 0.15, graphite, mx + 0.04, 0.715, mz, 0.015, 2),
+        alongX(P.cyl(0.058, 0.058, 0.17, finMat, mx - 0.11, 0.7, mz, 20)),
+        alongX(P.cyl(0.054, 0.05, 0.05, graphite, mx - 0.22, 0.7, mz, 20)),
+        rb(0.07, 0.04, 0.07, graphite, mx - 0.1, 0.775, mz, 0.006, 1),
+        alongZ(P.cyl(0.02, 0.02, 0.07, M.steel, mx + 0.04, 0.74, mz + 0.09, 12)),
+      );
+      // stack light on a post on the back rail: a grey base, the lens (the belt's beacon), a cap
+      const led = P.add(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.07, 20), lensMat(0x2FBF71))); led.position.set(mx, beltY + 0.35, LZ - 0.33);
+      const stack = P.group(P.cyl(0.011, 0.011, 0.25, M.steel, mx, beltY + 0.175, LZ - 0.33, 10), P.cyl(0.03, 0.034, 0.03, M.black, mx, beltY + 0.3, LZ - 0.33, 20), P.cyl(0.031, 0.031, 0.012, M.black, mx, beltY + 0.391, LZ - 0.33, 20));
+      // pushbutton box on the first leg, facing the aisle: an E-stop in a yellow collar
+      const bx = x0 + 0.25, pb = P.group(rb(0.09, 0.13, 0.045, panel, bx, 0.5, LZ + 0.33, 0.008, 2), alongZ(P.cyl(0.024, 0.024, 0.008, yellow, bx, 0.52, LZ + 0.356, 20)), alongZ(P.cyl(0.017, 0.019, 0.018, red, bx, 0.52, LZ + 0.366, 20)), alongZ(P.cyl(0.009, 0.009, 0.008, greenBtn, bx, 0.465, LZ + 0.356, 14)));
+      return { x0, x1, beltMesh, motor, led, tex, rails: railMesh, frame, stack, pb };
     }
     const C = { c1: conveyor(-5.0, -2.0), c2: conveyor(-2.0, 1.0), c3: conveyor(1.0, 6.9) };
     // receiving: parcels come in through a hatch in the left wall (a dark panel at IN_X, framed, with its sign), onto a
     // short infeed that runs with C1 and ends at the wall
-    P.box(2.0, 0.06, 0.62, belt, -6.0, beltY, LZ); rail(-7.0, -5.0, LZ + 0.33); rail(-7.0, -5.0, LZ - 0.33);
-    for (const dz of [-0.28, 0.28]) P.box(0.05, beltY - 0.05, 0.05, M.steel, -6.3, (beltY - 0.05) / 2, LZ + dz);
+    const feedTex = beltTex(2.0);
+    P.box(2.0, 0.06, 0.62, new THREE.MeshStandardMaterial({ map: feedTex, roughness: 0.85 }), -6.0, beltY, LZ);
+    { const into = { mat: sideMat(2.0), side: [], lips: [], feet: [] }; rails(-7.0, -5.0, LZ + 0.33, into); rails(-7.0, -5.0, LZ - 0.33, into); legs(-7.0, -5.0, into); merge(into.side, into.mat); merge(into.lips, frameMat); merge(into.feet, M.rubber); }
     const recv0 = R.scene.children.length;
     const hatch = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.78), new THREE.MeshStandardMaterial({ color: 0x15181B, roughness: 1 })); hatch.rotation.y = Math.PI / 2; hatch.position.set(IN_X, beltY + 0.36, LZ); R.scene.add(hatch);
-    P.box(0.06, 0.06, 1.02, M.steel, -6.97, beltY + 0.78, LZ); for (const dz of [-0.48, 0.48]) P.box(0.06, 0.84, 0.06, M.steel, -6.97, beltY + 0.36, LZ + dz);
+    merge([P.box(0.06, 0.08, 1.1, frameMat, -6.97, beltY + 0.79, LZ), ...[-0.51, 0.51].map((dz) => P.box(0.06, 0.86, 0.08, frameMat, -6.97, beltY + 0.36, LZ + dz))], frameMat);
     const rsign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.26), signMat('RECEIVING', 320, 92, 46)); rsign.rotation.y = Math.PI / 2; rsign.position.set(-6.99, beltY + 1.05, LZ); R.scene.add(rsign);
     hang(recv0, 1, -7); // the left wall, x = -7
     // lane B: a branch off the C2/C3 junction toward the back, ending over its tote
     const LB0 = LZ - 0.315, LB1 = -2.0;
-    P.box(0.62, 0.06, LB0 - LB1, belt, 1.3, beltY, (LB0 + LB1) / 2);
+    const laneTex = beltTex(LB0 - LB1, true);
+    P.box(0.62, 0.06, LB0 - LB1, new THREE.MeshStandardMaterial({ map: laneTex, roughness: 0.85 }), 1.3, beltY, (LB0 + LB1) / 2);
     const LBR = LZ - 0.305, MOUTH = 0.3; // left rail starts MOUTH further back: the open side where parcels slide in off the gate
-    P.box(0.05, 0.14, LBR - MOUTH - LB1, M.steel, 0.97, beltY - 0.02, (LBR - MOUTH + LB1) / 2); P.box(0.05, 0.14, LBR - LB1, M.steel, 1.63, beltY - 0.02, (LBR + LB1) / 2);
-    for (const lz of [-0.3, -1.75]) for (const dx of [-0.28, 0.28]) P.box(0.05, beltY - 0.05, 0.05, M.steel, 1.3 + dx, (beltY - 0.05) / 2, lz);
-    // lane B tote: an open bin under the belt end. A diverted parcel drops in and sinks below what's already there.
-    const binFill = new THREE.MeshStandardMaterial({ color: 0x4A3A28, roughness: 1 });
-    P.box(0.84, 0.03, 0.64, M.cardboard, 1.3, 0.015, -2.3); for (const dz of [-0.335, 0.335]) P.box(0.9, 0.6, 0.03, M.cardboard, 1.3, 0.3, -2.3 + dz); for (const dx of [-0.435, 0.435]) P.box(0.03, 0.6, 0.64, M.cardboard, 1.3 + dx, 0.3, -2.3);
-    P.box(0.835, 0.01, 0.635, binFill, 1.3, 0.465, -2.3);
-    // scanner arch over the end of C1, standing on the belt rails
-    for (const z of [LZ - 0.33, LZ + 0.33]) P.box(0.05, 0.75, 0.05, M.steel, SX, beltY + 0.425, z);
-    P.box(0.05, 0.05, 0.71, M.steel, SX, 1.625, LZ); const scanHead = P.box(0.12, 0.1, 0.16, M.black, SX, 1.55, LZ, 0.01);
-    const scanBeacon = P.beacon(SX, 1.66, LZ); scanBeacon.scale.set(2, 1.6, 2); // status lamp on the crossbar, sized like the dock light
+    {
+      const bSide = sideMat(LBR - LB1); // the ±x faces map u along z
+      const sides = [P.box(0.05, 0.14, LBR - MOUTH - LB1, bSide, 0.97, beltY - 0.02, (LBR - MOUTH + LB1) / 2), P.box(0.05, 0.14, LBR - LB1, bSide, 1.63, beltY - 0.02, (LBR + LB1) / 2)];
+      const lips = [], feet = [];
+      for (const lz of [-0.3, -1.75]) { for (const dx of [-0.28, 0.28]) { lips.push(P.box(0.05, beltY - 0.1, 0.05, frameMat, 1.3 + dx, 0.025 + (beltY - 0.1) / 2, lz)); feet.push(P.cyl(0.032, 0.036, 0.016, M.rubber, 1.3 + dx, 0.008, lz, 14)); } lips.push(P.box(0.62, 0.04, 0.05, frameMat, 1.3, beltY - 0.05, lz), P.box(0.56, 0.035, 0.035, frameMat, 1.3, 0.2, lz)); }
+      merge(sides, bSide); merge(lips, frameMat); merge(feet, M.rubber);
+    }
+    // lane B tote: a grey polypropylene bin under the belt end with a printed card. A diverted parcel drops in and sinks
+    // below what's already there (the fill: parcel tops drawn on a canvas).
+    {
+      const tote = paint(0x5B636B, 0.6);
+      merge([rb(0.84, 0.03, 0.64, tote, 1.3, 0.015, -2.3, 0.01, 1), ...[-0.335, 0.335].map((dz) => rb(0.9, 0.6, 0.03, tote, 1.3, 0.3, -2.3 + dz, 0.01, 1)), ...[-0.435, 0.435].map((dx) => rb(0.03, 0.6, 0.64, tote, 1.3 + dx, 0.3, -2.3, 0.01, 1)),
+        ...[-0.345, 0.345].map((dz) => P.box(0.92, 0.03, 0.03, tote, 1.3, 0.585, -2.3 + dz)), ...[-0.445, 0.445].map((dx) => P.box(0.03, 0.03, 0.72, tote, 1.3 + dx, 0.585, -2.3))], tote);
+      const card = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.12), new THREE.MeshStandardMaterial({ map: parts.labelTex('LANE B', { bg: '#F4F5F3', fg: '#1E2226', size: 44, w: 256, h: 118, weight: 'bold' }), roughness: 0.8 })); card.position.set(1.3, 0.38, -2.3 + 0.352); R.scene.add(card);
+      const fillT = canvasTex(THREE, (g, w, h) => { const r = rng(31); g.fillStyle = '#2E2620'; g.fillRect(0, 0, w, h); for (let i = 0; i < 14; i++) { const bw = 40 + r() * 70, bh = 30 + r() * 50, x = r() * (w - bw), y = r() * (h - bh), k = 0.7 + r() * 0.35; g.fillStyle = `rgb(${Math.round(196 * k)},${Math.round(160 * k)},${Math.round(116 * k)})`; g.fillRect(x, y, bw, bh); g.fillStyle = 'rgba(216,213,203,0.8)'; g.fillRect(x + bw * 0.42, y, bw * 0.16, bh); g.fillStyle = 'rgba(40,30,20,0.35)'; g.fillRect(x, y + bh - 3, bw, 3); } }, 256, 192);
+      P.box(0.835, 0.01, 0.635, new THREE.MeshStandardMaterial({ map: fillT, roughness: 1 }), 1.3, 0.465, -2.3);
+    }
+    // scanner arch over the end of C1, on the belt rails: T-slot aluminium posts and beam on striped base plates, a yellow
+    // light curtain on each post's inner face, two downward camera heads with an illumination bar, a stack light on top
+    // and a control box on the aisle post whose screen shows the mode and the count.
+    const postMat = new THREE.MeshStandardMaterial({ map: slotTex(false), metalness: 1, roughness: 0.34 }), beamTexMat = new THREE.MeshStandardMaterial({ map: slotTex(true), metalness: 1, roughness: 0.34 });
+    const curtainT = canvasTex(THREE, (g, w, h) => { g.fillStyle = '#140A0B'; g.fillRect(0, 0, w, h); for (let y = 8; y < h; y += 16) { g.fillStyle = '#5A1A1A'; g.beginPath(); g.arc(w / 2, y, 5, 0, TAU); g.fill(); g.fillStyle = '#C23A30'; g.beginPath(); g.arc(w / 2, y, 2.2, 0, TAU); g.fill(); } }, 32, 64); curtainT.repeat.set(1, 0.58 / 0.06);
+    const curtainMat = new THREE.MeshStandardMaterial({ map: curtainT, emissive: 0xFF3A30, emissiveMap: curtainT, emissiveIntensity: 0, roughness: 0.2 });
+    const illumMat = new THREE.MeshStandardMaterial({ color: 0xE8ECEE, emissive: 0xEFF7FF, emissiveIntensity: 0, roughness: 0.3 });
+    const archHaz = hazMat(1, 1);
+    const archFrame = P.group(
+      merge([LZ - 0.33, LZ + 0.33].map((z) => P.box(0.06, 0.74, 0.06, postMat, SX, beltY + 0.432, z)), postMat),
+      P.box(0.06, 0.06, 0.78, beamTexMat, SX, 1.63, LZ),
+      merge([LZ - 0.33, LZ + 0.33].map((z) => P.box(0.11, 0.012, 0.08, archHaz, SX, beltY + 0.062, z)), archHaz),
+      merge([LZ - 0.285, LZ + 0.285].map((z) => rb(0.04, 0.62, 0.03, yellow, SX, 1.2, z, 0.006, 1)), yellow),
+      merge([LZ - 0.285, LZ + 0.285].flatMap((z) => [0.895, 1.505].map((y) => P.box(0.044, 0.03, 0.034, M.black, SX, y, z))), M.black),
+      ...[[LZ - 0.2695, 0], [LZ + 0.2695, Math.PI]].map(([z, ry]) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.024, 0.58), curtainMat); m.position.set(SX, 1.2, z); m.rotation.y = ry; return P.add(m); }),
+    );
+    const glass = new THREE.MeshStandardMaterial({ color: 0x0A0E12, roughness: 0.05, metalness: 0.2 });
+    const scanHead = P.group(
+      merge([LZ - 0.17, LZ + 0.17].map((z) => rb(0.1, 0.07, 0.12, shellMat, SX, 1.565, z, 0.012, 2)), shellMat),
+      merge([LZ - 0.17, LZ + 0.17].map((z) => P.cyl(0.026, 0.026, 0.008, M.black, SX, 1.527, z, 20)), M.black),
+      merge([LZ - 0.17, LZ + 0.17].map((z) => P.cyl(0.019, 0.019, 0.006, glass, SX, 1.523, z, 20)), glass),
+      rb(0.06, 0.03, 0.18, M.anodized, SX, 1.585, LZ, 0.006, 1),
+      P.box(0.045, 0.004, 0.16, illumMat, SX, 1.569, LZ),
+    );
+    P.cyl(0.05, 0.054, 0.03, M.black, SX, 1.675, LZ, 20);
+    const scanBeacon = P.add(new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.046, 0.1, 24), lensMat(0x2FBF71))); scanBeacon.position.set(SX, 1.74, LZ); // status lamp on the crossbar, sized like the dock light
+    P.cyl(0.047, 0.047, 0.014, M.black, SX, 1.797, LZ, 20);
+    const hmi = (() => { const c = document.createElement('canvas'); c.width = 256; c.height = 160; const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; return { g: c.getContext('2d'), tex }; })();
+    const ctrl = P.group(
+      rb(0.16, 0.2, 0.05, panel, SX, 1.26, LZ + 0.33 + 0.055, 0.01, 2),
+      (() => { const m = P.screenPlane(0.12, 0.075, hmi.tex); m.position.set(SX, 1.29, LZ + 0.33 + 0.0805); return m; })(),
+      ...[[SX - 0.04, greenBtn], [SX + 0.04, M.black]].map(([x, m]) => alongZ(P.cyl(0.01, 0.01, 0.008, m, x, 1.2, LZ + 0.33 + 0.083, 14))),
+    );
+    const drawHmi = (mode, n, bad) => {
+      const g = hmi.g; g.fillStyle = mode === 'fault' ? '#4A0F0B' : mode === 'off' ? '#05070A' : '#0A1218'; g.fillRect(0, 0, 256, 160); g.textAlign = 'left'; g.textBaseline = 'middle';
+      if (mode === 'fault') { g.fillStyle = '#FF7A62'; g.font = `600 30px ${FONT}`; g.fillText('CHECK', 16, 56); g.fillStyle = '#FFC2B6'; g.font = `20px ${FONT}`; g.fillText(`${n} scanned`, 16, 104); }
+      else if (mode !== 'off') {
+        const armed = mode === 'armed'; g.fillStyle = armed ? '#2FBF71' : '#24313A'; g.fillRect(0, 0, 256, 38);
+        g.fillStyle = armed ? '#06140C' : '#A9B8C2'; g.font = `600 22px ${FONT}`; g.fillText(armed ? 'ARMED' : 'IDLE', 14, 20);
+        g.fillStyle = '#7FC9D6'; g.font = `18px ${FONT}`; g.fillText(bad ? `${bad} unreadable` : 'scanned', 14, 62);
+        g.fillStyle = '#E8FBFF'; g.font = `600 54px ${FONT}`; g.fillText(String(n), 14, 112);
+      }
+      hmi.tex.needsUpdate = true;
+    };
     const scanLine = new THREE.Mesh(new THREE.PlaneGeometry(0.012, 0.6), new THREE.MeshStandardMaterial({ color: 0xFF3030, emissive: 0xFF2020, emissiveIntensity: 5, transparent: true, opacity: 0.7, side: THREE.DoubleSide })); scanLine.rotation.z = Math.PI / 2; scanLine.rotation.y = Math.PI / 2; scanLine.position.set(SX, beltY + 0.04, LZ); R.scene.add(scanLine);
-    // sorter gate: a guide fence hinged on the front rail at the C2 → C3 junction; it swings back across the belt to
-    // push parcels into lane B. From the default view it is nearly end-on at lane B, so the fence carries a wide top
-    // cap that still reads end-on, and a lamp on a mast just upstream shows the lane too: green for A, amber for B.
-    const gatePivot = new THREE.Group(); gatePivot.position.set(1.0, beltY + 0.12, LZ + 0.33); R.scene.add(gatePivot);
-    const gateArm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.24, 0.03), M.yellow); gateArm.position.set(0.35, 0.06, 0); gateArm.castShadow = true; gatePivot.add(gateArm);
-    const gateCap = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.035, 0.11), M.yellow); gateCap.position.set(0.35, 0.195, 0); gateCap.castShadow = true; gatePivot.add(gateCap);
-    const hinge = P.cyl(0.03, 0.03, 0.3, M.steel, 1.0, beltY + 0.18, LZ + 0.33, 12);
-    const GLX = 0.8; P.box(0.03, 0.34, 0.03, M.black, GLX, beltY + 0.2, LZ + 0.33); P.cyl(0.036, 0.036, 0.02, M.black, GLX, beltY + 0.38, LZ + 0.33, 16);
-    const gateLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.08, 16), new THREE.MeshStandardMaterial({ color: 0x2FBF71, emissive: 0x2FBF71, emissiveIntensity: 2, transparent: true, opacity: 0.9 })); gateLamp.position.set(GLX, beltY + 0.43, LZ + 0.33); R.scene.add(gateLamp);
+    // sorter gate: a pneumatic paddle diverter hinged on the front rail at the C2 → C3 junction; it swings back across the
+    // belt to push parcels into lane B. A square-cap air cylinder on a bracket outboard of the frame pushes it (its rod
+    // follows the paddle, update()), fed by a blue air line from a solenoid valve; a photo-eye looks across the belt ahead
+    // of it. From the default view it is nearly end-on at lane B, so the paddle carries a wide top flange that still
+    // reads end-on, and a stack light on a mast just upstream shows the lane too: green for A, amber for B.
+    const GP = new THREE.Vector3(1.0, beltY + 0.12, LZ + 0.33);
+    const gatePivot = new THREE.Group(); gatePivot.position.copy(GP); R.scene.add(gatePivot);
+    const inPivot = (m) => { m.castShadow = true; gatePivot.add(m); return m; };
+    const gateArm = inPivot(new THREE.Mesh(new RBox(0.7, 0.24, 0.03, 1, 0.008), yellow)); gateArm.position.set(0.35, 0.06, 0);
+    const gateCap = inPivot(new THREE.Mesh(new RBox(0.7, 0.035, 0.11, 1, 0.008), yellow)); gateCap.position.set(0.35, 0.195, 0);
+    inPivot(new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.19, 0.006), M.rubber)).position.set(0.36, 0.05, -0.018); // wear face on the belt side
+    inPivot(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.035, 0.03), M.steel)).position.set(0.25, 0.06, 0.03); // the rod's lug
+    const LUG = [0.25, 0.03], BASE = new THREE.Vector3(1.62, beltY + 0.18, LZ + 0.48), TUBE = 0.28;
+    const hinge = P.group(P.cyl(0.02, 0.02, 0.32, M.steel, 1.0, beltY + 0.18, LZ + 0.33, 12), P.cyl(0.032, 0.032, 0.035, M.anodized, 1.0, beltY + 0.05, LZ + 0.33, 16), P.cyl(0.032, 0.032, 0.035, M.anodized, 1.0, beltY + 0.335, LZ + 0.33, 16));
+    const alu = new THREE.MeshStandardMaterial({ color: 0xC9CED2, metalness: 1, roughness: 0.3 });
+    const cyl = new THREE.Group(); cyl.position.copy(BASE); R.scene.add(cyl);
+    const cylBody = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, TUBE - 0.04, 16).rotateZ(-Math.PI / 2).translate(TUBE / 2, 0, 0), alu);
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 1, 10).rotateZ(-Math.PI / 2).translate(0.5, 0, 0), M.metal); rod.position.x = TUBE;
+    const clevis = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.02, 0.018), M.steel);
+    const caps = [0.014, TUBE - 0.012].map((x) => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.05, 0.05), M.anodized); m.position.x = x; return m; });
+    cyl.add(cylBody, rod, clevis, ...caps); cyl.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+    const gateBracket = P.group(P.box(0.12, 0.012, 0.145, frameMat, 1.62, beltY + 0.066, LZ + 0.4275), P.box(0.04, 0.11, 0.04, frameMat, 1.62, beltY + 0.127, BASE.z),
+      rb(0.07, 0.03, 0.035, M.anodized, 1.62, beltY + 0.087, LZ + 0.375, 0.003, 1), rb(0.03, 0.035, 0.03, M.black, 1.665, beltY + 0.09, LZ + 0.375, 0.003, 1),
+      P.tube([[1.6, beltY + 0.1, LZ + 0.39], [1.6, beltY + 0.15, LZ + 0.43], [1.615, BASE.y, BASE.z - 0.02]], 0.004, paint(0x2E6FB0, 0.5)));
+    // photo-eye on the front rail and its reflector on the back rail, just upstream of the paddle
+    P.group(rb(0.03, 0.04, 0.03, M.black, 0.5, beltY + 0.075, LZ + 0.345, 0.004, 1), alongZ(P.cyl(0.014, 0.014, 0.004, new THREE.MeshStandardMaterial({ color: 0xB0201A, roughness: 0.2 }), 0.5, beltY + 0.075, LZ - 0.33, 16)));
+    const GLX = 0.8;
+    const gateMast = P.group(P.cyl(0.011, 0.011, 0.34, M.black, GLX, beltY + 0.2, LZ + 0.33, 10), P.cyl(0.036, 0.04, 0.02, M.black, GLX, beltY + 0.38, LZ + 0.33, 16), P.cyl(0.036, 0.036, 0.012, M.black, GLX, beltY + 0.476, LZ + 0.33, 16));
+    const gateLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.08, 16), new THREE.MeshStandardMaterial({ color: 0x2FBF71, emissive: 0x2FBF71, emissiveIntensity: 2, roughness: 0.3 })); gateLamp.position.set(GLX, beltY + 0.43, LZ + 0.33); R.scene.add(gateLamp);
 
     // Parcels flow along the whole line as one queue: each advances at its section's speed, keeps SPACING to the one
     // ahead, and waits at the end of its section when the next one is dead, the gate is swinging, or the dock is shut.
     // They come in through the receiving hatch and leave through the dock door, out of sight on both ends; delivered
     // parcels re-enter from receiving. Diverted parcels slide along the gate arm, ride lane B and drop into the tote.
+    // Each is a kraft carton (three shades) with tape and a label on top.
     const SEC = [C.c1, C.c2, C.c3], SPACING = 1.0, END_STOP = 0.22, ENTRY_X = -7.4, DOOR_X = 7.15, SPEED_K = 2.2, INTO = 0.5 * SPEED_K;
     const secAt = (x) => (x < C.c1.x1 ? 0 : x < C.c2.x1 ? 1 : 2);
-    const flow = []; for (let i = 0; i < 24; i++) { const s = 0.26 + (i % 3) * 0.04; const mesh = P.parcel(0, beltY + 0.03, LZ, s); flow.push({ mesh, y0: mesh.position.y, hw: s / 2 }); }
+    const flow = []; for (let i = 0; i < 24; i++) { const s = 0.26 + (i % 3) * 0.04; const mesh = carton(s, s * 0.7, s * 0.8, KRAFT[(i * 7) % 3], 0, beltY + 0.03 + s * 0.35, LZ); mesh.userData.noContact = true; flow.push({ mesh, y0: mesh.position.y, hw: s / 2 }); }
     const BPATH = [[0.962, LZ], [1.251, 0.136], [1.3, -0.25], [1.3, LB1], [1.3, -2.3]]; // x, z
     const BLEN = []; { let acc = 0; BLEN.push(0); for (let i = 1; i < BPATH.length; i++) { acc += Math.hypot(BPATH[i][0] - BPATH[i - 1][0], BPATH[i][1] - BPATH[i - 1][1]); BLEN.push(acc); } }
     // x, z and drop along lane B into `out`. Off the belt end the parcel falls into the tote and is below its fill
@@ -404,20 +693,77 @@ export default {
       ln.scanned = 0; ln.docked = 0; ln.toB.clear();
     }
 
-    // carts: lift AGVs whose deck sits at belt height, so a parcel moves belt → deck → belt on one level. The column
-    // reaches 1 cm into the deck: a column that stopped short left a see-through slit under the deck at eye level.
-    function cart(id, x, z) { const g = new THREE.Group(); g.position.set(x, 0, z); R.scene.add(g); const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.22, 0.6), M.steel); body.position.y = 0.2; body.castShadow = true; g.add(body); const colH = beltY - 0.33; const col = new THREE.Mesh(new THREE.BoxGeometry(0.5, colH, 0.4), M.black); col.position.y = 0.31 + colH / 2; col.castShadow = true; g.add(col); const deck = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.03, 0.56), M.steel); deck.position.y = beltY - 0.015; deck.castShadow = true; g.add(deck); for (const dz of [-0.29, 0.29]) { const r = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.05, 0.02), M.yellow); r.position.set(0, beltY + 0.025, dz); g.add(r); } for (const [dx, dz] of [[-0.3, -0.25], [0.3, -0.25], [-0.3, 0.25], [0.3, 0.25]]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.06, 16), M.rubber); w.rotation.x = Math.PI / 2; w.position.set(dx, 0.08, dz); g.add(w); } const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.06, 12), new THREE.MeshStandardMaterial({ color: 0x2FBF71, emissive: 0x2FBF71, emissiveIntensity: 1.5 })); beacon.position.set(-0.4, beltY + 0.03, 0.24); g.add(beacon); return { id, group: g, body, beacon, home: new THREE.Vector3(x, 0, z), blend: 0, wasLoaded: false }; }
+
+    // carts: lift AMRs whose roller deck sits at belt height, so a parcel moves belt → deck → belt on one level. A light
+    // grey body on a rubber bumper band, yellow safety scanners at both ends (they drive both ways), a white light bar at
+    // +x and a red one at -x, a bellows-covered lift column, an E-stop on the rear corner and the cart's letter on its
+    // aisle side. The column reaches 1 cm into the deck: a column that stopped short left a see-through slit under the
+    // deck at eye level.
+    const bellowsT = canvasTex(THREE, (g, w, h) => { const lg = g.createLinearGradient(0, 0, 0, h); lg.addColorStop(0, '#2A2E33'); lg.addColorStop(0.5, '#4A5058'); lg.addColorStop(1, '#22262A'); g.fillStyle = lg; g.fillRect(0, 0, w, h); }, 8, 16);
+    const rollerT = canvasTex(THREE, (g, w, h) => { const lg = g.createLinearGradient(0, 0, 0, h); lg.addColorStop(0, '#2A2E33'); lg.addColorStop(0.2, '#7D848B'); lg.addColorStop(0.5, '#C9CED3'); lg.addColorStop(0.8, '#7D848B'); lg.addColorStop(1, '#2A2E33'); g.fillStyle = lg; g.fillRect(0, 0, w, h); }, 8, 32); rollerT.repeat.set(1, 0.56 / 0.05);
+    const deckMat = new THREE.MeshStandardMaterial({ map: rollerT, metalness: 0.6, roughness: 0.4 }), scanWin = new THREE.MeshStandardMaterial({ color: 0x0A0C0E, roughness: 0.08, metalness: 0.3 });
+    function cart(id, x, z) {
+      const g = new THREE.Group(); g.position.set(x, 0, z); R.scene.add(g); g.userData.noContact = true; // it moves: no baked contact shadow left behind
+      const put = (m) => { g.add(m); return m; };
+      const body = put(rb(0.9, 0.22, 0.6, shellMat, 0, 0.2, 0, 0.04, 2));
+      put(rb(0.92, 0.05, 0.62, M.rubber, 0, 0.115, 0, 0.02, 1)); // bumper band
+      const colH = beltY - 0.33;
+      const bt = bellowsT.clone(); bt.repeat.set(1, colH / 0.035); bt.needsUpdate = true;
+      put(P.box(0.5, colH, 0.4, new THREE.MeshStandardMaterial({ map: bt, roughness: 0.7 }), 0, 0.31 + colH / 2, 0));
+      put(P.box(0.85, 0.03, 0.56, deckMat, 0, beltY - 0.015, 0));
+      for (const dz of [-0.29, 0.29]) put(P.box(0.85, 0.05, 0.02, yellow, 0, beltY + 0.025, dz));
+      for (const sx of [-1, 1]) { put(rb(0.04, 0.06, 0.2, yellow, sx * 0.45, 0.2, 0, 0.006, 1)); put(P.box(0.004, 0.02, 0.16, scanWin, sx * 0.4705, 0.2, 0)); }
+      const head = new THREE.MeshStandardMaterial({ color: 0xF4F7F8, emissive: 0xEAF4FF, emissiveIntensity: 0.8, roughness: 0.3 }), tail = new THREE.MeshStandardMaterial({ color: 0x5A1412, emissive: 0xE0302A, emissiveIntensity: 0.8, roughness: 0.3 });
+      for (const dz of [-0.22, 0.22]) { put(P.box(0.006, 0.014, 0.08, head, 0.451, 0.265, dz)); put(P.box(0.006, 0.014, 0.08, tail, -0.451, 0.265, dz)); }
+      put(P.cyl(0.03, 0.03, 0.01, yellow, -0.36, 0.315, 0.22, 16)); put(P.cyl(0.022, 0.024, 0.02, red, -0.36, 0.33, 0.22, 16));
+      const tag = put(new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.1), new THREE.MeshStandardMaterial({ map: parts.labelTex(id === 'agvA' ? 'A' : 'B', { bg: '#E4E7E9', fg: '#2A2F34', size: 76, w: 160, h: 100, weight: 'bold' }), roughness: 0.6 }))); tag.position.set(0.22, 0.205, 0.3015);
+      for (const [dx, dz] of [[-0.3, -0.25], [0.3, -0.25], [-0.3, 0.25], [0.3, 0.25]]) put(alongZ(P.cyl(0.08, 0.08, 0.06, M.rubber, dx, 0.08, dz, 18)));
+      put(P.cyl(0.028, 0.028, 0.012, M.black, -0.4, beltY + 0.006, 0.24, 14));
+      const beacon = put(new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.06, 16), lensMat(0x2FBF71))); beacon.position.set(-0.4, beltY + 0.042, 0.24);
+      return { id, group: g, body, beacon, head, tail, home: new THREE.Vector3(x, 0, z), blend: 0, wasLoaded: false };
+    }
     const A = cart('agvA', HOME.agvA, HOME_Z), B = cart('agvB', HOME.agvB, HOME_Z);
 
-    // desk with the hub, a phone and a screen on a stand
+    // packing desk with the hub, a phone, a monitor on a stand, a label printer and a tape gun
     const DX = -4.4, DZ = 2.9;
-    P.table(DX, DZ, 1.2, 0.6, 0.75, M.woodLight, M.steel); const hub = P.hub(DX - 0.2, 0.77, DZ, { rotY: 0.4 }); R.addPickable(hub.group, 'hub'); P.phone(DX + 0.2, 0.775, DZ + 0.1, 0.3);
-    P.cyl(0.08, 0.08, 0.01, M.black, DX + 0.1, 0.775, DZ - 0.2, 20); P.cyl(0.02, 0.025, 0.07, M.black, DX + 0.1, 0.805, DZ - 0.2, 12); P.box(0.5, 0.32, 0.03, M.black, DX + 0.1, 1.0, DZ - 0.2, 0.01);
-    P.box(0.5, 0.5, 0.5, M.cardboard, -6.2, 0.25, 1.5, 0.01); P.box(0.5, 0.45, 0.5, M.cardboard, -6.2, 0.725, 1.5, 0.01);
+    let topY = 0.77;
+    const deskModel = MOD('wooden_table_02');
+    if (deskModel) { R.scene.add(deskModel); topY = placeModel(THREE, deskModel, { x: DX, z: DZ }).max.y; } else P.table(DX, DZ, 1.2, 0.6, 0.75, M.woodLight, M.steel);
+    const hub = P.hub(DX - 0.2, topY, DZ, { rotY: 0.4 }); R.addPickable(hub.group, 'hub'); P.phone(DX + 0.2, topY + 0.005, DZ + 0.1, 0.3);
+    {
+      const screenC = document.createElement('canvas'); screenC.width = 512; screenC.height = 288; const g = screenC.getContext('2d');
+      g.fillStyle = '#F4F7F8'; g.fillRect(0, 0, 512, 288); g.fillStyle = '#1F2A30'; g.fillRect(0, 0, 512, 40);
+      g.fillStyle = '#29C6C0'; g.fillRect(0, 40, 512, 4); g.fillStyle = '#E8FBFF'; g.font = `600 20px ${FONT}`; g.textBaseline = 'middle'; g.fillText('Outbound · Dock 2', 16, 21);
+      g.fillStyle = '#5A6A72'; g.font = `15px ${FONT}`; ['Parcel', 'Lane', 'Status'].forEach((h, i) => g.fillText(h, 16 + i * 150, 66));
+      for (let i = 0; i < 6; i++) { const y = 84 + i * 28; g.fillStyle = i % 2 ? '#FFFFFF' : '#EBF1F3'; g.fillRect(10, y, 330, 26); g.fillStyle = '#2A3A42'; g.fillRect(18, y + 10, 60, 6); g.fillRect(168, y + 10, 18, 6); g.fillStyle = i < 4 ? '#2FBF71' : '#C9D3D8'; g.fillRect(318, y + 9, 16, 8); }
+      g.strokeStyle = '#D7E1E4'; g.lineWidth = 14; g.beginPath(); g.arc(428, 150, 50, 0, TAU); g.stroke();
+      g.strokeStyle = '#29C6C0'; g.beginPath(); g.arc(428, 150, 50, -Math.PI / 2, -Math.PI / 2 + TAU * 0.62); g.stroke();
+      g.fillStyle = '#1F2A30'; g.font = `600 22px ${FONT}`; g.textAlign = 'center'; g.fillText('62%', 428, 151);
+      const st = new THREE.CanvasTexture(screenC); st.colorSpace = THREE.SRGBColorSpace; st.anisotropy = 4;
+      const mx = DX + 0.1, mz = DZ - 0.2;
+      const mon = P.group(
+        rb(0.22, 0.012, 0.16, graphite, mx, topY + 0.006, mz, 0.005, 1),
+        P.box(0.045, 0.24, 0.02, graphite, mx, topY + 0.13, mz - 0.022),
+        rb(0.56, 0.34, 0.024, M.anodized, mx, topY + 0.31, mz, 0.008, 2),
+        (() => { const m = P.screenPlane(0.535, 0.301, st); m.material.emissiveIntensity = 0.3; m.position.set(mx, topY + 0.315, mz + 0.0125); return m; })(),
+      );
+      mon.userData.noContact = true;
+      P.group(rb(0.17, 0.1, 0.2, panel, DX - 0.43, topY + 0.05, DZ - 0.12, 0.012, 2), P.box(0.1, 0.004, 0.06, M.black, DX - 0.43, topY + 0.1, DZ - 0.04), (() => { const l = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.04), labelMat); l.rotation.x = -0.9; l.position.set(DX - 0.43, topY + 0.104, DZ + 0.0); return P.add(l); })()); // label printer, a label coming out
+      P.group(rb(0.05, 0.12, 0.03, red, DX + 0.45, topY + 0.07, DZ - 0.08, 0.008, 1), alongZ(P.cyl(0.045, 0.045, 0.05, tapeMat, DX + 0.45, topY + 0.1, DZ - 0.08, 20)), P.box(0.03, 0.07, 0.02, M.black, DX + 0.45, topY + 0.035, DZ - 0.04)); // tape gun
+    }
+    // spare cartons by receiving
+    carton(0.5, 0.5, 0.5, KRAFT[1], -6.2, 0.25, 1.5, { label: 'front' }); carton(0.5, 0.45, 0.5, KRAFT[0], -6.2, 0.727, 1.5, { label: 'front' });
+    R.addContactShadows?.({ w: 14, d: 10, y: 0.009 }); // the soft dark where racks, pallets, legs and the desk meet the floor
 
-    for (const k of ['c1', 'c2', 'c3']) { R.addPickable(C[k].beltMesh, k); R.addPickable(C[k].motor, k); }
-    R.addPickable(scanHead, 'scanner'); R.addPickable(scanBeacon, 'scanner'); R.addPickable(gatePivot, 'gate'); R.addPickable(hinge, 'gate'); R.addPickable(gateLamp, 'gate'); R.addPickable(A.group, 'agvA'); R.addPickable(B.group, 'agvB'); R.addPickable(door, 'dock'); R.addPickable(dockHousing, 'dock'); R.addPickable(dockLight, 'dock'); R.addPickable(sigHousing, 'dock'); R.addPickable(sigRed, 'dock'); R.addPickable(sigGreen, 'dock');
-    const hi = P.highlighter({ c1: [C.c1.beltMesh, C.c1.motor], c2: [C.c2.beltMesh, C.c2.motor], c3: [C.c3.beltMesh, C.c3.motor], scanner: [scanHead, scanBeacon], gate: [gateArm, gateCap], agvA: [A.body], agvB: [B.body], dock: [door, dockHousing, sigHousing] });
+    for (const k of ['c1', 'c2', 'c3']) for (const o of [C[k].beltMesh, C[k].motor, C[k].rails, C[k].frame, C[k].stack, C[k].led, C[k].pb]) R.addPickable(o, k);
+    for (const o of [scanHead, scanBeacon, archFrame, ctrl]) R.addPickable(o, 'scanner');
+    for (const o of [gatePivot, hinge, gateLamp, gateMast, cyl, gateBracket]) R.addPickable(o, 'gate');
+    R.addPickable(A.group, 'agvA'); R.addPickable(B.group, 'agvB');
+    for (const o of [door, bottomBar, guides, dockHousing, dockLight, sigHousing, sigRed, sigGreen, station]) R.addPickable(o, 'dock');
+    const hi = P.highlighter({
+      c1: [C.c1.beltMesh, C.c1.motor, C.c1.rails, C.c1.frame], c2: [C.c2.beltMesh, C.c2.motor, C.c2.rails, C.c2.frame], c3: [C.c3.beltMesh, C.c3.motor, C.c3.rails, C.c3.frame],
+      scanner: [scanHead, scanBeacon, archFrame, ctrl], gate: [gatePivot, cyl], agvA: [A.group], agvB: [B.group], dock: [door, bottomBar, guides, dockHousing, sigHousing],
+    });
 
     // status lamps (belt beacons, gate lamp, cart beacons, dock light): unlit until their device is connected, then lit
     // in its colour at intensity k (a fault blinks)
@@ -427,7 +773,7 @@ export default {
     const approach = (v, to, step) => v + Math.max(-step, Math.min(step, to - v));
     const smooth = (k) => k * k * (3 - 2 * k);
     const tmp = new THREE.Vector3(), KEYS = ['c1', 'c2', 'c3'], CARTS = [A, B], spd = [0, 0, 0], tight = [false, false, false], queue = [], bp = [0, 0, 0], byX = (a, b) => b.x - a.x; // reused every frame
-    let lastT = null, gateVis = 0, doorVis = 0, sent = 0; // sent: parcels diverted since the gate was last told to go to B
+    let lastT = null, gateVis = 0, doorVis = 0, sent = 0, shownHmi = null; // sent: parcels diverted since the gate was last told to go to B
     initFlow();
 
     function load(c, onPath, cx) {
@@ -458,9 +804,13 @@ export default {
         for (let i = 0; i < 3; i++) { const st = s[KEYS[i]]; tight[i] = st.status === 'fault' && !!st.runOn; spd[i] = (st.status === 'fault' && !st.runOn) || !st.running || st.slip ? 0 : st.speed * SPEED_K; } // slip: the drive turns, the belt doesn't carry; runOn: a faulted drive keeps its last command
         // conveyor beacons
         for (const k of KEYS) { const c = C[k], st = s[k]; const bad = st.status === 'fault'; setLamp(c.led.material, st.status === 'offline' ? null : bad ? RED : beltMoving(st) ? BLUE : GREEN, bad ? blink(t, 3, 6, 0.6) : st.running ? 2.5 : 1.2); }
+        // belts: the splice stripes run at the belt's speed (one stripe every 10 cm); the infeed runs with C1, lane B with C3
+        for (let i = 0; i < 3; i++) { const tx = C[KEYS[i]].tex; tx.offset.x = (tx.offset.x - (spd[i] * dt) / 0.1) % 1; }
+        feedTex.offset.x = (feedTex.offset.x - (spd[0] * dt) / 0.1) % 1; laneTex.offset.y = (laneTex.offset.y - (spd[2] * dt) / 0.1) % 1;
         // dock: the door rolls up while the light is green; parcels only go through a door that is open
         if (!s.dock.stuck) doorVis = hush ? (s.dock.light === 'green' ? 1 : 0) : approach(doorVis, s.dock.light === 'green' ? 1 : 0, dt / 1.2); // a stuck door stays where it is
-        const lift = 0.9 * smooth(doorVis); door.scale.y = 1 - lift; door.position.y = 3.2 - 1.6 * (1 - lift); for (const m of slats) m.visible = m.position.y > 3.2 * lift + 0.02;
+        const lift = 0.9 * smooth(doorVis); door.scale.y = 1 - lift; door.position.y = 3.2 - 1.6 * (1 - lift);
+        slatT.repeat.y = SLATS * (1 - lift); bottomBar.position.y = 3.2 * lift + 0.025; // the slats keep their 10 cm as the curtain rolls up; the bottom bar rides its foot
         const dockOpen = s.dock.light === 'green' && doorVis > 0.6;
         const dockBad = s.dock.status === 'fault'; setLamp(dockLight.material, s.dock.status === 'offline' ? null : dockBad ? RED : s.dock.light === 'green' ? GREEN : RED, dockBad ? blink(t, 4, 4, 1) : 1.5);
         const live = s.dock.status !== 'offline', go = s.dock.light === 'green' && !dockBad; // a door fault shows red, blinking
@@ -471,6 +821,11 @@ export default {
         let zoneBusy = false; for (const p of flow) if (p.lane === 'main' && p.x > C.c2.x1 - END_STOP + 0.001 && p.x < C.c3.x0 + 0.8) { zoneBusy = true; break; }
         if (!s.gate.stuck) gateVis = hush ? gTo : !(gTo > gateVis && gateVis < 0.02 && zoneBusy) ? approach(gateVis, gTo, dt * 2.2) : gateVis; // a stuck arm stays where it is
         gatePivot.rotation.y = gateVis * 0.9;
+        { // the air cylinder turns toward the paddle's lug and its rod reaches it
+          const a = gateVis * 0.9, ca = Math.cos(a), sa = Math.sin(a);
+          const lx = GP.x + LUG[0] * ca + LUG[1] * sa - BASE.x, lz = GP.z - LUG[0] * sa + LUG[1] * ca - BASE.z, d = Math.hypot(lx, lz);
+          cyl.rotation.y = Math.atan2(-lz, lx); rod.scale.x = Math.max(0.001, d - TUBE - 0.006); clevis.position.x = d - 0.006;
+        }
         const settled = Math.abs(gateVis - gTo) < 0.03 && (gTo < 0.03 || gTo > 0.97), toB = settled && gTo > 0.5;
         if (s.gate.lane !== 'B') sent = 0;
         const oneDone = () => !s.gate.all && sent >= 1; // a per-parcel swing takes one parcel; the rest wait for the gate to come back
@@ -511,6 +866,7 @@ export default {
           if (!st.load && c.wasLoaded) unload(c, onPath, px);
           c.wasLoaded = !!st.load;
           const bad = st.status === 'fault'; setLamp(c.beacon.material, st.status === 'offline' ? null : bad ? RED : driving(st) ? AMBER : GREEN, driving(st) || bad ? blink(t, 4, 4, 1) : 1.5);
+          c.head.emissiveIntensity = c.tail.emissiveIntensity = st.status === 'offline' ? 0 : 0.8; // an offline robot shows no head or tail lights
         }
         // parcels: belt ↔ deck transfers, then place every mesh
         for (const p of flow) if (p.lane === 'up' || p.lane === 'down') { p.k = Math.min(1, p.k + dt / 0.35); if (p.k >= 1) { if (p.lane === 'up') p.lane = 'cart'; else Object.assign(p, { lane: 'main', x: p.tx, cart: null }); } }
@@ -529,6 +885,11 @@ export default {
         const bad = s.scanner.status === 'fault'; scanLine.visible = !!s.scanner.armed && !s.scanner.dark;
         setLamp(scanBeacon.material, s.scanner.status === 'offline' ? null : bad ? RED : GREEN, bad ? blink(t, 3, 6, 0.6) : s.scanner.armed ? 2.5 : 1.2);
         scanLine.material.color.set(bad ? 0xFFB020 : 0xFF3030); scanLine.material.emissive.set(bad ? 0xFFA010 : 0xFF2020); scanLine.material.opacity = bad ? 0.45 : 0.5 + 0.3 * Math.abs(Math.sin(t * 6));
+        // the arch's light curtains and illumination glow while it is armed and seeing; its screen shows the mode and the count
+        const seeing = !!s.scanner.armed && !s.scanner.dark && s.scanner.status !== 'offline';
+        curtainMat.emissiveIntensity = seeing ? 0.8 : 0; illumMat.emissiveIntensity = seeing ? 1.4 : 0;
+        const mode = s.scanner.status === 'offline' || s.scanner.dark ? 'off' : bad ? 'fault' : s.scanner.armed ? 'armed' : 'idle', nScan = Math.max(0, Math.round(s.scanner.count)), nBad = Math.round(s.scanner.misreads || 0), key = `${mode}:${nScan}:${nBad}`;
+        if (key !== shownHmi) { shownHmi = key; drawHmi(mode, nScan, nBad); }
       },
     };
   },
