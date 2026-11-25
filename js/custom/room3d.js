@@ -47,9 +47,9 @@ export function createRoom3d({ R, P, M, THREE }) {
   // the frustum's centre in the morning, so a corner would go unshadowed (sunlit through the wall): widen it.
   const sunCam = R.lights?.sun?.shadow?.camera;
   if (sunCam) { Object.assign(sunCam, { left: -6.4, right: 6.4, top: 6, bottom: -4.8 }); sunCam.updateProjectionMatrix(); }
-  // The floor's planks at Home's scale (its 5 m floor repeats the texture 1.6 times).
+  // The floor's planks at Home's scale (its 5 m floor repeats the texture M.floor's repeat times).
   const floorMat = M.floor.clone();
-  for (const k of ['map', 'bumpMap']) if (M.floor[k]) { floorMat[k] = M.floor[k].clone(); floorMat[k].repeat.set(1.6 * ROOM.w / 5, 1.6 * ROOM.d / 5); }
+  for (const k of ['map', 'bumpMap']) if (M.floor[k]) { floorMat[k] = M.floor[k].clone(); floorMat[k].repeat.set(M.floor[k].repeat.x * ROOM.w / 5, M.floor[k].repeat.y * ROOM.d / 5); }
   P.roomShell({ w: ROOM.w, d: ROOM.d, h: ROOM.h, floorMat, window: WINDOW });
   // Skirting and crown on the right and front walls too, as in Home: they hide with their walls, a few mm lower than
   // the shell's so no two trims share a face in a corner.

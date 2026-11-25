@@ -38,6 +38,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createSky } from './sky.js';
 
 export { THREE };
 
@@ -95,6 +96,10 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
   sun.castShadow = true; Object.assign(sun.shadow.camera, { left: -5, right: 5, top: 5.5, bottom: -4.5, near: 1, far: 24 });
   sun.shadow.bias = -0.00015; sun.shadow.normalBias = 0.015; sun.shadow.radius = 2;
   const fill = new THREE.DirectionalLight(0xDCE8F0, 0.35); fill.position.set(4, 3, 4); scene.add(fill);
+  // Bounce: daylight that lands on the floor lights the ceiling and the undersides of things (a stand-in for the light a
+  // real room bounces around). Aimed straight up, no shadows; daylight() drives it, so a scene that sets its own lights
+  // (lab, creator) keeps it at 0.
+  const bounce = new THREE.DirectionalLight(0xF4E6D2, 0); bounce.position.set(0, -1, 0); bounce.target.position.set(0, 0, 0); scene.add(bounce.target); scene.add(bounce);
 
   const msaa = quality === 'high' && devicePixelRatio < 1.5 ? 4 : 0;
   const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: msaa }));
@@ -328,6 +333,63 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
     for (let i = markers.length - 1; i >= 0; i--) { const m = markers[i]; if ((now - m.t0) > m.hold + 600) { dropMarker(m); markers.splice(i, 1); } }
   }
 
+  // ---- contact shadows (three's webgl_shadow_contact) ----
+  // The soft dark a sofa, a table leg or a pot leaves on the floor right where it stands, which shadow maps (and, on the
+  // low tier, the missing AO) leave out. An orthographic camera on the floor looks up and draws everything within
+  // `height` of the floor as black, more opaque the lower it is; blur passes soften it, and a plane just above the floor
+  // (and the rug) shows the result. Redrawn on demand (R.contact.dirty = true) and every so often anyway, never per
+  // frame: things on the floor rarely move. Sprites, lights, overlays (userData.noAO) and userData.noContact are left out.
+  let contact = null;
+  // blur: the softening, in metres (about the shadow's spread past an object's edge).
+  function addContactShadows({ x = 0, z = 0, w = 5, d = 5, y = 0.009, height = 0.5, opacity = 0.85, blur = 0.08 } = {}) {
+    const res = currentQuality === 'high' ? 512 : 256, px = blur * res / w / 3.2; // texels per tap step
+    const rt = new THREE.WebGLRenderTarget(res, Math.round((res * d) / w)); rt.texture.generateMipmaps = false;
+    const rtBlur = rt.clone();
+    const group = new THREE.Group(); group.position.set(x, y, z); scene.add(group);
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ map: rt.texture, opacity, transparent: true, depthWrite: false, toneMapped: false }));
+    plane.scale.y = -1; plane.renderOrder = -1; plane.userData.noAO = true; plane.userData.noContact = true; plane.raycast = () => {}; group.add(plane);
+    const cam = new THREE.OrthographicCamera(-w / 2, w / 2, d / 2, -d / 2, 0, height); cam.rotation.x = Math.PI / 2; group.add(cam);
+    const depthMat = new THREE.MeshDepthMaterial();
+    depthMat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('gl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );', 'gl_FragColor = vec4( vec3( 0.0 ), pow( 1.0 - fragCoordZ, 1.6 ) );');
+    };
+    const blurMat = new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: null }, dir: { value: new THREE.Vector2() } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform vec2 dir; varying vec2 vUv;
+        void main() { vec4 s = texture2D(tDiffuse, vUv) * 0.2270270270;
+          s += (texture2D(tDiffuse, vUv + dir * 1.3846153846) + texture2D(tDiffuse, vUv - dir * 1.3846153846)) * 0.3162162162;
+          s += (texture2D(tDiffuse, vUv + dir * 3.2307692308) + texture2D(tDiffuse, vUv - dir * 3.2307692308)) * 0.0702702703;
+          gl_FragColor = s; }`,
+      depthTest: false, depthWrite: false,
+    });
+    const blurPlane = new THREE.Mesh(new THREE.PlaneGeometry(w, d), blurMat); blurPlane.rotation.x = Math.PI / 2; blurPlane.position.y = height / 2; blurPlane.visible = false; group.add(blurPlane);
+    const hidden = [], cc = new THREE.Color();
+    function pass(src, dst, dx, dy) { blurPlane.visible = true; blurMat.uniforms.tDiffuse.value = src.texture; blurMat.uniforms.dir.value.set(dx / src.width, dy / src.height); renderer.setRenderTarget(dst); renderer.render(blurPlane, cam); blurPlane.visible = false; }
+    function update() {
+      const bg = scene.background, ov = scene.overrideMaterial, rtWas = renderer.getRenderTarget(), ca = renderer.getClearAlpha(); renderer.getClearColor(cc);
+      const sm = renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate = false; // no shadow passes for this view
+      scene.traverse((o) => { if (o.visible && (o.isSprite || o.userData.noAO || o.userData.noContact || (o.material && !Array.isArray(o.material) && o.material.visible === false))) { o.visible = false; hidden.push(o); } });
+      scene.background = null; scene.overrideMaterial = depthMat;
+      renderer.setClearColor(0x000000, 0); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam);
+      scene.overrideMaterial = ov; scene.background = bg; for (const o of hidden) o.visible = true; hidden.length = 0;
+      pass(rt, rtBlur, px, 0); pass(rtBlur, rt, 0, px); pass(rt, rtBlur, px * 0.4, 0); pass(rtBlur, rt, 0, px * 0.4);
+      renderer.shadowMap.autoUpdate = sm; renderer.setRenderTarget(rtWas); renderer.setClearColor(cc, ca);
+    }
+    contact = { group, plane, update, dirty: true, n: 0, dispose() { rt.dispose(); rtBlur.dispose(); depthMat.dispose(); blurMat.dispose(); } };
+    return contact;
+  }
+  function tickContact() { if (!contact) return; if (contact.dirty || ++contact.n >= (currentQuality === 'high' ? 30 : 120)) { contact.dirty = false; contact.n = 0; contact.update(); } }
+
+  // ---- sky dome (sky.js): replaces a flat background colour; daylight() moves its sun with the sun light ----
+  let sky = null;
+  function useSky() { if (!sky) { sky = createSky(); scene.add(sky.mesh); } scene.background = null; return sky; }
+  // A photographed view (an HDRI, js/engine/assets.js) as the background instead: what the window shows by day.
+  // daylight() dims it towards dusk and night; the room's own lighting keeps the indoor environment (an outdoor HDRI
+  // as the environment would light the room as if it had no walls).
+  let hdrBg = null;
+  function useHDRBackground(tex, { rotation = 0 } = {}) { if (sky) { sky.mesh.removeFromParent(); sky = null; } hdrBg = tex; scene.background = tex; scene.backgroundRotation.set(0, rotation, 0); return tex; }
+
   // ---- daylight helper for scenes with windows ----
   // After dusk the sky light drops to a low floor (about half the twilight level), so the room's own lamps are what
   // light it at night: a lamp, a 30% night light or a hall light that fails to come on all show. The sky itself goes
@@ -345,6 +407,9 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
     if (scene.background?.isColor) scene.background.setHSL(0.6, 0.35, 0.12 + 0.62 * day + 0.2 * dusk - 0.07 * night);
     scene.environmentIntensity = 0.12 + 0.28 * day - 0.06 * night;
     const ang = ((h - 6) / 12) * Math.PI; sun.position.set(Math.cos(ang) * 6 + 1, 2 + Math.sin(ang) * 5, -7.5);
+    bounce.intensity = 0.8 * day + 0.15 * dusk * (1 - night); bounce.color.setHSL(0.09, 0.45, 0.82);
+    if (hdrBg) scene.backgroundIntensity = Math.max(0.012, 0.95 * day + 0.35 * Math.min(1, dusk) * (1 - day)) * (1 - 0.6 * night);
+    if (sky) { const u = sky.uniforms; u.sunDir.value.copy(sun.position).sub(sun.target.position).normalize(); u.day.value = day; u.dusk.value = Math.min(1, dusk); u.night.value = night; }
   }
 
   // ---- loop with fps watchdog ----
@@ -362,19 +427,19 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
     guard('markers', () => updateMarkers(now));
     guard('render', () => {
       if (controls.autoRotate) { const az = controls.getAzimuthalAngle(); if (az <= azMin + 0.02 && controls.autoRotateSpeed > 0) controls.autoRotateSpeed *= -1; if (az >= azMax - 0.02 && controls.autoRotateSpeed < 0) controls.autoRotateSpeed *= -1; }
-      controls.update(); guard('walls', () => { applyWalls(); syncShades(); }); composer.render();
+      controls.update(); guard('walls', () => { applyWalls(); syncShades(); }); guard('contact', tickContact); composer.render();
     });
     frames++;
     if (now - fpsStart > 2500) { const fps = (frames * 1000) / (now - fpsStart); frames = 0; fpsStart = now; windows++; if (!lockQuality && windows >= 2 && windows <= 4 && fps < 38 && currentQuality === 'high') setQuality('low'); }
   }
 
   return {
-    THREE, renderer, scene, camera, controls, lights: { hemi, sun, fill }, composer, gtao, bloom,
+    THREE, renderer, scene, camera, controls, lights: { hemi, sun, fill, bounce }, composer, gtao, bloom, addContactShadows, useSky, useHDRBackground, get contact() { return contact; }, get sky() { return sky; },
     addPickable, removePickable, onPick: (fn) => pickHandlers.push(fn), onFrame: (fn) => frameFns.push(fn), ping, unping, anchorOf, resetView,
     clearMarkers() { for (const m of markers) dropMarker(m); markers.length = 0; },
     daylight, setQuality, resize, pruneTwins, get twinCount() { return twins.length; }, get quality() { return currentQuality; },
     // Debug/QA: render one frame on demand (works while the tab is hidden and requestAnimationFrame is paused).
-    step(n = 1) { for (let k = 0; k < n; k++) { const now = performance.now(); const t = clock.getElapsedTime(); frameFns.forEach((fn, i) => guard(`frame#${i}`, () => fn(t, now))); guard('markers', () => updateMarkers(now)); controls.update(); } guard('walls', () => { applyWalls(); syncShades(); }); composer.render(); },
+    step(n = 1) { for (let k = 0; k < n; k++) { const now = performance.now(); const t = clock.getElapsedTime(); frameFns.forEach((fn, i) => guard(`frame#${i}`, () => fn(t, now))); guard('markers', () => updateMarkers(now)); controls.update(); } guard('walls', () => { applyWalls(); syncShades(); }); guard('contact', () => { if (contact) contact.dirty = true; tickContact(); }); composer.render(); },
     start() {
       running = true; applyLightTier(); resize();
       try { renderer.compile(scene, camera); } catch (e) { console.warn('[ncb] precompile skipped', e); }
@@ -392,7 +457,7 @@ export function createRenderer(canvas, { quality = detectQuality(), camera: camO
         for (const m of mats) { for (const k of ['map', 'bumpMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap']) m[k]?.dispose?.(); m.dispose(); }
         if (o.shadow?.map) o.shadow.map.dispose();
       });
-      scene.environment?.dispose?.(); pmrem.dispose();
+      scene.environment?.dispose?.(); pmrem.dispose(); contact?.dispose(); hdrBg?.dispose();
       composer.dispose?.(); renderer.dispose(); renderer.forceContextLoss();
       dfg?.dispose(); // three shares one DFG LUT across renderers; the next renderer uploads it again
     },

@@ -60,6 +60,11 @@ async function mountScene(meta, gen) {
 
   const [{ default: scene }, { createRenderer, THREE }, partsMod] = await Promise.all([meta.load(), import('./engine/renderer.js'), import('./engine/parts.js')]);
   if (gen !== mountGen) return; // the visitor navigated away while this scene was loading
+  // Real-world models, textures and HDRI (js/engine/assets.js). A failed download is not fatal: the room builds from
+  // its primitives instead.
+  let assets = null;
+  if (scene.assets) { try { assets = await (await import('./engine/assets.js')).loadAssets(scene.assets); } catch (e) { console.warn('[ncb] assets not loaded, using the primitive room', e); } }
+  if (gen !== mountGen) return;
 
   const initial = { env: { hour: scene.startHour ?? 17 }, hub: { status: 'off', led: 0 }, plan: {} };
   for (const [id, d] of Object.entries(scene.devices)) initial[id] = { status: 'offline', ...d.initial };
@@ -72,7 +77,7 @@ async function mountScene(meta, gen) {
   const sv = Number(new URLSearchParams(location.search).get('speed')); const speed = Number.isFinite(sv) && sv > 0 ? Math.min(sv, 6) : 1; // ?speed= review mode (≤ 6), also for room-side motion
   // A what-if replays the request quietly up to its failure point: no chat, status, pings or room marks while it does.
   // Scenes read the flag through build({ quiet }) (their store hooks return early while it is true, A2).
-  const room = scene.build({ R, P, M, THREE, store, parts: partsMod, speed, quiet: () => !!flow?.quiet() });
+  const room = scene.build({ R, P, M, THREE, store, parts: partsMod, speed, quiet: () => !!flow?.quiet(), assets });
   R.onFrame((t) => { store.tick(performance.now()); room.update(store.state, t); });
   R.start();
 
