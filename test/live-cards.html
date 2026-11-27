@@ -23,7 +23,7 @@
 <div id="qaResult">running…</div>
 <div class="qa"><div class="panel" id="panel"></div><div class="ltools" id="ltools" hidden></div><div class="chat" id="chat"></div></div>
 <script type="module">
-// Live mode's page parts in a real browser, with the real CSS (no server): the guided end card's live button, the access
+// Live mode's page parts in a real browser, with the real CSS (no server): the guided end card's live button, the offline
 // card, the input bar as the disabled NCB terminal placeholder, a device card's action controls and the live tools
 // (faults, Reset room, the event log). What test/live.mjs checks on a stand-in document, here with layout.
 import { createChat } from '../js/engine/chat.js';
@@ -44,7 +44,7 @@ const hr = (label) => { const d = document.createElement('div'); d.textContent =
 
 try {
   const chat = createChat($('#chat'), { onPromptText: () => { window.__sent = true; } });
-  const view = createLiveView({ chat, scene: home });
+  const view = createLiveView({ chat });
 
   hr('1 guided end card');
   chat.end({ headline: 'Done', body: 'The guided request ran.' }, { onWhatIf() {}, whatIfLabel: 'What if something fails?', onLive() { window.__liveCalled = true; }, liveLabel: LIVE_COPY.button });
@@ -53,35 +53,15 @@ try {
   ok($('.card.end .row').firstElementChild === go, 'live-go first in the row');
   go.click(); ok(go.disabled && window.__liveCalled, 'live-go disables and calls onLive');
 
-  hr('2 access: code (with a note), offline');
-  let applyTries = 0;
-  const acc = view.access({ mode: 'code', note: LIVE_COPY.savedCodeGone }, { onCode: async (c) => (c === 'GOOD' ? null : LIVE_COPY.badCode), onApply: async () => (++applyTries === 1 ? LIVE_COPY.applyRate : LIVE_COPY.applied), onBack() {} });
-  const card = $('.card.access:not(.offline)');
-  ok($('.intro', card).textContent === LIVE_COPY.accessIntro, 'access intro');
-  ok($('.anote', card).textContent === LIVE_COPY.savedCodeGone, 'access note');
-  ok($('form.code input[name=code]', card) && $('form.code button.go', card), 'code form');
-  ok($('form.apply', card).hidden, 'apply form hidden at first');
-  $('.apply-open', card).click();
-  ok(!$('form.apply', card).hidden, 'Apply for access reveals the form');
-  ok($('form.apply [name=interest]', card).value === 'home', 'interest defaults to home');
-  const hp = $('form.apply input[name=website]', card);
-  ok(hp.tabIndex === -1 && hp.closest('[aria-hidden=true]') && getComputedStyle(hp.closest('.hp')).left === '-9999px', 'honeypot off-screen');
-  card.style.animation = 'none'; // its entry animation's transform would place the honeypot by itself
-  ok(hp.closest('.hp').offsetParent === card, 'honeypot placed inside its card (not the page, which would then scroll)');
-  ok($('form.apply .use', card).textContent === LIVE_COPY.applyEmailUse && $('form.apply [name=email]', card).getAttribute('aria-describedby') === $('form.apply .use', card).id, 'email sentence tied to the email field');
-  ok($('button.back', card).textContent === LIVE_COPY.back, 'back button');
-  for (const el of $$('input, select, textarea', card)) ok(parseFloat(getComputedStyle(el).fontSize) >= 16, `16px: ${el.name}`);
-  card.querySelector('form.code input').value = 'nope'; card.querySelector('form.code').requestSubmit();
-  await wait(30);
-  ok($('.err', card).textContent === LIVE_COPY.badCode && !$('.err', card).hidden, 'bad code shows in .err');
-  const af = $('form.apply', card).elements;
-  af.email.value = 'a@b.co'; af.wouldTry.value = 'water the plant'; $('form.apply', card).requestSubmit(); await wait(30);
-  ok($('.err', card).textContent === LIVE_COPY.applyRate && !$('.err', card).hidden && !$('p.applied', card), 'apply error shows in .err');
-  $('form.apply', card).requestSubmit(); await wait(30);
-  ok($('p.applied', card)?.textContent === LIVE_COPY.applied && !$('form.apply', card) && $('.err', card).hidden, 'applied replaces the form');
-  view.access({ mode: 'offline' }, { onCode: async () => null, onApply: async () => null, onBack() {} });
-  const off = $('.card.access.offline');
-  ok($('.intro', off).textContent === LIVE_COPY.offline && $$('.social-link', off).length === 3 && $('.back', off), 'offline card');
+  hr('2 the offline card (live mode has no code card: it opens straight into the room)');
+  let backs = 0;
+  const off = view.offline({ text: LIVE_COPY.backendOff }, { onBack: () => backs++ });
+  const offCard = $('.card.live-off');
+  ok($('.intro', offCard).textContent === LIVE_COPY.backendOff && $$('.social-link', offCard).length === 3, 'offline card: why, and the follow links');
+  ok(!$('form, input, select, textarea', offCard), 'no form or field on it');
+  ok($('button.back', offCard).textContent === LIVE_COPY.back, 'back button'); $('button.back', offCard).click(); ok(backs === 1, 'Back calls onBack');
+  view.offline({}, { onBack() {} });
+  ok($$('.card.live-off').at(-1).querySelector('.intro').textContent === LIVE_COPY.offline, 'no text: the default offline line');
 
   hr('3 live mode: the input bar is the NCB terminal placeholder, disabled');
   view.live(true);
@@ -130,7 +110,7 @@ try {
   chat.enableInput(true); ok(!input.disabled, 'the guided input works again'); chat.enableInput(false);
   view.live(true);
   ok(document.documentElement.scrollWidth <= innerWidth, `no horizontal page scroll (${document.documentElement.scrollWidth} > ${innerWidth})`);
-  acc.close(); ok($('.card.access').classList.contains('done'), 'access close()');
+  off.close(); ok(offCard.classList.contains('done') && $('button.back', offCard).disabled, 'offline close()');
 } catch (e) {
   problems.push(`threw: ${e.stack || e}`);
 }

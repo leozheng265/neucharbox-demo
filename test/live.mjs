@@ -3,21 +3,20 @@
 //   liveChecks({ report, initialOf, guardHits }) runs the checks below (test/run.mjs, in the `live` group). This file
 //   also holds the harness they share (check / eq / ok / harness and the stub LiveView, panel and ui), and a small
 //   stand-in document for the live tools (js/engine/livetools.js), which is built with createElement only.
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { createStore } from '../js/engine/store.js';
 import { virtualTime } from './clock.mjs';
-import { createMockLive, MOCK_CODE, HOME_DEVICES } from './fixtures/live-mock.mjs';
+import { createMockLive, HOME_DEVICES } from './fixtures/live-mock.mjs';
 import home from '../js/scenes/home.js';
 import { LIVE_CONFIG, liveApiBase } from '../js/live-config.js';
 import { createLiveApi, LiveError } from '../js/engine/liveapi.js';
 import { createSseParser, openEventStream } from '../js/engine/sse.js';
-import { createLive, codeStore, normalizeCode, LIVE_COPY, eventLine, liveDevicesOf, actionLabel } from '../js/engine/live.js';
+import { createLive, LIVE_COPY, eventLine, liveDevicesOf, actionLabel, liveHere } from '../js/engine/live.js';
 import { createLiveView } from '../js/engine/livechat.js';
 import { createLiveTools } from '../js/engine/livetools.js';
 import { createLiveEntry } from '../js/engine/liveentry.js';
 import { FRESH_START } from '../js/engine/flow.js';
 
-export { MOCK_CODE };
 const BASE = 'http://mock/live/api/';
 
 // Just what the live tools use: createElement, children, attributes, classList, dataset, textContent, hidden, value
@@ -90,18 +89,16 @@ export async function liveChecks({ report, initialOf, guardHits }) {
   }
 
   // The stub view / panel / ui the controller (js/engine/live.js) is written against, logging into one array.
-  async function harness({ mock = createMockLive(), storage, entered = false } = {}) {
+  async function harness({ mock = createMockLive(), entered = false, watch = () => null } = {}) {
     const log = [], store = createStore(postSetup(home)); stores.add(store);
     const rec = (source) => (method, ...args) => { log.push([source, method, ...args]); };
-    const h = { mock, store, log, codes: null, lastAccess: null, live: null };
-    const mem = (() => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; })();
-    h.codes = codeStore(storage ?? mem);
+    const h = { mock, store, log, lastOffline: null, live: null };
     h.view = {
       ...Object.fromEntries(['ncb', 'lost', 'live'].map((m) => [m, rec('view').bind(null, m)])),
-      access(spec, { onCode, onApply, onBack }) {
-        log.push(['view', 'access', spec]);
-        const a = { code: (t) => onCode(t), apply: (f) => onApply(f), back: () => onBack(), close: rec('access').bind(null, 'close') };
-        h.lastAccess = a; return a;
+      offline(spec, { onBack }) {
+        log.push(['view', 'offline', spec]);
+        const a = { back: () => onBack(), close: rec('offline').bind(null, 'close') };
+        h.lastOffline = a; return a;
       },
     };
     h.panel = { mark: rec('panel').bind(null, 'mark'), reveal: rec('panel').bind(null, 'reveal') };
@@ -112,18 +109,17 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     h.all = (source, method) => log.filter((e) => e[0] === source && e[1] === method).map((e) => e.slice(2));
     h.has = (source, method, ...args) => log.some((e) => e[0] === source && e[1] === method && args.every((a, i) => JSON.stringify(e[2 + i]) === JSON.stringify(a)));
     h.order = (source, method, ...args) => log.findIndex((e) => e[0] === source && e[1] === method && args.every((a, i) => JSON.stringify(e[2 + i]) === JSON.stringify(a)));
-    h.live = createLive({ scene: home, store, view: h.view, panel: h.panel, ui: h.ui, base: 'http://mock', fetch: mock.fetch, codes: h.codes });
-    if (entered) { await h.live.open(); if (h.lastAccess) await h.lastAccess.code(MOCK_CODE); }
+    h.live = createLive({ scene: home, store, view: h.view, panel: h.panel, ui: h.ui, base: 'http://mock', fetch: mock.fetch, watch });
+    if (entered) await h.live.open();
     return h;
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const settle = () => sleep(1); // every event already on its way lands first
   const waitFor = async (f) => { for (let i = 0; i < 4000 && !f(); i++) await sleep(25); ok(f(), 'timed out waiting'); };
-  const auth = { authorization: `Bearer ${MOCK_CODE}` };
   // The events the mock holds for a session, as [kind, data]: a fresh GET from `after`, read until it goes quiet.
   const framesOf = async (m, sid, after = 0) => {
-    const r = await m.fetch(`${BASE}sessions/${sid}/events?after=${after}`, { headers: auth });
+    const r = await m.fetch(`${BASE}sessions/${sid}/events?after=${after}`, {});
     const rd = r.body.getReader(), dec = new TextDecoder(); let b = '';
     for (;;) { const x = await Promise.race([rd.read(), new Promise((res) => setTimeout(() => res({ done: true }), 5))]); if (x.done) break; b += dec.decode(x.value); }
     await rd.cancel(); return [...b.matchAll(/event: (\w+)\ndata: (.*)\n/g)].map((a) => [a[1], JSON.parse(a[2])]);
@@ -137,17 +133,17 @@ export async function liveChecks({ report, initialOf, guardHits }) {
   // A small client over the mock for the contract checks below.
   const rig = (opts) => {
     const m = createMockLive(opts);
-    const req = async (method, path, body) => { const r = await m.fetch(`${BASE}${path}`, { method, headers: auth, ...(body !== undefined ? { body: typeof body === 'string' ? body : JSON.stringify(body) } : {}) }); return [r.status, await r.json()]; };
+    const req = async (method, path, body) => { const r = await m.fetch(`${BASE}${path}`, { method, ...(body !== undefined ? { body: typeof body === 'string' ? body : JSON.stringify(body) } : {}) }); return [r.status, await r.json()]; };
     const post = (path, body) => req('POST', path, body ?? {});
     return { m, post, get: (path) => req('GET', path), session: async (extra = { scene: 'home' }) => (await post('sessions', extra))[1].sessionId };
   };
   const wait5 = () => sleep(5001); // past the rate window (10 per 5 s, shared by set, advance, actions and faults)
 
-  await check('mock · health, auth, session body (no suggestions, no automations)', async () => {
+  await check('mock · health, session body (no suggestions, no automations); no route needs an Authorization header', async () => {
     const m = createMockLive(), j = async (r) => [r.status, await r.json()];
     eq(await j(await m.fetch(`${BASE}health`)), [200, { ok: true, liveEnabled: true, scenes: ['home'] }]);
-    eq((await m.fetch(`${BASE}sessions`, { method: 'POST', body: '{"scene":"home"}' })).status, 401);
-    const r = await m.fetch(`${BASE}sessions`, { method: 'POST', headers: { authorization: `Bearer ${MOCK_CODE.toLowerCase()}` }, body: '{"scene":"home"}' });
+    eq((await m.fetch(`${BASE}sessions`, { method: 'POST', headers: { authorization: 'Bearer anything' }, body: '{"scene":"home"}' })).status, 201, 'one sent is ignored');
+    const r = await m.fetch(`${BASE}sessions`, { method: 'POST', body: '{"scene":"home"}' });
     const s = await r.json(); eq(r.status, 201);
     eq(Object.keys(s).sort(), ['clock', 'sessionId', 'state', 'world'], 'sessionId, state, clock, world');
     ok(s.state.lamp.status === 'online' && s.clock.label === 'Fri 16:30' && s.world.air.temp === 21, 'session body');
@@ -155,20 +151,21 @@ export async function liveChecks({ report, initialOf, guardHits }) {
 
   await check('mock · SSE framing and resume', async () => {
     const { m, post, session } = rig(), sid = await session();
-    const stream = await m.fetch(`${BASE}sessions/${sid}/events`, { headers: auth });
+    const stream = await m.fetch(`${BASE}sessions/${sid}/events`, {});
     eq(stream.headers.get('content-type'), 'text/event-stream');
     eq((await post(`sessions/${sid}/set`, { path: 'soil.moisture', value: 20 }))[0], 202);
     eq((await post(`sessions/${sid}/set`, { path: 'lamp.brightness', value: 0.5 }))[0], 202);
     eq(await readFrames(stream, 2), [
       `id: 1\nevent: state\ndata: {"path":"soil.moisture","value":20,"ms":0,"src":"edit"}\n\n`,
       `id: 2\nevent: state\ndata: {"path":"lamp.brightness","value":0.5,"ms":0,"src":"edit"}\n\n`]);
-    const again = await m.fetch(`${BASE}sessions/${sid}/events?after=2`, { headers: auth });
+    const again = await m.fetch(`${BASE}sessions/${sid}/events?after=2`, {});
     const [f] = await readFrames(again, 1);
     eq(f, `id: 3\nevent: state\ndata: {"path":"lamp.on","value":true,"ms":0,"src":"edit"}\n\n`, 'resume frame');
   });
 
-  await check('mock · the removed routes answer 404 (requests, approve, what-if, automations)', async () => {
+  await check('mock · the removed routes answer 404 (apply, requests, approve, what-if, automations)', async () => {
     const { post, session } = rig(), sid = await session();
+    eq(await post('apply', { email: 'a@b.c' }), [404, { error: 'bad_request', message: 'No such route.' }], 'apply');
     for (const path of ['requests', 'requests/r1/approve', 'requests/r1/decline', 'requests/r1/whatif', 'automations/rule1', 'automations/rule1/remove', 'automations/clear']) {
       eq(await post(`sessions/${sid}/${path}`, { text: 'Movie night' }), [404, { error: 'bad_request', message: 'No such route.' }], path);
     }
@@ -185,7 +182,6 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(body.devices.find((d) => d.id === 'pump').faultModes, ['offline', 'blocked', 'stuck'], 'pump fault modes');
     eq(body.devices.find((d) => d.id === 'camera').edits, [{ field: 'armed', kind: 'bool' }, { field: 'motion', kind: 'bool' }], 'camera edits');
     eq(body.clock.label, 'Fri 16:30', 'the clock');
-    const m2 = createMockLive(); eq((await m2.fetch(`${BASE}sessions/${sid}/devices`, { headers: { authorization: 'Bearer NOPE' } })).status, 401, 'bad code');
     eq((await get('sessions/nope/devices'))[1].error, 'no_session', 'no session');
     const c = rig({ scenes: ['custom'] }), csid = await c.session({ scene: 'custom', devices: [{ type: 'floor_lamp', id: 'floor_lamp' }, { type: 'soil_sensor', id: 'soil_sensor' }] });
     const cd = (await c.get(`sessions/${csid}/devices`))[1].devices;
@@ -211,7 +207,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(fr[0][1], { callId: 'a1', device: 'lamp', action: 'set_lamp', args: { brightness: 40 }, label: 'Floor lamp → 40%', src: 'action' }, 'the call');
     eq(fr[2][1], { path: 'lamp.brightness', value: 0.4, ms: 1200, src: 'action' }, 'a tweened state frame');
     ok(fr.every((f) => f[1].src === 'action' && !('rid' in f[1])), 'all src action, no rid');
-    const bare = await m.fetch(`${BASE}sessions/${sid}/devices/pump/actions/stop_pump`, { method: 'POST', headers: auth });
+    const bare = await m.fetch(`${BASE}sessions/${sid}/devices/pump/actions/stop_pump`, { method: 'POST' });
     eq([bare.status, (await bare.json()).outcome], [200, 'made_safe'], 'no params: no body at all works');
     const [, read] = await act('soil', 'read_soil', {}); eq([read.outcome, read.text, read.result], ['reading', '34%', { ok: true, reading: 34 }], 'a read');
     const k0 = (await framesOf(m, sid)).length; await act('pump', 'run_pump', { seconds: 5 });
@@ -288,7 +284,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
   });
 
   await check('api · set, advance, devices, actions and faults post to the contract routes', async () => {
-    const m = createMockLive(), api = createLiveApi({ base: 'http://mock', fetch: m.fetch, getCode: () => MOCK_CODE }), last = () => m.calls.at(-1);
+    const m = createMockLive(), api = createLiveApi({ base: 'http://mock', fetch: m.fetch }), last = () => m.calls.at(-1);
     const { sessionId } = await api.createSession('home');
     eq(await api.set(sessionId, 'soil.moisture', 12), {}, 'set resolves');
     eq([last().method, last().path, last().body], ['POST', `sessions/${sessionId}/set`, { path: 'soil.moisture', value: 12 }]);
@@ -305,7 +301,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     ok(err instanceof LiveError && err.kind === 'bad_value' && err.status === 400 && err.detail === "'brightness' must be at least 0", 'LiveError bad_value with its detail');
     try { await api.set(sessionId, 'lamp.on', true); } catch (e) { err = e; }
     ok(err.kind === 'bad_value' && !('detail' in err), 'no detail when the body has none');
-    for (const k of ['request', 'approve', 'decline', 'whatIf', 'automation', 'removeAutomation', 'clearAutomations']) ok(!(k in api), `no api.${k}`);
+    for (const k of ['check', 'apply', 'request', 'approve', 'decline', 'whatIf', 'automation', 'removeAutomation', 'clearAutomations']) ok(!(k in api), `no api.${k}`);
   });
 
   // ---- config and API client ----
@@ -318,7 +314,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(at('?liveApi=javascript:alert(1)'), LIVE_CONFIG.apiBase);
   });
 
-  const apiOf = (mock, extra = {}) => createLiveApi({ base: 'http://mock', fetch: mock.fetch, getCode: () => MOCK_CODE, ...extra });
+  const apiOf = (mock, extra = {}) => createLiveApi({ base: 'http://mock', fetch: mock.fetch, ...extra });
   const fails = async (p) => { try { await p; return null; } catch (e) { return e instanceof LiveError ? { status: e.status, kind: e.kind } : { notLiveError: String(e) }; } };
 
   await check('api · health: ok, disabled, HTML 200 → offline, down → offline, slow → offline', async () => {
@@ -338,17 +334,11 @@ export async function liveChecks({ report, initialOf, guardHits }) {
   await check('api · headers and errors', async () => {
     const m = createMockLive(), api = apiOf(m), last = () => m.calls.at(-1);
     const { sessionId: sid } = await api.createSession('home');
-    eq(last().headers.authorization, `Bearer ${MOCK_CODE}`, 'session auth');
+    ok(!('authorization' in last().headers), 'POST sessions sends no Authorization header');
     await api.action(sid, 'lamp', 'set_lamp', { brightness: 20 });
-    eq(last().headers.authorization, `Bearer ${MOCK_CODE}`, 'action auth');
+    ok(!('authorization' in last().headers), 'an action sends none either');
     eq(last().headers['ngrok-skip-browser-warning'], '1', 'ngrok header');
     eq(last().headers['content-type'], 'application/json', 'content-type');
-    eq(await api.check('ncb-test-case'), { ok: true }, 'check: ok, and nothing about requests left');
-    eq(last().body, { code: 'ncb-test-case' }, 'check body'); ok(!('authorization' in last().headers), 'check sends no authorization');
-    eq(last().path, 'access/check'); ok(!JSON.stringify(m.calls.map((c) => [c.path, c.query])).includes(MOCK_CODE), 'code never in a url');
-    await api.apply({ email: 'a@b.c', interest: 'home', wouldTry: 'x', scene: 'home', website: '' }); ok(!('authorization' in last().headers), 'apply sends no authorization');
-    eq(await fails(apiOf(m, { getCode: () => 'NOPE' }).createSession('home')), { status: 401, kind: 'bad_code' }, 'bad code');
-    eq(await fails(api.check('nope')), { status: 401, kind: 'bad_code' }, 'check bad code');
     const m2 = createMockLive(), a2 = apiOf(m2);
     m2.set({ off: 'live_off' }); eq(await fails(a2.createSession('home')), { status: 503, kind: 'live_off' }, 'live_off');
     const e = await a2.createSession('home').catch((x) => x); ok(typeof e.message === 'string' && e.message.length > 0, 'message from the body');
@@ -360,7 +350,7 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(Math.round(performance.now() - t0), 40000, 'but only after 40 s (it answers once its frames played)');
     const m3 = createMockLive(), a3 = apiOf(m3), { sessionId: s3 } = await a3.createSession('home');
     ok(a3.eventsUrl(s3, 4).endsWith(`/live/api/sessions/${s3}/events?after=4`) && !a3.eventsUrl(s3).includes('after'), 'eventsUrl');
-    ok(!a3.eventsUrl(s3, 4).includes(MOCK_CODE), 'eventsUrl has no code'); eq(a3.headers().Authorization, `Bearer ${MOCK_CODE}`, 'sse headers');
+    eq(a3.headers(), { 'ngrok-skip-browser-warning': '1', Accept: 'text/event-stream' }, 'sse headers: no Authorization');
   });
 
   // ---- Task 3: the event stream ----
@@ -436,24 +426,17 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     // a second drop: opening reset the backoff, so the wait is 500 ms again, not 1000
     const t1 = performance.now(); mock.drop(sid);
     await w.until(() => w.statuses.filter((s) => s === 'open').length === 3); eq(Math.round(performance.now() - t1), 500, 'backoff reset by open');
-    eq(gets[0].headers.accept, 'text/event-stream'); eq(gets[0].headers.authorization, `Bearer ${MOCK_CODE}`, 'auth header');
-    ok(!f.log.some((c) => c.url.includes(MOCK_CODE)), 'no code in a url');
+    eq(gets[0].headers.accept, 'text/event-stream'); ok(!('authorization' in gets[0].headers), 'no Authorization header');
     es.close();
   });
 
-  await check('sse · 404 → gone, 401 → unauthorized, backoff used up → lost, HTML 200 → lost, close() is silent', async () => {
+  await check('sse · 404 → gone, backoff used up → lost, HTML 200 → lost, a 401 is retried like a 5xx, close() is silent', async () => {
     // 404: the session expired under the stream
     { const mock = createMockLive(), api = apiOf(mock), { sessionId: sid } = await api.createSession('home'), f = counting(mock.fetch), w = watch();
       const es = openEventStream({ api, sessionId: sid, fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
       await w.until(() => w.statuses.includes('open')); mock.expire(sid);
       await w.until(() => w.statuses.includes('gone')); await sleep(30000);
       eq(w.statuses, ['open', 'retrying', 'gone'], '404 statuses'); eq(f.log.length, 2, 'no GET after gone'); es.close(); }
-    // 401: the code stopped working
-    { const mock = createMockLive(), api = apiOf(mock), { sessionId: sid } = await api.createSession('home'), f = counting(mock.fetch), w = watch();
-      const es = openEventStream({ api, sessionId: sid, fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
-      await w.until(() => w.statuses.includes('open')); mock.set({ code: 'NCB-OTHR-CODE' }); mock.drop(sid);
-      await w.until(() => w.statuses.includes('unauthorized')); await sleep(30000);
-      eq(w.statuses, ['open', 'retrying', 'unauthorized'], '401 statuses'); eq(f.log.length, 2, 'no GET after unauthorized'); es.close(); }
     // the server is down: first attempt + five retries, at 0, 500, 1500, 3500, 7500, 15500 ms
     { const mock = createMockLive({ mode: 'down' }), api = apiOf(mock), f = counting(mock.fetch), w = watch(), t0 = performance.now();
       const es = openEventStream({ api, sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
@@ -469,6 +452,10 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     { const w = watch(), f = counting(() => Promise.resolve(new Response('{}', { status: 502, headers: { 'content-type': 'application/json' } })));
       const es = openEventStream({ api: apiOf(createMockLive()), sessionId: 's', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus, backoff: [10, 10] });
       await w.until(() => w.statuses.includes('lost')); eq(w.statuses, ['retrying', 'retrying', 'lost'], '502'); eq(f.log.length, 3); es.close(); }
+    // a 401 is no special case any more (no route needs a code): retried, then lost
+    { const w = watch(), f = counting(() => Promise.resolve(new Response('{}', { status: 401, headers: { 'content-type': 'application/json' } })));
+      const es = openEventStream({ api: apiOf(createMockLive()), sessionId: 's', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus, backoff: [10, 10] });
+      await w.until(() => w.statuses.includes('lost')); eq(w.statuses, ['retrying', 'retrying', 'lost'], '401'); eq(f.log.length, 3); es.close(); }
     // close() while retrying: silence, no further GET
     { const mock = createMockLive({ mode: 'down' }), api = apiOf(mock), f = counting(mock.fetch), w = watch();
       const es = openEventStream({ api, sessionId: 'sess-1', fetch: f, onEvent: w.onEvent, onStatus: w.onStatus });
@@ -501,11 +488,11 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       es.close(); clearInterval(iv); }
   });
 
-  // ---- the controller: access, session, room ----
+  // ---- the controller: open, session, room ----
   const posts = (m) => m.calls.filter((c) => c.method === 'POST' && c.path === 'sessions');
   const postsTo = (m, re) => m.calls.filter((c) => c.method === 'POST' && re.test(c.path));
   const eventGets = (m) => m.calls.filter((c) => c.path.endsWith('/events'));
-  const accessCount = (t) => t.log.filter((e) => e[0] === 'view' && e[1] === 'access').length;
+  const offlineCount = (t) => t.log.filter((e) => e[0] === 'view' && e[1] === 'offline').length;
   const count = (t, source, method) => t.log.filter((e) => e[0] === source && e[1] === method).length;
   const ncbCount = (t, text) => t.log.filter((e) => e[0] === 'view' && e[1] === 'ncb' && e[2] === text).length;
   const lastClock = (t) => t.find('ui', 'clock')?.[0];
@@ -532,14 +519,18 @@ export async function liveChecks({ report, initialOf, guardHits }) {
       ['Connect an NCB to chat here', 'sensor detached', '1 fault · 2 events', 'Live · 1 device', 'Live · 6 devices']);
     eq(LIVE_COPY.actionBadValue("'brightness' must be at most 100."), "Not sent: 'brightness' must be at most 100.", 'the validator\'s sentence, one full stop');
     for (const k of ['placeholder', 'planning', 'planIntro', 'whatIf', 'autosTitle', 'noneLeft', 'left', 'limitGlobal']) ok(!(k in LIVE_COPY), `no LIVE_COPY.${k}`);
-    eq(normalizeCode(' ncb-test case '), 'NCB-TESTCASE');
+    // the code gate is gone: no copy for a code card, the application form, saved codes or per-code limits
+    for (const k of ['accessIntro', 'badCode', 'savedCodeGone', 'applyEmailUse', 'applied', 'applyRate', 'limitCode', 'rate']) ok(!(k in LIVE_COPY), `no LIVE_COPY.${k}`);
+    for (const [k, v] of Object.entries(LIVE_COPY)) for (const o of typeof v === 'function' ? [v(2), v('x')] : [v]) ok(!/\b(invite|code|apply|application)/i.test(o), `${k} says nothing about codes or applying: "${o}"`);
   });
 
-  await check('access · no code → card; good code → session, room, device list and intro', async () => {
-    const t = await harness(); await t.live.open();
-    eq(t.find('view', 'access')[0], { mode: 'code' }); eq(t.live.phase, 'access'); eq(t.live.active, true);
-    eq(await t.lastAccess.code(' ncb-test-case '), null);
-    eq(t.codes.get(), MOCK_CODE); eq(t.live.phase, 'idle'); eq(t.live.active, true); ok(t.has('view', 'live', true)); ok(t.has('access', 'close'), 'card closed');
+  await check('open · straight into the room, asking for no code: session, room, device list and intro', async () => {
+    const t = await harness(); const p = t.live.open();
+    eq([t.live.phase, t.live.active], ['opening', true], 'asking /health');
+    await p;
+    eq(offlineCount(t), 0, 'no card'); eq(t.live.phase, 'idle'); eq(t.live.active, true); ok(t.has('view', 'live', true));
+    eq(t.mock.calls.map((c) => `${c.method} ${c.path.replace(t.live.sessionId, '{sid}')}`), ['GET health', 'POST sessions', 'GET sessions/{sid}/events', 'GET sessions/{sid}/devices'], 'health, then the session: nothing else is asked');
+    ok(t.mock.calls.every((c) => !('authorization' in c.headers)), 'no Authorization header on any call');
     eq(t.find('view', 'ncb')[0], LIVE_COPY.intro(6)); ok(LIVE_COPY.intro(6).startsWith('Live mode is on: these 6 devices run'), 'intro');
     eq(t.store.get('lamp.status'), 'online'); eq(t.find('ui', 'beats')[0], { current: 'ask', recoverHidden: true, skippable: [] });
     eq(t.find('ui', 'status')[0], 'Live · 6 devices'); eq(t.find('ui', 'editing'), [true]);
@@ -548,71 +539,22 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     eq(devs[3].faultModes, ['offline', 'blocked', 'stuck'], 'with their fault modes');
     eq(t.find('ui', 'faults')[0], [], 'no fault planted'); eq(lastControls(t), { enabled: true, acting: null }, 'controls enabled');
     ok(t.order('ui', 'devices', null) < t.order('ui', 'devices', devs) && t.order('ui', 'log', null) >= 0, 'a fresh session clears the tools first');
-    eq(postsTo(t.mock, /./).map((c) => c.path).filter((p) => p !== 'access/check'), ['sessions'], 'nothing is posted but the session');
-    ok(!JSON.stringify(t.mock.calls.map((c) => [c.path, c.query])).includes(MOCK_CODE), 'code never in a url');
+    eq(postsTo(t.mock, /./).map((c) => c.path), ['sessions'], 'nothing is posted but the session');
     ok(!t.mock.calls.some((c) => /requests|automations|whatif/.test(c.path)), 'no request, automation or what-if route');
     t.live.close();
   });
 
-  await check('access · bad code → badCode, nothing stored; apply', async () => {
-    const t = await harness(); await t.live.open();
-    eq(await t.lastAccess.code('NCB-NOPE-NOPE'), LIVE_COPY.badCode);
-    eq(t.codes.get(), null); eq(posts(t.mock).length, 0); eq(t.live.phase, 'access');
-    t.mock.set({ mode: 'down' }); eq(await t.lastAccess.code(MOCK_CODE), LIVE_COPY.offline);
-    t.mock.set({ mode: 'json' });
-    eq(await t.lastAccess.apply({ email: 'a@b.c', interest: 'home', wouldTry: 'x', website: '' }), LIVE_COPY.applied);
-    eq(t.mock.calls.at(-1).body.scene, 'home');
-    t.mock.set({ mode: 'down' }); eq(await t.lastAccess.apply({ email: 'a@b.c' }), LIVE_COPY.offline);
-    t.live.close();
-  });
-
-  await check('access · stored code → straight in; stored code now 401 → cleared, card says savedCodeGone', async () => {
-    const a = await harness(); a.codes.set(MOCK_CODE); await a.live.open();
-    eq(a.live.phase, 'idle'); eq(accessCount(a), 0, 'no card'); ok(a.has('view', 'live', true)); a.live.close();
-    const b = await harness(); b.codes.set('NCB-OTHR-CODE'); await b.live.open();
-    eq(b.codes.get(), null); eq(b.find('view', 'access')[0], { mode: 'code', note: LIVE_COPY.savedCodeGone }); eq(posts(b.mock).length, 0);
-    const e = await harness(); e.codes.set(MOCK_CODE); e.mock.set({ mode: 'down' }); await e.live.open();
-    eq(e.find('view', 'access')[0], { mode: 'offline', offlineText: LIVE_COPY.backendDown('http://mock') }); eq(e.codes.get(), MOCK_CODE, 'offline keeps the code');
-  });
-
-  await check('access · offline (health html / down / liveEnabled false / scene missing) → offline card that says why, live stays inactive', async () => {
+  await check('offline · (health html / down / liveEnabled false / scene missing) → offline card that says why, live stays inactive', async () => {
     const down = LIVE_COPY.backendDown('http://mock');
     ok(down.includes('NCF backend not found at http://mock'), 'the card names the address it looked at');
     for (const [opts, why] of [[{ mode: 'html' }, down], [{ mode: 'down' }, down], [{ liveEnabled: false }, LIVE_COPY.backendOff], [{ scenes: ['lab'] }, LIVE_COPY.sceneOff]]) {
       const t = await harness({ mock: createMockLive(opts) });
       eq(await t.live.probe(), false, JSON.stringify(opts)); eq(t.live.available, false);
-      await t.live.open(); eq(t.find('view', 'access')[0], { mode: 'offline', offlineText: why }, JSON.stringify(opts)); eq(posts(t.mock).length, 0);
-      t.lastAccess.back(); ok(t.has('ui', 'offerGuided'), 'offered guided'); eq(t.live.active, false); eq(t.live.phase, 'off'); ok(t.has('access', 'close'));
+      await t.live.open(); eq(t.find('view', 'offline')[0], { text: why }, JSON.stringify(opts)); eq(t.live.phase, 'offline'); eq(posts(t.mock).length, 0);
+      t.lastOffline.back(); ok(t.has('ui', 'offerGuided'), 'offered guided'); eq(t.live.active, false); eq(t.live.phase, 'off'); ok(t.has('offline', 'close'));
     }
     const ok1 = await harness(); eq(await ok1.live.probe(), true); eq(ok1.live.available, true);
-  });
-
-  await check('access · 429 rate → rate copy, not offline; stored nothing', async () => {
-    const t = await harness(); await t.live.open();
-    t.mock.set({ checkRate: true }); eq(await t.lastAccess.code(MOCK_CODE), LIVE_COPY.rate); eq(t.codes.get(), null); eq(posts(t.mock).length, 0, 'no session opened'); eq(t.live.phase, 'access');
-    t.mock.set({ checkRate: false }); eq(await t.lastAccess.code(MOCK_CODE), null, 'works again');
-    t.live.close();
-  });
-
-  await check('storage throws → code works for the visit', async () => {
-    const t = await harness({ storage: { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } } });
-    await t.live.open(); eq(await t.lastAccess.code(MOCK_CODE), null); eq(t.live.phase, 'idle'); eq(t.codes.get(), null);
-    eq(posts(t.mock).length, 1); t.live.close();
-    const real = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-    Object.defineProperty(globalThis, 'localStorage', { get() { throw new Error('blocked'); }, configurable: true });
-    try { const c = codeStore(); eq(c.get(), null); c.set('x'); c.clear(); } finally { if (real) Object.defineProperty(globalThis, 'localStorage', real); else delete globalThis.localStorage; }
-  });
-
-  await check('401 mid-session → access card, the tools go', async () => {
-    const t = await harness({ entered: true }), sid = t.live.sessionId; eq(t.live.phase, 'idle'); eq(accessCount(t), 1);
-    t.mock.set({ code: 'NCB-OTHR-CODE' }); t.mock.drop(sid);
-    await waitFor(() => accessCount(t) === 2);
-    eq(t.codes.get(), null); eq(t.find('view', 'access')[0], { mode: 'code', note: LIVE_COPY.savedCodeGone }); eq(t.live.phase, 'access');
-    eq([t.find('ui', 'editing'), t.find('ui', 'devices'), t.find('ui', 'faults'), t.find('ui', 'log')], [[false], [null], [null], [null]], 'display-only cards, no tools');
-    eq(lastControls(t).enabled, false, 'controls off');
-    const gets = eventGets(t.mock).length; await sleep(60000); eq(eventGets(t.mock).length, gets, 'stream closed, no more GETs');
-    t.mock.set({ code: MOCK_CODE }); eq(await t.lastAccess.code(MOCK_CODE), null); eq(t.live.phase, 'idle'); ok(t.live.sessionId !== sid, 'new session after re-entering');
-    t.live.close();
+    eq([liveHere({ ok: true, liveEnabled: true, scenes: ['home'] }, 'home'), liveHere({ ok: true, liveEnabled: true, scenes: ['home'] }, 'custom'), liveHere(null, 'home'), liveHere({ ok: true, liveEnabled: true }, 'home')], [true, false, false, false], 'liveHere');
   });
 
   await check('room · applyRoom merges onto the baseline, keeps room-only fields; stream clock events apply', async () => {
@@ -640,10 +582,10 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.live.close();
   });
 
-  await check('session · POST sessions 503 live_off → offline; 429 global_limit → busy copy; code_limit; all back to guided', async () => {
-    for (const [set, line] of [[{ off: 'live_off' }, LIVE_COPY.offline], [{ sessionCap: 'global_limit' }, LIVE_COPY.sessionsBusy], [{ sessionCap: 'code_limit' }, LIVE_COPY.limitCode]]) {
-      const t = await harness(); await t.live.open(); t.mock.set(set);
-      eq(await t.lastAccess.code(MOCK_CODE), null); eq(t.find('view', 'ncb')[0], line, JSON.stringify(set)); ok(t.has('ui', 'offerGuided'), 'guided'); eq(t.live.active, false); eq(t.live.phase, 'off');
+  await check('session · POST sessions 503 live_off → offline; 429 global_limit (the server is full) → busy copy; both back to guided', async () => {
+    for (const [set, line] of [[{ off: 'live_off' }, LIVE_COPY.offline], [{ sessionCap: 'global_limit' }, LIVE_COPY.sessionsBusy]]) {
+      const t = await harness(); t.mock.set(set); await t.live.open();
+      eq(t.find('view', 'ncb')[0], line, JSON.stringify(set)); ok(t.has('ui', 'offerGuided'), 'guided'); eq(t.live.active, false); eq(t.live.phase, 'off');
       eq(eventGets(t.mock).length, 0, 'no stream opened');
     }
   });
@@ -697,20 +639,18 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.live.close();
   });
 
-  await check('action · refusals: bad_value says the validator\'s sentence, no_action, 409 busy, rate (once per 10 s), 401, no_session', async () => {
+  await check('action · refusals: bad_value says the validator\'s sentence, no_action, 409 busy, a 401 like any failure, rate (once per 10 s), no_session', async () => {
     const t = await harness({ entered: true });
     await t.live.run('lamp', 'set_lamp', { brightness: 500 });
     eq(t.find('ui', 'actionResult'), ['lamp', 'set_lamp', { ok: false, text: "Not sent: 'brightness' must be at most 100." }], 'bad_value');
     eq(t.find('panel', 'mark'), ['lamp', null], 'WORKING goes'); eq(lastControls(t).enabled, true);
     t.live.close();
-    for (const [answer, text] of [[jsonAnswer(404, { error: 'no_action', message: 'No.' }), LIVE_COPY.actionGone], [jsonAnswer(409, { error: 'busy', message: 'Busy.' }), LIVE_COPY.actionBusy], [jsonAnswer(500, { error: 'internal', message: 'Oops.' }), LIVE_COPY.actionFailed]]) {
+    for (const [answer, text] of [[jsonAnswer(404, { error: 'no_action', message: 'No.' }), LIVE_COPY.actionGone], [jsonAnswer(409, { error: 'busy', message: 'Busy.' }), LIVE_COPY.actionBusy], [jsonAnswer(500, { error: 'internal', message: 'Oops.' }), LIVE_COPY.actionFailed], [jsonAnswer(401, { error: 'unauthorized', message: 'No.' }), LIVE_COPY.actionFailed]]) {
       const u = await harness({ mock: failOnce(createMockLive(), /\/actions\//, answer), entered: true });
-      await u.live.run('lamp', 'set_lamp', { brightness: 5 }); eq(u.find('ui', 'actionResult'), ['lamp', 'set_lamp', { ok: false, text }], text); u.live.close();
+      await u.live.run('lamp', 'set_lamp', { brightness: 5 }); eq(u.find('ui', 'actionResult'), ['lamp', 'set_lamp', { ok: false, text }], text); eq(offlineCount(u), 0, 'no card'); eq(u.live.phase, 'idle'); u.live.close();
     }
     const r = await harness({ mock: failOnce(createMockLive(), /\/actions\//, jsonAnswer(429, { error: 'rate', message: 'Too many.' })), entered: true });
     await r.live.run('lamp', 'set_lamp', { brightness: 5 }); eq(ncbCount(r, LIVE_COPY.editRate), 1, 'rate: the edit-rate line'); eq(count(r, 'ui', 'actionResult'), 0, 'no result line'); r.live.close();
-    const v = await harness({ mock: failOnce(createMockLive(), /\/actions\//, jsonAnswer(401, { error: 'bad_code', message: 'No.' })), entered: true });
-    await v.live.run('lamp', 'set_lamp', { brightness: 5 }); await settle(); eq(accessCount(v), 2, '401 asks for the code again'); v.live.close();
     const w = await harness({ mock: failOnce(createMockLive(), /\/actions\//, jsonAnswer(404, { error: 'no_session', message: 'Gone.' })), entered: true }), sid = w.live.sessionId;
     await w.live.run('lamp', 'set_lamp', { brightness: 5 }); await waitFor(() => w.live.sessionId !== sid && w.live.phase === 'idle');
     eq(ncbCount(w, LIVE_COPY.timedOut), 1, 'no_session: a fresh room'); w.live.close();
@@ -835,13 +775,13 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.live.exit(); eq(lastClock(t).enabled, false, 'after exit'); t.live.close();
   });
 
-  await check('clock · advance refused (busy) says nothing extra and re-enables; rate says editRate; 401 asks for the code', async () => {
+  await check('clock · advance refused (busy, or a 401) says nothing extra and re-enables; rate says editRate', async () => {
     const t = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(409, { error: 'busy', message: 'Busy.' })), entered: true });
     const n0 = count(t, 'view', 'ncb'); await t.live.advance(6); eq(count(t, 'view', 'ncb'), n0, 'no chat line'); eq(lastClock(t).enabled, true);
     const u = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(429, { error: 'rate', message: 'Too many.' })), entered: true });
     await u.live.advance(6); ok(u.has('view', 'ncb', LIVE_COPY.editRate), 'editRate'); eq(lastClock(u).enabled, true);
     const v = await harness({ mock: failOnce(createMockLive(), /\/advance$/, jsonAnswer(401, { error: 'unauthorized', message: 'No.' })), entered: true });
-    await v.live.advance(6); await settle(); eq(accessCount(v), 2, '401 asks for the code again');
+    const n1 = count(v, 'view', 'ncb'); await v.live.advance(6); await settle(); eq([count(v, 'view', 'ncb') - n1, offlineCount(v), lastClock(v).enabled, v.live.sessionId !== null], [0, 0, true, true], 'a 401: nothing said, no card, the session stays');
     t.live.close(); u.live.close(); v.live.close();
   });
 
@@ -950,15 +890,40 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     f.root.one('lt-head').click(); eq([f.tools.isOpen, f.root.one('lt-body').hidden], [true, false], 'the head opens it');
   });
 
+  // ---- watch a room (?watch) ----
+  await check('watch · ?watch attaches to the newest live session of this scene in the server\'s list of all sessions; none → a room of its own', async () => {
+    const mock = createMockLive({ scenes: ['home', 'custom'] }), api = apiOf(mock);
+    const a = (await api.createSession('home')).sessionId, b = (await api.createSession('home')).sessionId;
+    await api.set(a, SOIL_EDIT, 40); // a: now the most recently active Home session
+    await api.createSession('custom', { devices: [{ type: 'floor_lamp', id: 'floor_lamp' }] }); // newer still, another scene
+    // GET sessions as a server that ignores ?scene= gives it: every live session, most recently active first
+    const urls = [], all = { ...mock, fetch: (url, init) => { urls.push(String(url)); return mock.fetch(String(url).replace(/\/sessions\?scene=[^&]*$/, '/sessions'), init); } };
+    const listed = (await (await all.fetch(`${BASE}sessions?scene=home`)).json()).sessions;
+    eq(listed.map((x) => [x.sessionId === a ? 'a' : x.sessionId === b ? 'b' : 'custom', x.scene]), [['custom', 'custom'], ['a', 'home'], ['b', 'home']], 'every session, newest first');
+    ok(listed.every((x) => typeof x.lastActivity === 'string'), 'each with its lastActivity');
+    const t = await harness({ mock: all, watch: () => '' }), n0 = posts(mock).length;
+    await t.live.open();
+    eq([t.live.sessionId === a, posts(mock).length - n0, t.live.phase, offlineCount(t)], [true, 0, 'idle', 0], 'attached to a (no new session, no card)');
+    ok(urls.some((u) => u.endsWith('/live/api/sessions?scene=home')), 'asked GET sessions?scene=home');
+    eq(t.store.get(SOIL_EDIT), 40, 'its room'); ok(t.has('view', 'ncb', LIVE_COPY.watching), 'says so'); ok(!t.has('view', 'ncb', LIVE_COPY.intro(6)), 'not the intro');
+    await waitFor(() => eventGets(mock).some((c) => c.path === `sessions/${a}/events`));
+    eq(eventGets(mock).filter((c) => c.path === `sessions/${a}/events`).at(-1).query.after, '1', 'streams from the event after its room');
+    ok(mock.calls.every((c) => !('authorization' in c.headers)), 'no Authorization header');
+    t.live.close();
+    const m2 = createMockLive(), u = await harness({ mock: m2, watch: () => '' }); await u.live.open();
+    ok(u.has('view', 'ncb', LIVE_COPY.nothingToWatch), 'nothing to watch: says so'); eq([posts(m2).length, u.live.phase], [1, 'idle'], 'and opens a room of its own'); u.live.close();
+    const v = await harness({ mock: failOnce(createMockLive(), /\/sessions\?scene=/, jsonAnswer(500, { error: 'internal', message: 'Oops.' })), watch: () => '' }); await v.live.open();
+    ok(v.has('view', 'ncb', LIVE_COPY.nothingToWatch), 'the list failed: the same'); eq(v.live.phase, 'idle'); v.live.close();
+  });
+
   // ---- guards ----
-  await check('guard · two codes in flight → one session', async () => {
-    const t = await harness(); await t.live.open();
-    eq(await Promise.all([t.lastAccess.code(MOCK_CODE), t.lastAccess.code(MOCK_CODE)]), [null, null]);
+  await check('guard · open() twice at once → one session', async () => {
+    const t = await harness(); await Promise.all([t.live.open(), t.live.open()]);
     eq(posts(t.mock).length, 1, 'one POST sessions'); eq(count(t, 'view', 'live'), 1, 'entered once'); eq(t.live.phase, 'idle');
     t.live.close();
   });
 
-  await check('guard · server down mid-session → lost card; reconnect resumes from lastId; a stale Reconnect after a 401 opens no stream', async () => {
+  await check('guard · server down mid-session → lost card; reconnect resumes from lastId; a stale Reconnect after exit opens no stream', async () => {
     const t = await harness({ entered: true }), sid = t.live.sessionId;
     await t.live.edit(SOIL_EDIT, 20); await settle();
     t.mock.set({ mode: 'down' }); t.mock.drop(sid);
@@ -969,18 +934,18 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     t.live.close();
     const u = await harness({ entered: true }), usid = u.live.sessionId;
     u.mock.set({ mode: 'down' }); u.mock.drop(usid); await waitFor(() => u.has('view', 'lost'));
-    const [again] = u.find('view', 'lost'); u.mock.set({ mode: 'json', code: 'NCB-OTHR-CODE' });
-    again(); await waitFor(() => accessCount(u) === 2); eq(u.live.phase, 'access'); eq(u.live.sessionId, null, 'session forgotten');
+    const [again] = u.find('view', 'lost'); u.mock.set({ mode: 'json' });
+    u.live.exit(); eq([u.live.phase, u.live.sessionId], ['off', null], 'session forgotten');
     const g = eventGets(u.mock).length; again(); await sleep(60000);
-    eq(eventGets(u.mock).length, g, 'no GET from the stale button'); eq(accessCount(u), 2);
+    eq(eventGets(u.mock).length, g, 'no GET from the stale button'); eq(offlineCount(u), 0);
     u.live.close();
   });
 
   await check('guard · available follows POST sessions live_off and health in open()', async () => {
-    const t = await harness(); eq(await t.live.probe(), true); await t.live.open(); t.mock.set({ off: 'live_off' });
-    await t.lastAccess.code(MOCK_CODE); eq(t.live.available, false, 'live_off');
+    const t = await harness(); eq(await t.live.probe(), true); t.mock.set({ off: 'live_off' }); await t.live.open();
+    eq(t.live.available, false, 'live_off');
     const v = await harness(); eq(await v.live.probe(), true); v.mock.set({ liveEnabled: false }); await v.live.open();
-    eq(v.find('view', 'access')[0], { mode: 'offline', offlineText: LIVE_COPY.backendOff }); eq(v.live.available, false, 'health off in open()');
+    eq(v.find('view', 'offline')[0], { text: LIVE_COPY.backendOff }); eq(v.live.available, false, 'health off in open()');
     const u = await harness({ mock: createMockLive({ liveEnabled: false }) }); eq(await u.live.probe(), false); u.mock.set({ liveEnabled: true });
     await u.live.open(); eq(u.live.available, true, 'health back on in open()'); u.live.close();
   });
@@ -1017,11 +982,11 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const avail = (t) => t.log.filter((e) => e[0] === 'ui' && e[1] === 'availability').map((e) => e[2]);
     const t = await harness(); await t.live.probe(); eq(avail(t), [{ available: true, active: false }], 'probe: available, not open');
     await t.live.probe(); eq(avail(t).length, 1, 'no repeat while nothing changed');
-    await t.live.open(); eq(avail(t).at(-1), { available: true, active: true }, 'open: active at once');
-    t.lastAccess.back(); eq(avail(t).at(-1), { available: true, active: false }, 'Back: not open again');
+    const opening = t.live.open(); eq(avail(t).at(-1), { available: true, active: true }, 'open: active at once'); await opening;
+    t.live.exit(); eq(avail(t).at(-1), { available: true, active: false }, 'exit: not open again');
     ok(t.order('ui', 'offerGuided') < t.log.findLastIndex((e) => e[1] === 'availability'), 'after the guided requests are back');
     const u = await harness({ mock: createMockLive({ liveEnabled: false }) }); await u.live.probe(); eq(avail(u), [{ available: false, active: false }], 'live off: not available');
-    const v = await harness(); await v.live.probe(); await v.live.open(); v.mock.set({ off: 'live_off' }); await v.lastAccess.code(MOCK_CODE);
+    const v = await harness(); await v.live.probe(); v.mock.set({ off: 'live_off' }); await v.live.open();
     eq(avail(v).at(-1), { available: false, active: false }, 'switched off: not available any more');
     const w = await harness({ entered: true }); w.live.close(); const n = w.log.length; await w.live.probe(); eq(w.log.length, n, 'silent after close');
     t.live.close(); u.live.close(); v.live.close();
@@ -1041,10 +1006,10 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const none = await entryRig({ live: null }); none.e.sync(); eq(none.shown, [false], 'no API base (no live): hidden'); await none.e.open(); eq(none.order, [], 'and pressing it does nothing');
     const { t, e, shown } = await entryRig(); e.sync(); eq(shown, [true], 'shown at once'); eq(t.mock.calls.length, 0, 'and no request was made for it');
     const off = await entryRig({ mock: createMockLive({ scenes: ['lab'] }) }); off.e.sync(); eq(off.shown.at(-1), true, 'a scene the server does not run: shown too');
-    await off.e.open(); eq(off.t.find('view', 'access')[0], { mode: 'offline', offlineText: LIVE_COPY.sceneOff }, 'pressing it there says why'); eq(off.shown.at(-1), false, 'hidden under its card');
-    off.t.lastAccess.back(); eq(off.shown.at(-1), true, 'Back: shown again');
-    await t.live.open(); eq(shown.at(-1), false, 'live open (the access card): hidden');
-    await t.lastAccess.code(MOCK_CODE); eq(shown.at(-1), false, 'in live mode: hidden'); eq(t.live.phase, 'idle');
+    await off.e.open(); eq(off.t.find('view', 'offline')[0], { text: LIVE_COPY.sceneOff }, 'pressing it there says why'); eq(off.shown.at(-1), false, 'hidden under its card');
+    off.t.lastOffline.back(); eq(off.shown.at(-1), true, 'Back: shown again');
+    const opening = t.live.open(); eq(shown.at(-1), false, 'live opening: hidden');
+    await opening; eq(shown.at(-1), false, 'in live mode: hidden'); eq(t.live.phase, 'idle');
     t.live.exit(); eq(shown.at(-1), true, 'back to guided: shown again');
     t.live.close(); off.t.live.close();
   });
@@ -1054,13 +1019,11 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     const p = e.open(); eq(shown.at(-1), false, 'hidden at once'); const q = e.open();
     await p; await q;
     eq(order, ['stop', 'stopped', 'open'], 'stop() resolves before live.open(); a second press while opening does nothing');
-    eq(t.find('view', 'access')[0], { mode: 'code' }, 'the access card, as the end card\'s live button gives');
-    await t.lastAccess.code(MOCK_CODE); eq(t.live.active, true); await e.open(); eq(order.length, 3, 'pressing it in live mode does nothing'); t.live.close();
-    const s = await entryRig(); s.t.codes.set(MOCK_CODE); await s.t.live.probe(); await s.e.open();
-    eq([s.t.live.phase, s.shown.at(-1)], ['idle', false], 'a saved code: straight into live mode, the button hidden'); s.t.live.close();
+    eq([t.live.phase, t.live.active, shown.at(-1), offlineCount(t)], ['idle', true, false, 0], 'straight into live mode (no code asked), the button hidden');
+    await e.open(); eq(order.length, 3, 'pressing it in live mode does nothing'); t.live.close();
   });
 
-  await check('pages · main.js and the custom page wire the live tools into the side column and the ui hooks', () => {
+  await check('pages · main.js and the custom page wire the live tools into the side column and the ui hooks; nothing asks for a code', () => {
     const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
     const main = read('../js/main.js'), mount = read('../js/custom/mount.js'), liveui = read('../js/custom/liveui.js'), ccss = read('../css/custom.css');
     ok(/<div class="panel" id="panel"><\/div>\s*<div class="ltools" id="ltools" hidden><\/div>\s*<div class="chat" id="chat"><\/div>/.test(main), 'main.js: #ltools between #panel and #chat, hidden');
@@ -1073,5 +1036,14 @@ export async function liveChecks({ report, initialOf, guardHits }) {
     ok(/slotFor: \(id\) => wiring\.panel\?\.slot\(id\) \?\? null/.test(mount), 'custom page: slots from the current session\'s panel');
     ok(/\.stage\.custom:not\(\[data-mode="run"\]\) \.ltools \{ display: none; \}/.test(ccss), 'custom.css: run mode only');
     ok(/<button class="btn small primary live-top" id="liveTop" type="button"[^>]* hidden>/.test(main), 'main.js: the Go live header button is still there, hidden at first');
+    // Live mode opens the room straight away: no code card, no application form, nothing stored or sent for a code.
+    const chatSrc = read('../js/engine/livechat.js'), liveSrc = read('../js/engine/live.js'), apiSrc = read('../js/engine/liveapi.js'), sseSrc = read('../js/engine/sse.js');
+    ok(!/<form|<input|<select|<textarea/.test(chatSrc), 'livechat.js: no form or field (the offline card has the follow links and Back only)');
+    for (const [name, src] of [['main.js', main], ['mount.js', mount], ['live.js', liveSrc], ['liveapi.js', apiSrc], ['livechat.js', chatSrc], ['sse.js', sseSrc]]) {
+      ok(!/headers\.Authorization|Authorization:|Bearer |access\/check|liveCode|getCode|codeStore|sessionStorage|invite/i.test(src), `${name}: nothing of the code gate left`);
+    }
+    ok(!/localStorage/.test(liveSrc + apiSrc + chatSrc + sseSrc), 'the live client keeps nothing in storage');
+    ok(!existsSync(new URL('../js/custom/gate.js', import.meta.url)), 'js/custom/gate.js is gone');
+    ok(/controller\.ready\(\)/.test(mount) && !/passGate|gate\.js/.test(mount), 'custom page: build mode opens once /health allows it, no gate');
   });
 }

@@ -65,10 +65,12 @@
 //     dashboard strip back to its first tile as a what-if starts and on the faulted device(s) at its end card.
 // 18. (test/live.mjs, --scene live) The live client against the contract mock (test/fixtures/live-mock.mjs), interface-only
 //     API of 2026-11-24 (the module's docs/live-api-contract.md): the mock's own conformance first (devices, actions,
-//     faults, set, advance, reset, the removed routes), then the client's checks: access, sessions, device actions with
-//     their args, fault planting and clearing, the event log, hand edits, the clock, the disabled NCB terminal placeholder
-//     (no request box), the header's Go live entry (js/engine/liveentry.js), and the live tools (js/engine/livetools.js)
-//     on a stand-in document plus static checks of the page wiring. flow.stop() and the player's halt() are 16h.
+//     faults, set, advance, reset, the session list, the removed routes), then the client's checks: opening straight
+//     into the room (no code asked, no Authorization header), the offline card, sessions, watching a room, device
+//     actions with their args, fault planting and clearing, the event log, hand edits, the clock, the disabled NCB
+//     terminal placeholder (no request box), the header's Go live entry (js/engine/liveentry.js), and the live tools
+//     (js/engine/livetools.js) on a stand-in document plus static checks of the page wiring (nothing asks for a code).
+//     flow.stop() and the player's halt() are 16h.
 import { createStore } from '../js/engine/store.js';
 import { createPlayer, setupSteps } from '../js/engine/player.js';
 import { matchPrompt } from '../js/engine/match.js';

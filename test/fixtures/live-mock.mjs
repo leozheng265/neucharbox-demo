@@ -3,11 +3,13 @@
 // browser checks (test/mock-live.mjs).
 // createMockLive(opts) → { fetch(url, init) → Promise<Response>, calls, push(sid, kind, data), edit(sid, kind, data),
 //   drop(sid), openStreams(sid), expire(sid), set(opts), session(sid) }.
-// Routes: health, access/check, apply, POST sessions (Home or a custom room from the catalog), GET sessions/{sid}/devices,
-// POST sessions/{sid}/devices/{id}/actions/{verb}, POST sessions/{sid}/faults, POST sessions/{sid}/faults/clear, set,
-// advance, reset, and the event stream. There are no requests, approvals, what-ifs or automations: those routes answer
-// 404 bad_request. An action validates its args against the action's JSON schema (a small validator: required, types,
-// enum, minimum / maximum, no extra keys), then streams call → (planted offline: fault + status fault, then a failed
+// Routes: health, POST sessions (Home or a custom room from the catalog), GET sessions (every live session, most
+// recently active first; ?scene= keeps that scene's), GET sessions/{sid} (the room and the last event id),
+// GET sessions/{sid}/devices, POST sessions/{sid}/devices/{id}/actions/{verb}, POST sessions/{sid}/faults,
+// POST sessions/{sid}/faults/clear, set, advance, reset, and the event stream. No route asks for an Authorization
+// header (one sent is ignored). There are no codes, no sign-up form, no requests, approvals, what-ifs or automations:
+// those routes answer 404 bad_request. An action validates its args against the action's JSON schema (a small
+// validator: required, types, enum, minimum / maximum, no extra keys), then streams call → (planted offline: fault + status fault, then a failed
 // result) → state frames → world (if it changed) → result, all src "action" except world, and answers once they have
 // played. opts.actionMs > 0 waits that long between call and result (timers, so the virtual clock of test/clock.mjs
 // runs it too); meanwhile another action, an advance, a fault or a reset answers 409 busy.
@@ -15,9 +17,6 @@
 
 import { typeOf, validId, nameOf } from '../../js/custom/catalog.js';
 
-export const MOCK_CODE = 'NCB-TEST-CASE';
-
-const norm = (c) => String(c ?? '').toUpperCase().replace(/\s+/g, '');
 const CLOCK = { iso: '2026-11-13T16:30:00', label: 'Fri 16:30', hour: 16.5 };
 const homeState = () => ({ // scene/home.json's initials (look flags included), online
   lamp: { on: false, brightness: 0, status: 'online' }, blinds: { closed: 0, flat: false, jammed: false, status: 'online' },
@@ -129,10 +128,10 @@ const clockAfter = (c, hours) => {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const statusOf = (slice) => (slice?.status === 'fault' ? 'fault' : slice?.status === 'busy' ? 'busy' : 'online');
 
-export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_CODE, liveEnabled = true, off = null, mode = 'json', actionMs = 0 } = {}) {
-  const cfg = { scene, scenes, code, liveEnabled, off, mode, actionMs };
+export function createMockLive({ scene = 'home', scenes = [scene], liveEnabled = true, off = null, mode = 'json', actionMs = 0 } = {}) {
+  const cfg = { scene, scenes, liveEnabled, off, mode, actionMs };
   const calls = [], editTimes = new Map(), sessions = new Map(), enc = new TextEncoder();
-  let nSession = 0;
+  let nSession = 0, nActivity = 0; // nActivity orders GET sessions (most recently active first)
 
   const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const fail = (status, error, message, extra = {}) => json(status, { error, message, ...extra });
@@ -143,17 +142,13 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     else if (kind === 'clock' && Number.isFinite(data.hour)) { sess.clock = { iso: data.iso, label: data.label, hour: data.hour }; sess.state.env.hour = data.hour; }
     else if (kind === 'world') sess.world = clone(data);
     const seq = sess.events.length + 1, ev = { seq, kind, data: { ...data } };
-    sess.events.push(ev);
+    sess.events.push(ev); sess.activity = ++nActivity;
     const frame = frameOf(ev);
     for (const s of sess.streams) { try { s.controller.enqueue(frame); } catch { sess.streams.delete(s); } }
     return ev;
   }
   const frameOf = (ev) => enc.encode(`id: ${ev.seq}\nevent: ${ev.kind}\ndata: ${JSON.stringify(ev.data)}\n\n`);
 
-  function auth(headers) {
-    const m = /^Bearer\s+(.*)$/i.exec(headers.get('authorization') || '');
-    return !!m && norm(m[1]) === norm(cfg.code);
-  }
   // The rate window: 10 per 5 s per session, shared by set, advance, actions and faults.
   function limited(sid) {
     const now = performance.now(), recent = (editTimes.get(sid) || []).filter((t) => now - t < 5000);
@@ -164,7 +159,9 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
   const devicesAnswer = (sess) => ({ devices: sess.devices.map(({ actions, ...d }) => ({ ...clone(d), type: d.type ?? null, status: statusOf(sess.state[d.id]), state: clone(sess.state[d.id] ?? {}),
     actions: actions.map(({ _spec, ...a }) => clone(a)) })), clock: { ...sess.clock } });
   const faultList = (sess) => [...sess.faults].map(([device, m]) => ({ device, mode: m }));
-  const newSess = (id, state, devices, editable) => ({ id, events: [], streams: new Set(), state, initial: clone(state), clock: { ...CLOCK }, world: homeWorld(), devices, editable, faults: new Map(), failed: new Set(), acting: false, nCall: 0 });
+  const newSess = (id, sceneId, state, devices, editable) => ({ id, scene: sceneId, events: [], streams: new Set(), state, initial: clone(state), clock: { ...CLOCK }, world: homeWorld(), devices, editable, faults: new Map(), failed: new Set(), acting: false, nCall: 0, activity: ++nActivity });
+  // GET sessions' lastActivity: a time that orders like the activity counter
+  const lastActivity = (sess) => new Date(Date.UTC(2026, 10, 13, 16, 30) + sess.activity * 1000).toISOString();
 
   // One action, through the "simulator": events, then the answer.
   async function runAction(sess, dev, a, args) {
@@ -189,35 +186,34 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
   function handle(method, parts, query, headers, body) {
     const [root, sid, sub, a3, a4, a5] = parts;
     if (root === 'health' && method === 'GET') return json(200, { ok: true, liveEnabled: cfg.liveEnabled, scenes: cfg.scenes });
-    if (root === 'access' && sid === 'check' && method === 'POST') {
-      if (cfg.checkRate) return fail(429, 'rate', 'Too many tries. Wait a minute.');
-      return norm(body?.code) === norm(cfg.code) ? json(200, { ok: true, remainingToday: 20 }) : fail(401, 'bad_code', 'That code is not valid.');
-    }
-    if (root === 'apply' && method === 'POST') return json(202, {});
     if (root !== 'sessions') return fail(404, 'bad_request', 'No such route.');
-    if (!auth(headers)) return fail(401, 'bad_code', 'That code is not valid.');
+    if (!sid && method === 'GET') { // every live session on the server, not just the caller's
+      const want = query.get('scene');
+      const list = [...sessions.values()].filter((s) => !want || s.scene === want).sort((a, b) => b.activity - a.activity);
+      return json(200, { sessions: list.map((s) => ({ sessionId: s.id, scene: s.scene, lastActivity: lastActivity(s) })) });
+    }
     if (!sid) {
       if (method !== 'POST') return fail(400, 'bad_request', 'Bad request.');
       if (cfg.off === 'live_off') return fail(503, 'live_off', 'Live mode is switched off right now.');
       if (cfg.sessionCap === 'global_limit') return fail(429, 'global_limit', 'The live server is at its session capacity right now.');
-      if (cfg.sessionCap === 'code_limit') return fail(429, 'code_limit', 'All of the live sessions for this code are busy.');
       if (body?.scene === 'custom' && cfg.scenes.includes('custom')) { // the custom room: the visitor's own device list
         const list = body.devices, seen = new Set();
         const good = Array.isArray(list) && list.length >= 1 && list.length <= 20 && list.every((d) => d && typeof d.type === 'string' && typeOf(d.type) && validId(d.type, d.id) && !seen.has(d.id) && seen.add(d.id));
         if (!good) return fail(400, 'bad_room', "That room can't be set up. Check its devices and try again.");
         const state = { env: { hour: CLOCK.hour } };
         for (const d of list) state[d.id] = { ...clone(typeOf(d.type).initial), status: 'online' };
-        const devs = customDevices(list), id = `sess-${++nSession}`, sess = newSess(id, state, devs, customEditable(devs));
+        const devs = customDevices(list), id = `sess-${++nSession}`, sess = newSess(id, 'custom', state, devs, customEditable(devs));
         sessions.set(id, sess);
         return json(201, { sessionId: id, state: clone(state), clock: { ...CLOCK }, world: clone(sess.world) });
       }
       if (!body || body.scene !== cfg.scene) return fail(400, 'bad_request', 'That scene is not available.');
-      const id = `sess-${++nSession}`, sess = newSess(id, homeState(), HOME_DEVICES, EDITABLE);
+      const id = `sess-${++nSession}`, sess = newSess(id, cfg.scene, homeState(), HOME_DEVICES, EDITABLE);
       sessions.set(id, sess);
       return json(201, { sessionId: id, state: clone(sess.state), clock: { ...sess.clock }, world: clone(sess.world) });
     }
     const sess = sessions.get(sid);
     if (!sess) return fail(404, 'no_session', 'That session has ended.');
+    if (!sub && method === 'GET') return json(200, { sessionId: sess.id, scene: sess.scene, state: clone(sess.state), clock: { ...sess.clock }, world: clone(sess.world), after: sess.events.length });
     if (sub === 'events' && method === 'GET' && !a3) {
       const after = Number(query.get('after')) || 0;
       let entry;
@@ -338,6 +334,6 @@ export function createMockLive({ scene = 'home', scenes = [scene], code = MOCK_C
     expire(sid) { const s = sessions.get(sid); if (!s) return; this.drop(sid); sessions.delete(sid); },
     // read-only: a session's room (state, faults) for the checks
     session(sid) { const s = sessions.get(sid); return s ? { state: clone(s.state), faults: faultList(s), world: clone(s.world) } : null; },
-    set(opts) { for (const k of ['liveEnabled', 'off', 'mode', 'code', 'checkRate', 'sessionCap', 'actionMs']) if (k in opts) cfg[k] = opts[k]; },
+    set(opts) { for (const k of ['liveEnabled', 'off', 'mode', 'sessionCap', 'actionMs']) if (k in opts) cfg[k] = opts[k]; },
   };
 }
