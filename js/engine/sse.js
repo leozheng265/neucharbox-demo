@@ -1,5 +1,5 @@
 // Live demo: the event stream (wire contract: the NeuCharBox Live module's docs/live-api-contract.md).
-// Read with fetch streaming (EventSource can't send the Authorization header). Reconnects with ?after=lastId.
+// Read with fetch streaming (EventSource can't send the ngrok-skip-browser-warning header). Reconnects with ?after=lastId.
 
 // SSE text → events. Fields: id, event, data (lines joined with \n, parsed as JSON). Comment lines (": ping") are ignored.
 export function createSseParser(onEvent) {
@@ -20,7 +20,7 @@ export function createSseParser(onEvent) {
   };
 }
 
-// Open the session's event stream and keep it open. onStatus: 'open' | 'retrying' | 'lost' | 'gone' (404) | 'unauthorized' (401).
+// Open the session's event stream and keep it open. onStatus: 'open' | 'retrying' | 'lost' | 'gone' (404).
 // Events with id <= lastId are dropped, so a resume never repeats one. close() aborts the fetch and stops every timer;
 // after it no callback runs.
 export function openEventStream({ api, sessionId, after = 0, fetch: doFetch = globalThis.fetch, onEvent, onStatus, backoff = [500, 1000, 2000, 4000, 8000], idleMs = 45000 }) {
@@ -43,7 +43,6 @@ export function openEventStream({ api, sessionId, after = 0, fetch: doFetch = gl
       const res = await doFetch(api.eventsUrl(sessionId, lastId || undefined), { headers: api.headers(), signal: mine.signal });
       if (closed) return;
       if (res.status === 404) final = 'gone';
-      else if (res.status === 401) final = 'unauthorized';
       else if (res.ok && /^text\/event-stream\s*(;|$)/i.test(res.headers.get('content-type') || '') && res.body) {
         k = 0; status('open'); arm();
         const reader = res.body.getReader(), dec = new TextDecoder('utf-8');
@@ -59,7 +58,7 @@ export function openEventStream({ api, sessionId, after = 0, fetch: doFetch = gl
     } catch { /* network error, idle abort or close(): handled below */ }
     finally { clearTimeout(idle); }
     if (closed) return;
-    if (final === 'gone' || final === 'unauthorized') return status(final);
+    if (final === 'gone') return status(final);
     if (k >= backoff.length) return status('lost');
     status('retrying');
     if (closed) return;

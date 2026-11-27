@@ -4,7 +4,7 @@
 export const LIVE_CONFIG = { apiBase: '' };
 
 // The API base for this page. `?liveApi=` overrides it only for http://localhost:* and http://127.0.0.1:*, so a
-// crafted link can't point a stored invite code at another host. A trailing "/" is dropped.
+// crafted link can't point the page at someone else's server. A trailing "/" is dropped.
 export function liveApiBase(loc = globalThis.location) {
   try {
     const raw = new URLSearchParams(loc?.search || '').get('liveApi');

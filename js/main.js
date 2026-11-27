@@ -174,7 +174,7 @@ async function mountScene(meta, gen) {
     folded: typeof matchMedia === 'function' && matchMedia('(max-width: 959px)').matches }) : null;
   const liveTop = document.getElementById('liveTop');
   let entry = null;
-  live = base ? createLive({ scene, store, panel, base, view: createLiveView({ chat, scene }), ui: {
+  live = base ? createLive({ scene, store, panel, base, view: createLiveView({ chat }), ui: {
     alive: () => gen === mountGen, status: setStatus, beats: setBeats, track: (on) => panel.track(on), rewind: () => panel.rewind(),
     resetRoom: () => { room.reset?.(); R.clearMarkers(); }, baseline: () => flow.baseline,
     editing: (on) => { clockOn = !!on; app.classList.toggle('live-edit', !!on); panel.editable(on, { onEdit: (p, v) => live.edit(p, v) }); clockCtl.active(on); tools?.show(on); if (!on) panel.clearSlots(); },

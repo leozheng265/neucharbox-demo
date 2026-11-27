@@ -1,7 +1,7 @@
 // Live demo: the API client (wire contract: the NeuCharBox Live module's docs/live-api-contract.md, interface-only
 // version of 2026-11-24: no model, no requests; device actions, fault planting, hand edits and the clock).
-// Every request sends ngrok-skip-browser-warning; protected routes send the invite code as a Bearer token.
-// The code is never put in a URL and never logged.
+// Every request sends ngrok-skip-browser-warning. No route needs an Authorization header: live mode is open to anyone
+// the server lets in (it answers 429 global_limit when it is full).
 
 export class LiveError extends Error {
   constructor(status, kind, message, detail) {
@@ -11,17 +11,16 @@ export class LiveError extends Error {
   }
 }
 
-export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode = () => null, timeoutMs = 10000 } = {}) {
+export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, timeoutMs = 10000 } = {}) {
   const root = `${String(base || '').replace(/\/+$/, '')}/live/api/`;
   const isJson = (res) => /^application\/json\s*(;|$)/i.test(res.headers.get('content-type') || '');
 
   // One call: its own AbortController and timer (setTimeout, so test clocks apply). Throws LiveError.
-  async function call(method, path, { body, auth = true, ms = timeoutMs } = {}) {
+  async function call(method, path, { body, ms = timeoutMs } = {}) {
     const ctl = new AbortController();
     let timer, timedOut = false;
     const timeout = new Promise((_, rej) => { timer = setTimeout(() => { timedOut = true; ctl.abort(); rej(new LiveError(0, 'network')); }, ms); });
     const headers = { 'ngrok-skip-browser-warning': '1' };
-    if (auth) headers.Authorization = `Bearer ${getCode() ?? ''}`;
     const init = { method, headers, signal: ctl.signal };
     if (body !== undefined) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     try {
@@ -51,17 +50,15 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
     async health() {
       const off = { ok: false, liveEnabled: false, scenes: [] };
       try {
-        const d = await call('GET', 'health', { auth: false, ms: 4000 });
+        const d = await call('GET', 'health', { ms: 4000 });
         if (d?.ok !== true) return off;
         return { ok: true, liveEnabled: d.liveEnabled === true, scenes: Array.isArray(d.scenes) ? d.scenes : [] };
       } catch { return off; }
     },
-    // The code works when the server answers 200 (its remainingToday no longer means anything and is not passed on).
-    check: (code) => call('POST', 'access/check', { body: { code }, auth: false }).then((d) => ({ ok: d?.ok !== false })),
-    apply: (form) => call('POST', 'apply', { body: form, auth: false }).then(() => {}),
     createSession: (scene, extra = {}) => call('POST', 'sessions', { body: { scene, ...extra } }),
     devices: (sid) => call('GET', sess(sid, 'devices')),
-    // Watch a room: the code's live sessions (newest first) and one session's current room with the event id to stream from.
+    // Watch a room: every live session on the server (most recently active first) and one session's current room with
+    // the event id to stream from.
     listSessions: (scene) => call('GET', `sessions${scene ? `?scene=${enc(scene)}` : ''}`),
     session: (sid) => call('GET', `sessions/${enc(sid)}`),
     // An action answers once its frames have played (paced like the device), so it gets the advance's long timeout.
@@ -72,6 +69,6 @@ export function createLiveApi({ base, fetch: doFetch = globalThis.fetch, getCode
     advance: (sid, hours) => call('POST', sess(sid, 'advance'), { body: { hours }, ms: 40000 }),
     reset: (sid) => call('POST', sess(sid, 'reset'), { body: {} }),
     eventsUrl: (sid, after) => `${root}sessions/${enc(sid)}/events${after ? `?after=${Number(after)}` : ''}`,
-    headers: () => ({ Authorization: `Bearer ${getCode() ?? ''}`, 'ngrok-skip-browser-warning': '1', Accept: 'text/event-stream' }),
+    headers: () => ({ 'ngrok-skip-browser-warning': '1', Accept: 'text/event-stream' }),
   };
 }

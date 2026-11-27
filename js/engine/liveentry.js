@@ -8,7 +8,7 @@
 //            is getting there. Nothing is asked of the server before a press: live.open() reads /health then, and its
 //            offline card says why when the NCF backend is missing, off, or can't run the scene. main.js calls sync()
 //            from live's ui.availability hook (js/engine/live.js announces every change of available / active).
-// The 6th scene ("Build your own") has no such button: its own gate and "Done building →" already open live mode.
+// The 6th scene ("Build your own") has no such button: its "Done building →" already opens live mode.
 export function createLiveEntry({ live, flow, show, alive = () => true }) {
   let opening = false;
   const sync = () => { if (alive()) show(!!live && !live.active && !opening); };
@@ -17,7 +17,7 @@ export function createLiveEntry({ live, flow, show, alive = () => true }) {
     opening = true; sync();
     try { await flow.stop(); } catch (e) { console.error(e); } finally { opening = false; } // live mode opens even so
     if (!alive()) return;
-    if (!live.active) await live.open(); // its access card, or straight in with a saved code
+    if (!live.active) await live.open(); // straight into the room (or the offline card when the server can't run it)
     sync();
   }
   return { sync, open };

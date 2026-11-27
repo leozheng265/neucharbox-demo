@@ -1,4 +1,4 @@
-// The custom scene's mode controller: gate → build → run. A pure module (no DOM): the page gives it storage, a
+// The custom scene's mode controller: check → build → run. A pure module (no DOM): the page gives it storage, a
 // makeLive(scene, devices) that builds a createLive with sessionExtra: () => ({ devices }), and a small ui sink.
 // Moving or rotating devices changes nothing on the server; adding or removing starts a fresh live session at Done.
 // Removing a device the session has always does, even when the same type is added back: the page drops a removed
@@ -10,7 +10,7 @@ import { DEVICE_UI } from './devices/index.js';
 const sizeOf = (t) => DEVICE_UI[t]?.size;
 
 export function createCustomController({ storage, makeLive, ui }) {
-  let layout = loadLayout(storage), mode = 'gate', live = null, liveLayout = null, dropped = false;
+  let layout = loadLayout(storage), mode = 'check', live = null, liveLayout = null, dropped = false;
 
   const changed = () => !!live && (dropped || !sameDevices(layout, liveLayout));
   const inSession = (id) => !!liveLayout?.devices.some((d) => d.id === id);
@@ -22,8 +22,8 @@ export function createCustomController({ storage, makeLive, ui }) {
     layout = next; saveLayout(storage, layout); ui.layout(layout);
     if (devices && !was && changed()) ui.notice('changed');
   }
-  // Building waits for a request or a clock advance to end; an access card waiting for a code is not one (the room stays as built).
-  const canBuild = () => !(live && live.active && (live.advancing || live.acting || !['idle', 'off', 'access'].includes(live.phase)));
+  // Building waits for an action or a clock advance to end; asking /health, or its offline card, is not one (the room stays as built).
+  const canBuild = () => !(live && live.active && (live.advancing || live.acting || !['idle', 'off', 'opening', 'offline'].includes(live.phase)));
 
   return {
     get mode() { return mode; },
@@ -46,7 +46,8 @@ export function createCustomController({ storage, makeLive, ui }) {
     moveHub(pos) { commit(moveHub(layout, pos)); },
     rotate(id) { commit(rotateDevice(layout, id)); },
     clear() { if (layout.devices.length) commit(clearDevices(layout), { devices: true, drops: !!live && layout.devices.some((d) => inSession(d.id)) }); },
-    gated() { if (mode === 'gate') setMode('build'); },
+    // /health allowed live mode for Build your own (mount.js): build mode opens.
+    ready() { if (mode === 'check') setMode('build'); },
     async done() {
       if (!layout.devices.length) return;
       // Only moves and rotations since the last run, or a device added and taken out again: the same conversation stays.

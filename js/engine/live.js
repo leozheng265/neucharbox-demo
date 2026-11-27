@@ -1,9 +1,8 @@
 // Live demo: the controller (wire contract: the NeuCharBox Live module's docs/live-api-contract.md, interface-only
-// version of 2026-11-24). Access (invite code), session and room; then the room's devices and their actions, hand
-// edits, the clock, fault planting, reset, and the event stream (event → store / panel / event log). No model runs on
-// the server any more: nothing here sends text anywhere. The chat's input bar is a disabled placeholder for a future NCB
-// terminal (js/engine/livechat.js). The invite code goes in storage and request headers only, never in a URL, a log
-// or the page.
+// version of 2026-11-24). Session and room (live mode opens straight into the room: nothing to sign in with); then the
+// room's devices and their actions, hand edits, the clock, fault planting, reset, and the event stream (event → store /
+// panel / event log). No model runs on the server any more: nothing here sends text anywhere. The chat's input bar is a
+// disabled placeholder for a future NCB terminal (js/engine/livechat.js).
 import { createLiveApi, LiveError } from './liveapi.js';
 import { openEventStream } from './sse.js';
 import { devicesOf } from './whatif.js';
@@ -13,19 +12,12 @@ import { editsFor } from './controls.js';
 const FAULT_WORDS = { offline: 'offline', stuck: 'stuck', blocked: 'blocked', sensorDetached: 'sensor detached', drift: 'drift' };
 export const LIVE_COPY = {
   button: 'Go live: run these devices yourself', // the guided end cards' live button
-  accessIntro: 'Live mode is invite-only. Enter your code, or apply.',
   offline: 'Live mode is offline right now. Try the guided requests, or follow NeuCharBox for updates.',
   // why a live button could not open live mode (whyOff below)
   backendDown: (base) => `NCF backend not found at ${base}. Start your NCF site with the NeuCharBox Live module, then press Go live again.`,
   backendOff: 'Your NCF backend is running, but live mode is off there. Open NeuCharBox Live, Settings in its admin to see what is missing.',
   sceneOff: "Your NCF backend is running, but this scene isn't live there yet. Today live mode runs the Home scene and Build your own.",
-  rate: 'Too many tries from here. Wait a minute and try again.',
   sessionsBusy: 'Live mode is busy right now. Try again in a few minutes.',
-  badCode: "That code didn't work. Check it, or apply below.",
-  savedCodeGone: 'Your saved code no longer works. Enter a new one, or apply below.',
-  applyEmailUse: 'We use your email only to send your invite.',
-  applied: 'Thanks. We read every application and send codes by email.',
-  applyRate: 'Too many applications from this connection. Try again in an hour.',
   back: 'Back to guided requests',
   watching: 'Watching the room your NeuCharBox drives: what the box does to these devices shows here as it happens. You can still change values by hand, move the clock, or plant a fault.',
   nothingToWatch: 'No room to watch yet (start the virtual devices first), so this is a new room of your own.',
@@ -39,7 +31,6 @@ export const LIVE_COPY = {
   lost: 'I lost the connection to the live server. The room shows the last thing I heard.',
   reconnect: 'Reconnect',
   timedOut: 'Your live session timed out, so I started a fresh room.',
-  limitCode: 'All of the live sessions for this code are in use. Close one and try again.',
   statusIdle: (n) => `Live · ${n} ${n === 1 ? 'device' : 'devices'}`,
   editRejected: "That change didn't go through, so the card is back to the room's value.",
   editRate: "That's a lot of changes at once. Slow down a little.",
@@ -75,20 +66,6 @@ export const LIVE_COPY = {
   headerButton: 'Go live',
   headerButtonTitle: "Run this room's devices on the live server",
 };
-
-export const normalizeCode = (text) => String(text ?? '').toUpperCase().replace(/\s+/g, '');
-
-// The saved invite code. Every storage access is inside try/catch (Safari with site data blocked throws even on the
-// property read), and a throwing store behaves as empty.
-export function codeStore(storage) {
-  const KEY = 'ncb.liveCode';
-  const use = (f) => { try { return f(storage ?? globalThis.localStorage); } catch { return null; } };
-  return {
-    get: () => { const v = use((s) => s.getItem(KEY)); return typeof v === 'string' && v ? v : null; },
-    set: (code) => { use((s) => s.setItem(KEY, String(code))); },
-    clear: () => { use((s) => s.removeItem(KEY)); },
-  };
-}
 
 const finite = (n) => typeof n === 'number' && Number.isFinite(n);
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -142,6 +119,9 @@ export function eventLine(scene, kind, d) {
   }
 }
 
+// /health's answer (liveapi.js health()) allows live mode for this scene.
+export const liveHere = (h, sceneId) => !!(h?.ok && h.liveEnabled && Array.isArray(h.scenes) && h.scenes.includes(sceneId));
+
 // What the offline card says after a /health that did not allow live mode for this scene: no NCF backend at the API
 // base (nothing answered, or not the live API), a backend with live off, or one that does not list the scene.
 export function whyOff(h, sceneId, base) {
@@ -154,11 +134,12 @@ export function whyOff(h, sceneId, base) {
 // beats(spec), track(on), resetRoom(), baseline(), editing(on), clock({ label, enabled, reason }), offerGuided(heading),
 // availability({ available, active }), and the live tools (js/engine/livetools.js): devices(list | null),
 // controls({ enabled, acting }), actionResult(id, verb, { ok, text }), faults(list | null), log(line | null).
-export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, codes = codeStore(), now = () => performance.now(), sessionExtra = () => ({}), watch = watchRequest }) {
-  let code = null;            // the code for this visit (kept here too, so a blocked store still works)
-  const api = createLiveApi({ base, fetch: doFetch, getCode: () => code ?? codes.get() });
+// view (js/engine/livechat.js): ncb(text), offline({ text }, { onBack }) → { close() }, lost(onReconnect), live(on).
+// phase: 'off' | 'opening' (asking /health) | 'offline' (its card is up) | 'busy' | 'idle'.
+export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch = globalThis.fetch, now = () => performance.now(), sessionExtra = () => ({}), watch = watchRequest }) {
+  const api = createLiveApi({ base, fetch: doFetch });
   let closed = false, active = false, available = false, phase = 'off', advancing = false, clockLabel = null, lastRateAt = -Infinity;
-  let sessionId = null, stream = null, accessHandle = null, lastClockAt = 0, announced = null;
+  let sessionId = null, stream = null, offlineHandle = null, lastClockAt = 0, announced = null;
   let acting = null;          // the action playing: { id, verb } until its POST answers
   let liveDevices = [];       // the room's devices as GET devices sent them (liveDevicesOf)
   let faults = [];            // every planted fault, as the server last listed them: [{ device, mode }]
@@ -169,7 +150,6 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   const dead = () => closed || !ui.alive();
   const gone = () => dead() || !active;
-  const status = (e) => (e instanceof LiveError ? e.status : 0);
   const kindOf = (e) => (e instanceof LiveError ? e.kind : null);
   const isDevice = (id) => typeof id === 'string' && devices.includes(id);
   const mark = (id, kind) => { if (kind === 'busy') busy.add(id); else busy.delete(id); panel.mark(id, kind); };
@@ -196,8 +176,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   async function probe() {
     try {
-      const h = await api.health();
-      available = !!(h.ok && h.liveEnabled && h.scenes.includes(scene.id));
+      available = liveHere(await api.health(), scene.id);
     } catch { available = false; }
     announce();
     return available;
@@ -265,9 +244,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
 
   // The rate message at most once per 10 s, on the clock the rest of this file uses.
   const sayRate = () => { const t = now(); if (t - lastRateAt >= 10000) { lastRateAt = t; view.ncb(LIVE_COPY.editRate); } };
-  // A refusal every route shares: true when handled here (a lost code, an expired session, the rate limit).
+  // A refusal every route shares: true when handled here (an expired session, the rate limit).
   function common(e) {
-    if (status(e) === 401) { unauthorized(); return true; }
     if (kindOf(e) === 'no_session') { regenerate(); return true; }
     if (kindOf(e) === 'rate') { sayRate(); return true; }
     return false;
@@ -337,7 +315,6 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
       if (!isObj(r) || !isObj(r.state)) throw new LiveError(200, 'bad_response');
     } catch (e) {
       if (sid !== sessionId || gone()) return;
-      if (status(e) === 401) return unauthorized();
       if (kindOf(e) === 'no_session') return regenerate();
       if (kindOf(e) === 'rate') sayRate(); else view.ncb(LIVE_COPY.error);
       setPhase('idle');
@@ -360,7 +337,6 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     const rollback = () => { if (store.get(path) === value) { const back = known.has(path) ? known.get(path) : prev; if (finite(back)) store.tween(path, back, 0); else store.set(path, back); } };
     try { await api.set(sid, path, value); } catch (e) {
       if (gone() || sid !== sessionId) return;
-      if (status(e) === 401) return unauthorized();
       if (kindOf(e) === 'no_session') return regenerate();
       rollback();
       if (kindOf(e) === 'rate') sayRate(); else view.ncb(LIVE_COPY.editRejected);
@@ -386,7 +362,6 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   function onStatus(s) {
     if (gone()) return;
     if (s === 'gone') regenerate();
-    else if (s === 'unauthorized') unauthorized();
     else if (s === 'lost') view.lost(reconnect);
   }
   function openStream(after) {
@@ -394,12 +369,12 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     stream = openEventStream({ api, sessionId, after: finite(after) ? after : 0, fetch: doFetch, onEvent, onStatus });
   }
   function reconnect() {
-    if (gone() || !sessionId || phase === 'access') return; // a Reconnect left from before a lost code does nothing
+    if (gone() || !sessionId) return; // a Reconnect left from a live mode since left does nothing
     openStream(stream?.lastId);
   }
 
   // ---- sessions ----
-  // Take down what a session left on screen (a lost code, exit, a fresh session): WORKING marks, the following strip.
+  // Take down what a session left on screen (exit, a fresh session): WORKING marks, the following strip.
   function release() {
     if (dead()) return;
     for (const id of [...busy]) mark(id, null);
@@ -412,7 +387,6 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     let r;
     try { r = await api.devices(sid); } catch (e) {
       if (sid !== sessionId || gone()) return false;
-      if (status(e) === 401) { unauthorized(); return false; }
       if (kindOf(e) === 'no_session') { regenerate(); return false; }
       view.ncb(LIVE_COPY.devicesFailed); ui.devices?.([]);
       return false;
@@ -424,7 +398,8 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     return true;
   }
   // Watch a room: attach to a session someone else drives (the virtual NCB edge devices) instead of making one. The
-  // session is the one ?watch=<id> names, else this code's most recently active one for this scene. null: none to watch.
+  // session is the one ?watch=<id> names, else the newest live session of this scene on the server (GET sessions lists
+  // every live session, most recently active first). null: none to watch.
   async function attach(want) {
     let sid = typeof want === 'string' && /^[0-9a-f]{16,64}$/i.test(want) ? want : null;
     if (!sid) {
@@ -442,7 +417,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     const want = watch();
     if (want != null) {
       let w = null;
-      try { w = await attach(want); } catch (e) { if (gone()) return false; if (status(e) === 401) { unauthorized(); return false; } }
+      try { w = await attach(want); } catch { /* nothing to watch: a room of the visitor's own */ }
       if (gone()) return false;
       if (w) {
         release(); forget();
@@ -489,55 +464,21 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   // A POST sessions that failed (or answered nonsense).
   function failed(e) {
     const k = kindOf(e);
-    if (status(e) === 401) return unauthorized();
     if (k === 'global_limit') view.ncb(LIVE_COPY.sessionsBusy); // the server's session cap
-    else if (k === 'code_limit') view.ncb(LIVE_COPY.limitCode);
     else if (k === 'live_off') view.ncb(LIVE_COPY.offline);
     else if (k === 'bad_room') view.ncb(LIVE_COPY.badRoom); // the custom scene's room was refused
     else view.ncb(LIVE_COPY.error);
     if (k === 'live_off') available = false; // /health says off from here on too
     exit();
   }
-  // Live mode's tools go (the cards are display-only again): a lost code, exit.
+  // Live mode's tools go (the cards are display-only again): exit.
   const noTools = () => { if (dead()) return; ui.editing?.(false); ui.devices?.(null); ui.faults?.(null); ui.log?.(null); };
-  // The code stopped working: forget it (and the session it opened) and ask again.
-  function unauthorized() {
-    release();
-    codes.clear(); code = null;
-    stream?.close(); stream = null; sessionId = null; forget();
-    noTools(); controlsUi();
-    showAccess({ mode: 'code', note: LIVE_COPY.savedCodeGone });
-  }
 
-  // ---- access ----
-  function showAccess(spec) {
-    setPhase('access');
-    accessHandle?.close(); accessHandle = null;
-    accessHandle = view.access(spec, { onCode, onApply, onBack: () => { if (!gone()) exit(); } }) ?? null;
-  }
-  // api.check, reduced to { ok: true } or { err: 'bad'|'rate'|'offline' }.
-  async function checkCode(c) {
-    try {
-      const r = await api.check(c);
-      return r?.ok ? { ok: true } : { err: 'bad' };
-    } catch (e) { return { err: status(e) === 401 ? 'bad' : status(e) === 429 && kindOf(e) === 'rate' ? 'rate' : 'offline' }; }
-  }
-  async function onCode(raw) {
-    if (gone()) return null;
-    const c = normalizeCode(raw), r = await checkCode(c);
-    if (gone() || phase !== 'access') return null; // a second code in flight: the first one already got in
-    if (r.err) return r.err === 'bad' ? LIVE_COPY.badCode : r.err === 'rate' ? LIVE_COPY.rate : LIVE_COPY.offline;
-    code = c; codes.set(c);
-    const handle = accessHandle; accessHandle = null; handle?.close();
-    await enter();
-    return null;
-  }
-  async function onApply(form) {
-    if (gone()) return null;
-    try { await api.apply({ ...(isObj(form) ? form : {}), scene: scene.id }); } catch (e) {
-      return status(e) === 429 ? LIVE_COPY.applyRate : LIVE_COPY.offline;
-    }
-    return LIVE_COPY.applied;
+  // ---- the offline card: /health did not allow live mode here (its text says why; its Back leaves live mode) ----
+  function showOffline(text) {
+    setPhase('offline');
+    offlineHandle?.close(); offlineHandle = null;
+    offlineHandle = view.offline({ text }, { onBack: () => { if (!gone()) exit(); } }) ?? null;
   }
 
   async function enter() {
@@ -549,20 +490,14 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     idleStatus(); setPhase('idle');
   }
 
+  // Straight into the room once /health allows live mode for this scene; else the offline card.
   async function open() {
     if (active || closed) return;
-    active = true; setPhase('access'); announce();
+    active = true; setPhase('opening'); announce();
     const h = await api.health();
     if (gone()) return;
-    available = !!(h.ok && h.liveEnabled && h.scenes.includes(scene.id)); announce();
-    if (!available) return showAccess({ mode: 'offline', offlineText: whyOff(h, scene.id, base) });
-    const stored = codes.get();
-    if (!stored) return showAccess({ mode: 'code' });
-    const r = await checkCode(stored);
-    if (gone()) return;
-    if (r.err === 'bad') { codes.clear(); return showAccess({ mode: 'code', note: LIVE_COPY.savedCodeGone }); }
-    if (r.err) return showAccess({ mode: 'offline' });
-    code = stored;
+    available = liveHere(h, scene.id); announce();
+    if (!available) return showOffline(whyOff(h, scene.id, base));
     await enter();
   }
 
@@ -570,7 +505,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
     if (!active) return;
     release();
     stream?.close(); stream = null;
-    accessHandle?.close(); accessHandle = null;
+    offlineHandle?.close(); offlineHandle = null;
     active = false; setPhase('off'); sessionId = null; forget();
     if (dead()) return;
     noTools(); view.live(false);
@@ -593,7 +528,7 @@ export function createLive({ scene, store, view, panel, ui, base, fetch: doFetch
   };
 }
 
-// Watch mode, from the page URL: ?watch (attach to this code's newest room for the scene) or ?watch=<sessionId>.
+// Watch mode, from the page URL: ?watch (attach to the server's newest live room of the scene) or ?watch=<sessionId>.
 // null when not watching. Read on every (re)connect, so a reload keeps it.
 export function watchRequest() {
   try {

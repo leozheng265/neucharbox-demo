@@ -73,7 +73,7 @@ button { font: inherit; color: inherit; }
 .beats button:not(:disabled):not(.now):hover { color: var(--ink); border-color: var(--accent-a); }
 
 /* Stacked (phones): room, status, device cards, the live tools (live mode only; an empty row otherwise), then the chat in
-   the last row, whatever shows above it (the custom scene's gate has only the room and the chat). */
+   the last row, whatever shows above it (the custom scene, before build mode opens, has only the room and the chat). */
 .stage { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto auto minmax(0, 1fr); }
 .stage .chat { grid-row: -2 / -1; }
 .room { position: relative; background: #DCEBF3; min-height: 0; min-width: 0; overflow: hidden; }
@@ -184,13 +184,10 @@ button { font: inherit; color: inherit; }
 .card.halt { border-color: var(--amber); }
 .card.replan { border-color: var(--green); }
 .card.replan .needs { margin: 6px 0 0; color: var(--ink); background: #FFF7E8; border: 1px solid #F3DDB0; padding: 8px 10px; border-radius: 8px; }
-/* live mode: the input bar is a disabled placeholder where a future NCB terminal goes (NCB badge), and the access card */
+/* live mode: the input bar is a disabled placeholder where a future NCB terminal goes (NCB badge), and the offline card */
 .chat-input.live::before { content: 'NCB'; align-self: center; flex: 0 0 auto; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; line-height: 1.5; padding: 1px 7px; border-radius: 999px; background: #E3ECEB; color: var(--ink-2); }
 .chat-input.live input:disabled { font-style: italic; cursor: not-allowed; }
 .chat-input.live button { display: none; } /* nothing to send */
-/* the containing block of the form's hidden field (.hp): positioned from the page instead, it escapes the chat log's
-   scroll box and makes the whole page scroll */
-.card.access { position: relative; }
 /* Phones: an end card taller than the chat log is shown from its top (chat.js). With the live button it needs one more
    line of buttons, which a small phone (360 x 640) can't fit under the story: the buttons then stay in view at the foot
    of the log, over the end of the story, until the visitor scrolls on. Where the card fits, nothing moves. (Desktop's
@@ -199,29 +196,14 @@ button { font: inherit; color: inherit; }
   .card.end:has(.live-go) .row { position: sticky; bottom: 0; z-index: 1; margin: -6px 0; padding: 6px 0; background: var(--bg); }
   .chat-input.live.off { display: flex; } /* the placeholder stays: it is off, never hidden */
 }
-.card.access .intro { margin-bottom: 6px; }
-.card.access .anote { margin: 0 0 8px; color: var(--ink-2); font-size: 13.5px; }
-.card.access form.code { display: flex; gap: 8px; margin: 6px 0 8px; }
-.card.access input, .card.access select, .card.access textarea { width: 100%; min-width: 0; padding: 8px 11px; font: inherit; font-size: 16px; color: var(--ink); background: #fff; border: 1px solid var(--line-2); border-radius: 10px; outline: none; }
-.card.access input:focus, .card.access select:focus, .card.access textarea:focus { border-color: var(--accent-a); box-shadow: 0 0 0 3px rgba(41,238,229,.2); }
-.card.access form.code input { flex: 1; height: 42px; text-transform: uppercase; letter-spacing: .08em; }
-.card.access form.code .btn { flex: 0 0 auto; }
-.card.access .lnk { display: inline-block; margin: 2px 12px 0 0; padding: 2px 0; border: 0; background: none; color: var(--ink-2); font-size: 13.5px; text-decoration: underline; cursor: pointer; }
-.card.access .lnk[hidden] { display: none; }
-.card.access form.apply { display: grid; gap: 8px; margin: 8px 0; }
-.card.access form.apply[hidden] { display: none; }
-.card.access .fld { display: grid; gap: 3px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
-.card.access .hp { position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; }
-.card.access .use { margin: 0; font-size: 12.5px; color: var(--ink-2); }
-.card.access .applied { margin: 8px 0; font-weight: 600; color: #1E8F55; }
-.card.access .err { margin: 4px 0 8px; padding: 6px 10px; font-size: 13.5px; color: #B5412A; background: #FDECE8; border: 1px solid #F3C4B8; border-radius: 8px; }
-.card.access .err[hidden] { display: none; }
-.card.access.done { opacity: .55; pointer-events: none; }
-.card.access .follow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; font-size: 13px; color: var(--ink-2); }
-.card.access .follow .social-link { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 8px; border: 1px solid var(--line-2); border-radius: 999px; background: #fff; color: var(--ink); font-weight: 600; text-decoration: none; }
-.card.access .follow .social-link:hover { border-color: var(--accent-a); }
-.card.access .follow .social-link svg { width: 15px; height: 15px; flex: 0 0 auto; }
-.card.access .follow .youtube svg { color: #FF0033; } .card.access .follow .linkedin svg { color: #0A66C2; } .card.access .follow .x svg { color: #000; }
+.card.live-off .intro { margin-bottom: 6px; }
+.card.live-off .lnk { display: inline-block; margin: 2px 12px 0 0; padding: 2px 0; border: 0; background: none; color: var(--ink-2); font-size: 13.5px; text-decoration: underline; cursor: pointer; }
+.card.live-off.done { opacity: .55; pointer-events: none; }
+.card.live-off .follow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; font-size: 13px; color: var(--ink-2); }
+.card.live-off .follow .social-link { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 8px; border: 1px solid var(--line-2); border-radius: 999px; background: #fff; color: var(--ink); font-weight: 600; text-decoration: none; }
+.card.live-off .follow .social-link:hover { border-color: var(--accent-a); }
+.card.live-off .follow .social-link svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.card.live-off .follow .youtube svg { color: #FF0033; } .card.live-off .follow .linkedin svg { color: #0A66C2; } .card.live-off .follow .x svg { color: #000; }
 .card.end { background: linear-gradient(180deg, #fff, #EEFBF9); text-align: left; }
 .card.end h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -0.01em; text-wrap: balance; } /* no one-word last line on a phone */
 .card.end p { margin: 0 0 12px; color: var(--ink-2); }

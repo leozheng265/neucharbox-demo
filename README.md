@@ -165,11 +165,12 @@ import('./test/run.mjs')`.
 
 ## Build your own (the 6th scene)
 
-`#custom`, behind an invite code: a visitor builds a room (8 × 6 × 2.8 m, up to 20 of the 54 device types plus the hub),
+`#custom` (it needs the live server; nothing asks for a code or a sign-up): a visitor builds a room (8 × 6 × 2.8 m, up to 20 of the 54 device types plus the hub),
 places the devices in 3D, then runs exactly those devices live (their actions, faults and the clock; see Live mode below). The code is in `js/custom/`; the
 catalog copy `js/custom/catalog.data.js` is generated (`node tools/sync-catalog.mjs <catalog.json>`), never edited by hand.
 Run it against the mock: `python serve.py 8769` and `node test/mock-live.mjs 8787 --scenes home,custom`, then open
-`http://localhost:8769/?liveApi=http://localhost:8787#custom` (mock code `NCB-TEST-CASE`).
+`http://localhost:8769/?liveApi=http://localhost:8787#custom`. Build mode opens as soon as `/health` says the server
+runs Build your own; otherwise the chat shows the offline card, which says why.
 
 **Phone and performance (Task 16, built-in browser, 20 mixed devices, one per category where possible):**
 
@@ -196,14 +197,16 @@ server calls no model any more, so there are no requests, plans, approvals, what
 public page has no API base (`js/live-config.js`): it is guided-only, unless `?liveApi=` names a localhost address. The
 copy an NCF site serves itself at `/live/demo/` (the NeuCharBox Live module's `LiveDemo/` folder, written by
 `node tools/sync-module.mjs <module folder>`; run it after changing the demo) has that site as its API base, so there
-every scene offers live mode. Nothing is fetched until a live button is pressed; then `/health` decides. With no NCF
-backend there, live off, or a scene the backend can't run, the card says which (`whyOff` in `js/engine/live.js`) and
-offers the guided requests again.
+every scene offers live mode. Nothing is fetched until a live button is pressed; then `/health` decides. If it allows
+the scene, live mode opens straight into the room: there is nothing to sign in with (no code, no sign-up form, nothing
+kept in the browser), no request carries an `Authorization` header, and the only refusal of a new room is the server
+being full (`global_limit`: "Live mode is busy right now"). With no NCF backend there, live off, or a scene the backend
+can't run, the offline card says which (`whyOff` in `js/engine/live.js`) and offers the guided requests again.
 
 - **Go live** in every scene's header (just before "‹ Scenes"; `js/engine/liveentry.js`) opens live mode straight
   away, as a guided end card's live button does: `flow.stop()` first stops a guided run where it is, and the room goes
   back to right after setup. It shows whenever live mode is not open (never with an empty API base). The custom scene
-  has none: its gate and "Done building →" are its way in.
+  has none: its "Done building →" is its way in.
 - **Device cards** (`js/engine/livetools.js`, in `panel.slot(id)`): besides the hand edits (`set`, "change the
   world"), each card gets its device's actions from `GET sessions/{sid}/devices`, one row per action: a control per
   JSON-schema parameter (an enum → a select, a boolean → a switch, a number with bounds → a slider, without them → a
@@ -219,10 +222,14 @@ offers the guided requests again.
 - **The chat's input bar** is a disabled placeholder, "Connect an NCB to chat here", where a future NCB terminal goes.
   Nothing typed in live mode is sent anywhere.
 - The clock (`+1 h`, `+6 h`, `Set time…`) stays, usable whenever no action or advance plays.
+- **Watch a room**: `?watch` (e.g. `/?watch#home`) opens live mode at once and attaches to the newest live session of
+  the scene, from `GET sessions?scene=`, which lists every live session on the server, most recently active first
+  (the room the virtual NCB edge devices drive); `?watch=<sessionId>` names one. With none to watch it says so and
+  opens a room of the visitor's own.
 
 Try it against the mock: `python serve.py` and `node test/mock-live.mjs 8787 --scenes home,custom` (`--action-ms` sets
 how long an action plays, 600 ms by default), open `http://localhost:8765/?liveApi=http://localhost:8787#home`, press
-Go live and enter `NCB-TEST-CASE`. `test/live-cards.html` shows the live parts with the real CSS in a browser (open it at
+Go live (the room opens at once). `test/live-cards.html` shows the live parts with the real CSS in a browser (open it at
 a phone size and at a desktop size).
 
 ## Deploy
@@ -262,7 +269,7 @@ js/engine/whatif.js   what-ifs: the picker's list, scenario defaults, the generi
 js/engine/chat.js     conversation UI: messages, chips, plan/ask/replan/end cards, the picker of failures
 js/engine/social.js   NeuCharBox's official accounts: header icons, the end cards' follow line
 js/engine/panel.js    device dashboard tiles from the store (on phones the strip follows the request, a fault stays in view)
-js/engine/live.js     live mode's controller: access, session, device actions, faults, reset, the event stream
+js/engine/live.js     live mode's controller: /health, session (or watch), device actions, faults, reset, the event stream
 js/engine/livetools.js    live mode's device interface: action controls on the cards, faults, Reset room, the event log
 js/engine/liveentry.js    the header's Go live button and the end cards' live button: flow.stop(), then live.open()
 js/engine/icons.js    line icons for the tiles

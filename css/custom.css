@@ -83,8 +83,8 @@
 /* ---------- phones and tablets ---------- */
 @media (max-width: 959px) {
   .custom-top .brand { display: none; }
-  /* gate: the room, then the access card */
-  .stage.custom[data-mode="gate"] { grid-template-rows: auto minmax(0, 1fr); }
+  /* check (before build mode opens): the room, then the chat (where the offline card goes) */
+  .stage.custom[data-mode="check"] { grid-template-rows: auto minmax(0, 1fr); }
   /* build: the room fills the stage above the collapsed sheet; the sheet opens over it */
   .stage.custom[data-mode="build"] { display: block; position: relative; --peek: 180px; }
   .stage.custom[data-mode="build"] .room { position: absolute; left: 0; right: 0; top: 0; bottom: calc(var(--peek) - 14px); }

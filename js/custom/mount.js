@@ -1,19 +1,19 @@
-// The "Build your own" page (#custom): the invite-code gate, then build mode (inventory, drag placement, the selection
-// bar), then run mode (the device cards and the live chat). The modes and the layout live in the controller
-// (controller.js); this file is its DOM and 3D side, laid out as main.js's mountScene.
+// The "Build your own" page (#custom): a /health check, then build mode (inventory, drag placement, the selection
+// bar), then run mode (the device cards and the live chat). Nothing asks for a code or a sign-up. The modes and the
+// layout live in the controller (controller.js); this file is its DOM and 3D side, laid out as main.js's mountScene.
 //   mountCustom({ app, gen, isCurrent, setCurrent }) → Promise<void>
 //     isCurrent() is false once the visitor has routed elsewhere; setCurrent({ teardown }) hands main.js the teardown.
 // Markup: the header (logo, name, Build | Run, Done building →, Scenes, social links) and .stage.custom[data-mode] with
 // .room (canvas, hint, #selbar, #notice, #changedNote, #emptyNote) and .side (#inventory, #panel, #ltools, #chat). The mode decides what shows:
-//   gate  the chat (the access card)        build  the inventory        run  the device cards, the live tools and the chat
-// No header "Go live" button here (the scripted scenes have one, js/engine/liveentry.js): this page's own gate and
-// "Done building →" are its way into live mode.
+//   check  the chat (the offline card, if any)    build  the inventory    run  the device cards, the live tools and the chat
+// No header "Go live" button here (the scripted scenes have one, js/engine/liveentry.js): "Done building →" is this
+// page's way into live mode.
 // Every live session (controller.done with a new device list) gets a fresh store state (initialFor), a fresh panel and
 // a cleared chat: a new room is a new conversation. The window.__ncb hooks are for QA in the browser.
 import { createStore } from '../engine/store.js';
 import { createChat } from '../engine/chat.js';
 import { createPanel } from '../engine/panel.js';
-import { createLive, codeStore } from '../engine/live.js';
+import { createLive, liveHere, whyOff } from '../engine/live.js';
 import { createLiveView } from '../engine/livechat.js';
 import { createLiveApi } from '../engine/liveapi.js';
 import { createClockCtl } from '../engine/clockctl.js';
@@ -22,7 +22,6 @@ import { socialLinks } from '../engine/social.js';
 import { liveApiBase } from '../live-config.js';
 import { CUSTOM_COPY as C } from './copy.js';
 import { createCustomController } from './controller.js';
-import { passGate } from './gate.js';
 import { sceneFor, initialFor, cameraFor } from './scene.js';
 import { createRoom3d, ROOM_ASSETS } from './room3d.js';
 import { createInventory, tileOrder } from './inventory.js';
@@ -35,7 +34,7 @@ const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)
 const ORBIT_HINT = coarse ? 'drag · pinch · tap a device' : 'drag to orbit · scroll to zoom · right-drag to pan · tap a device';
 const NOTICE_MS = 4500;
 const THUMB_IDLE_MS = 60000; // build mode closed this long: the pictures' WebGL context goes (it is built again on return)
-// localStorage itself throws in some browsers with site data blocked; the layout and code stores then work in memory only.
+// localStorage itself throws in some browsers with site data blocked; the layout store then works in memory only.
 const safeStorage = () => { try { return globalThis.localStorage ?? null; } catch { return null; } };
 
 export async function mountCustom({ app, isCurrent, setCurrent }) {
@@ -45,7 +44,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     <header class="top custom-top"><a class="logo" href="#" aria-label="All scenes"></a><a class="brand" href="#" style="text-decoration:none">NeuCharBox</a><div class="scene-name">${esc(C.cardTitle)}</div>
       <div class="modebar"><div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="build" aria-pressed="false" disabled>${esc(C.build)}</button><button type="button" data-mode="run" aria-pressed="false" disabled>${esc(C.run)}</button></div><button class="btn small primary done" type="button" disabled>${esc(C.done)}</button></div>
       <div class="spacer"></div><a class="btn small secondary" href="#"><span class="back" aria-hidden="true">‹ </span>Scenes</a><nav class="social" aria-label="Follow NeuCharBox"><span class="social-label">Follow</span>${socialLinks()}</nav></header>
-    <div class="stage custom" data-mode="gate">
+    <div class="stage custom" data-mode="check">
       <div class="room"><canvas id="room"></canvas><div class="hint" id="hint">${esc(ORBIT_HINT)}</div><button class="reset" id="resetView" type="button" title="Reset view">⟲ view</button><div class="selbar" id="selbar" role="toolbar" aria-label="Selected device" hidden></div><div class="notice" id="notice" role="status" hidden></div><p class="empty-note" id="emptyNote" hidden></p><p class="changed-note" id="changedNote" role="status" hidden>${esc(C.changed)}</p></div>
       <div class="status" id="status" hidden><span class="stext" id="statusText" role="status"></span><span class="clockctl" id="clockctl" hidden></span></div>
       <div class="side">
@@ -63,16 +62,15 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
   const [{ createRenderer }, partsMod] = await Promise.all([import('../engine/renderer.js'), import('../engine/parts.js')]);
   if (!isCurrent()) return; // the visitor navigated away while the 3D code was loading
 
-  const storage = safeStorage(), codes = codeStore(), base = liveApiBase();
+  const storage = safeStorage(), base = liveApiBase();
   const qp = new URLSearchParams(location.search).get('q'); // ?q=high|low locks the render tier (QA screenshots)
   const R = createRenderer($('room'), { camera: cameraFor(innerWidth, innerHeight), ...(qp === 'high' || qp === 'low' ? { quality: qp, lockQuality: true } : {}) });
-  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0, gate = null, tools = null;
+  let controller = null, placement = null, inventory = null, scene = null, hooks = null, wiring = null, thumbs = null, thumbTimer = 0, tools = null;
   const thumbsDone = new Set();
   const baselineRef = { current: null };
   let noticeTimer = 0, doneBusy = false, shownCanBuild = null, torn = false;
   const teardown = () => {
     if (torn) return; torn = true;
-    gate?.cancel(); // a gate still waiting on /health settles now, so a late answer mounts nothing
     clearTimeout(noticeTimer); clearTimeout(thumbTimer);
     thumbs?.dispose();
     controller?.teardown(); placement?.dispose(); inventory?.dispose();
@@ -110,7 +108,7 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       const m = controller.mode, has = controller.layout.devices.length > 0, busy = m === 'run' && !controller.canBuild;
       buildBtn.setAttribute('aria-pressed', String(m === 'build')); runBtn.setAttribute('aria-pressed', String(m === 'run'));
       changedEl.hidden = !(m === 'build' && !!controller.live); // the persistent note: while a live session exists, a device change restarts the conversation at Done building
-      buildBtn.disabled = m === 'gate' || busy; buildBtn.title = busy ? C.buildBusy : '';
+      buildBtn.disabled = m === 'check' || busy; buildBtn.title = busy ? C.buildBusy : '';
       runBtn.disabled = m !== 'build' || doneBusy || !has || !controller.live;
       doneBtn.hidden = m === 'run'; doneBtn.disabled = m !== 'build' || doneBusy || !has;
       shownCanBuild = controller.canBuild;
@@ -154,11 +152,11 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
       scene = sc;
       wiring.begin(sc); // the old panel's subscriptions go before the store changes (liveui.js)
       chatLog.replaceChildren(); chat.enableInput(false); chat.live(false);
-      const view = createLiveView({ chat, scene: sc });
-      // live.js's own access card (a saved code that died at Done building) says "Back to scenes" here, and goes there
+      const view = createLiveView({ chat });
+      // live.js's own offline card (the server went off before Done building) says "Back to scenes" here, and goes there
       // (the route's teardown closes the live).
-      const wrapped = { ...view, access: (spec, h) => view.access({ ...spec, backLabel: C.back, offlineText: C.offline }, { ...h, onBack: toScenes }) };
-      return createLive({ scene: sc, store, panel: wiring.panel, base, codes, view: wrapped, ui: liveUi, sessionExtra: () => ({ devices }) });
+      const wrapped = { ...view, offline: (spec, h) => view.offline({ ...spec, text: C.offline, backLabel: C.back }, { ...h, onBack: toScenes }) };
+      return createLive({ scene: sc, store, panel: wiring.panel, base, view: wrapped, ui: liveUi, sessionExtra: () => ({ devices }) });
     }
 
     controller = createCustomController({
@@ -212,14 +210,16 @@ export async function mountCustom({ app, isCurrent, setCurrent }) {
     window.__ncb = hooks;
     showMode(controller.mode);
 
-    // The gate: the access card in the chat until a code works ("Back to scenes" leaves the page). With no API base
-    // (main.js doesn't route here then) it shows the offline card without asking anything.
-    const api = createLiveApi({ base, getCode: () => codes.get() });
-    gate = passGate({ api, codes, view: createLiveView({ chat, scene: sceneFor(controller.layout) }), onBack: toScenes, offline: !base, base });
-    const passed = await gate;
-    if (!passed || !isCurrent() || torn) return;
-    chatLog.replaceChildren(); // the spent access card goes; run mode starts its own conversation
-    controller.gated();
+    // Build mode opens as soon as /health says live mode runs Build your own here: there is no code to enter. Else the
+    // offline card in the chat says why ("Back to scenes" leaves the page). With no API base (main.js doesn't route here
+    // then) it shows without asking anything.
+    const h = base ? await createLiveApi({ base }).health() : null;
+    if (!isCurrent() || torn) return; // the visitor left while /health was asked: a late answer mounts nothing
+    if (!liveHere(h, 'custom')) {
+      createLiveView({ chat }).offline({ text: h ? whyOff(h, 'custom', base) : C.offline, backLabel: C.back }, { onBack: toScenes });
+      return;
+    }
+    controller.ready();
   } catch (e) {
     if (isCurrent()) setCurrent(null);
     teardown();
